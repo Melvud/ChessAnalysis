@@ -1,8 +1,17 @@
 package com.example.chessanalysis.data.util
 
+import com.example.chessanalysis.data.model.MoveClass
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sign
+import com.github.bhlangonijr.chesslib.Board
+import com.github.bhlangonijr.chesslib.move.MoveList
+import com.github.bhlangonijr.chesslib.pgn.PgnHolder
+import java.nio.file.Files
+import kotlin.io.path.writeText
 
+/** Представление доски и применение SAN‑ходов. */
 class BoardState private constructor(
     private val cells: Array<CharArray>,
     private var whiteToMove: Boolean,
@@ -14,7 +23,6 @@ class BoardState private constructor(
     private var halfmoveClock: Int,
     private var fullmoveNumber: Int
 ) {
-
     companion object {
         fun initial(): BoardState {
             val b = Array(8) { CharArray(8) { '.' } }
@@ -43,29 +51,13 @@ class BoardState private constructor(
     }
 
     fun at(rank: Int, file: Int): Char = cells[rank][file]
-
     private fun isWhitePiece(ch: Char) = ch in 'A'..'Z'
     private fun isBlackPiece(ch: Char) = ch in 'a'..'z'
-    private fun isEmptyCell(rank: Int, file: Int) = cells[rank][file] == '.'
+    private fun isEmptyCell(r: Int, f: Int) = cells[r][f] == '.'
     private fun sameColor(ch: Char, white: Boolean) =
         if (white) isWhitePiece(ch) else isBlackPiece(ch)
-
-    private fun sideChar(white: Boolean, type: Char): Char =
+    private fun sideChar(white: Boolean, type: Char) =
         if (white) type else type.lowercaseChar()
-
-    private fun squareToCoords(sq: String): Pair<Int, Int> {
-        val f = sq[0] - 'a'
-        val r = sq[1] - '1'
-        require(f in 0..7 && r in 0..7) { "Bad square: $sq" }
-        return r to f
-    }
-
-    // ==== ФИКС: правильная конверсия в строку клетки ====
-    private fun coordsToSquare(r: Int, f: Int): String {
-        val fileChar = ('a'.code + f).toChar()
-        val rankChar = ('1'.code + r).toChar()
-        return "$fileChar$rankChar"
-    }
 
     private fun clearEP() { enPassantTarget = null }
 
@@ -81,6 +73,7 @@ class BoardState private constructor(
             .replace(Regex("[!?]+$"), "")
             .replace(Regex("\\$\\d+$"), "")
 
+        // рокировка
         if (s == "O-O" || s == "0-0") {
             doCastle(kingside = true)
             postMoveHousekeeping(pawnMove = false, capture = false)
@@ -103,14 +96,12 @@ class BoardState private constructor(
         val isCapture = 'x' in s
         val movingType = if (s.first() in listOf('K','Q','R','B','N')) s.first() else 'P'
         val rest = if (movingType == 'P') s else s.drop(1)
-
         require(rest.length >= 2) { "Bad SAN: $san" }
         val target = rest.takeLast(2)
-        val (dr, df) = squareToCoords(target)
+        val df = target[0] - 'a'; val dr = target[1] - '1'
 
         val disambig = rest.dropLast(2).replace("x", "")
-        var disFile: Int? = null
-        var disRank: Int? = null
+        var disFile: Int? = null; var disRank: Int? = null
         if (disambig.isNotEmpty()) {
             Regex("[a-h]").find(disambig)?.let { disFile = it.value[0] - 'a' }
             Regex("[1-8]").find(disambig)?.let { disRank = it.value[0] - '1' }
@@ -150,7 +141,6 @@ class BoardState private constructor(
         postMoveHousekeeping(pawnMove = movingType == 'P', capture = isCapture && (!epCapture || capturedBefore != '.'))
     }
 
-    /** FEN генерация */
     fun toFEN(): String {
         val pieces = buildString {
             for (r in 7 downTo 0) {
@@ -167,7 +157,6 @@ class BoardState private constructor(
             }
         }
         val stm = if (whiteToMove) "w" else "b"
-
         val castlingCodes = buildString {
             if (canCastleWK) append('K')
             if (canCastleWQ) append('Q')
@@ -175,9 +164,7 @@ class BoardState private constructor(
             if (canCastleBQ) append('q')
         }
         val castling = if (castlingCodes.isEmpty()) "-" else castlingCodes
-
         val ep = enPassantTarget?.let { coordsToSquare(it.first, it.second) } ?: "-"
-
         return "$pieces $stm $castling $ep $halfmoveClock $fullmoveNumber"
     }
 
@@ -225,10 +212,8 @@ class BoardState private constructor(
     }
 
     private fun onRookKingRightsUpdate(
-        src: Pair<Int,Int>,
-        dst: Pair<Int,Int>,
-        moving: Char,
-        capturedBefore: Char
+        src: Pair<Int,Int>, dst: Pair<Int,Int>,
+        moving: Char, capturedBefore: Char
     ) {
         if (moving == 'K') { canCastleWK = false; canCastleWQ = false }
         if (moving == 'k') { canCastleBK = false; canCastleBQ = false }
@@ -249,8 +234,8 @@ class BoardState private constructor(
     }
 
     private fun pathClear(sr: Int, sf: Int, dr: Int, df: Int): Boolean {
-        val rStep = (dr - sr).sign
-        val fStep = (df - sf).sign
+        val rStep = sign((dr - sr).toDouble()).toInt()
+        val fStep = sign((df - sf).toDouble()).toInt()
         var r = sr + rStep
         var f = sf + fStep
         while (r != dr || f != df) {
@@ -349,5 +334,187 @@ class BoardState private constructor(
         }
         val filtered = res.filter { (disRank == null || it.first == disRank) && (disFile == null || it.second == disFile) }
         return filtered.firstOrNull() ?: res.firstOrNull()
+    }
+
+    private fun coordsToSquare(r: Int, f: Int) = "${'a'+f}${'1'+r}"
+}
+
+/* --- PGN‑парсер --- */
+
+data class PositionSnapshot(
+    val fenBefore: String,
+    val fenAfter: String,
+    val san: String,
+    val uci: String
+)
+data class ParsedGame(val positions: List<PositionSnapshot>)
+
+object PGNParser {
+    fun parseGame(pgn: String): ParsedGame {
+        val tmp = Files.createTempFile("game_", ".pgn")
+        tmp.writeText(pgn)
+        val holder = PgnHolder(tmp.toFile().absolutePath)
+        holder.loadPgn()
+        val game = holder.games.first()
+        game.loadMoveText()
+        val moveList: MoveList = game.halfMoves
+        val sanArray: Array<String> = game.halfMoves.toSanArray()
+        val board = Board()
+        val positions = ArrayList<PositionSnapshot>(moveList.size)
+
+        for (i in 0 until moveList.size) {
+            val move = moveList[i]
+            val fenBefore = board.fen
+            val san = if (i < sanArray.size) sanArray[i] else ""
+            val uci = move.toString()
+            board.doMove(move)
+            val fenAfter = board.fen
+            positions.add(PositionSnapshot(fenBefore, fenAfter, san, uci))
+        }
+        try { Files.deleteIfExists(tmp) } catch (_: Exception) {}
+        return ParsedGame(positions)
+    }
+}
+
+/* --- ChessParser: токенизация PGN и восстановление UCI по SAN --- */
+
+data class Ply(val san: String, val uci: String)
+
+object ChessParser {
+    /** Удаляет теги/комментарии/варианты, разбивает на SAN-ходы. */
+    private fun tokenizeSan(pgn: String): List<String> {
+        var s = pgn
+        // 1) удалить теги [Key "Value"]
+        s = s.lines().filterNot { it.trimStart().startsWith('[') }.joinToString("\n")
+        // 2) удалить { ... } (может быть многострочным)
+        s = s.replace(Regex("\\{.*?\\}", setOf(RegexOption.DOT_MATCHES_ALL)), "")
+        // 3) удалить комментарии через ; до конца строки
+        s = s.replace(Regex(";.*"), "")
+        // 4) удалить NAG $n
+        s = s.replace(Regex("\\$\\d+"), "")
+        // 5) удалить варианты в скобках (плоский уровень)
+        while (true) {
+            val t = s.replace(Regex("\\([^()]*\\)"), "")
+            if (t == s) break
+            s = t
+        }
+        // 6) разбить и убрать служебные токены
+        val raw = s.replace("\n", " ").trim().split(Regex("\\s+"))
+        val skip = setOf("1-0", "0-1", "1/2-1/2", "*")
+        val moveNum = Regex("^\\d+\\.+$")
+        return raw.filter { tok ->
+            tok.isNotBlank() && tok !in skip && !moveNum.matches(tok)
+        }
+    }
+
+    private fun promoLetterLower(san: String): Char? {
+        Regex("=([QRBN])$").find(san)?.let { return it.groupValues[1][0].lowercaseChar() }
+        val last = san.lastOrNull() ?: return null
+        return if (last in listOf('Q','R','B','N')) last.lowercaseChar() else null
+    }
+
+    private fun coordsToSquare(r: Int, f: Int) = "${'a'+f}${'1'+r}"
+
+    /** Дифф двух позиций: возвращает UCI-ход под SAN. */
+    private fun diffMove(before: BoardState, after: BoardState, san: String): Pair<String,String> {
+        if (san == "O-O" || san == "0-0") {
+            return when {
+                before.at(0,4) == 'K' -> "e1" to "g1"
+                before.at(7,4) == 'k' -> "e8" to "g8"
+                else -> error("Castle O-O impossible")
+            }
+        }
+        if (san == "O-O-O" || san == "0-0-0") {
+            return when {
+                before.at(0,4) == 'K' -> "e1" to "c1"
+                before.at(7,4) == 'k' -> "e8" to "c8"
+                else -> error("Castle O-O-O impossible")
+            }
+        }
+
+        val moverType = when (san.first()) {
+            'K','Q','R','B','N' -> san.first()
+            else -> 'P'
+        }
+        var fromR = -1; var fromF = -1
+        var toR = -1; var toF = -1
+        val wantW = moverType; val wantB = moverType.lowercaseChar()
+        var wGone = false; var bGone = false
+        for (r in 0..7) for (f in 0..7) {
+            val a = before.at(r,f); val b = after.at(r,f)
+            if (a == wantW && b == '.') { fromR = r; fromF = f; wGone = true }
+            if (a == wantB && b == '.') { fromR = r; fromF = f; bGone = true }
+        }
+        val moverIsWhite = if (wGone && !bGone) true else if (!wGone && bGone) false else wGone
+        val promo = promoLetterLower(san)
+        for (r in 0..7) for (f in 0..7) {
+            val a = before.at(r,f); val b = after.at(r,f)
+            if (a == b) continue
+            val good = if (moverType == 'P') {
+                if (promo != null) {
+                    if (moverIsWhite) b == promo.uppercaseChar() else b == promo
+                } else {
+                    if (moverIsWhite) b == 'P' else b == 'p'
+                }
+            } else {
+                if (moverIsWhite) b == wantW else b == wantB
+            }
+            if (good) { toR = r; toF = f }
+        }
+        if (fromR == -1 || toR == -1) {
+            val fromC = mutableListOf<Pair<Int,Int>>()
+            val toC = mutableListOf<Pair<Int,Int>>()
+            for (r in 0..7) for (f in 0..7) {
+                val a = before.at(r,f); val b = after.at(r,f)
+                if (a != b) {
+                    if (b == '.') fromC += r to f else toC += r to f
+                }
+            }
+            if (fromC.isNotEmpty()) { fromR = fromC.first().first; fromF = fromC.first().second }
+            if (toC.isNotEmpty()) { toR = toC.first().first; toF = toC.first().second }
+        }
+        require(fromR != -1 && toR != -1) { "Cannot diff SAN '$san'" }
+        return coordsToSquare(fromR, fromF) to coordsToSquare(toR, toF)
+    }
+
+    /** PGN → список полуходов (SAN + UCI) строго по позиции. */
+    fun pgnToPlies(pgn: String): List<Ply> {
+        val tokens = tokenizeSan(pgn)
+        val list = ArrayList<Ply>(tokens.size)
+        var board = BoardState.initial()
+        tokens.forEach { san ->
+            val before = board.copy()
+            board.applySan(san)
+            val (from, to) = diffMove(before, board, san)
+            val promo = promoLetterLower(san)
+            val uci = if (promo != null) from + to + promo else from + to
+            list += Ply(san = san, uci = uci)
+        }
+        return list
+    }
+}
+
+/** Классификатор ходов по дельте (в пешках) и расчет точности. */
+object MoveClassifier {
+    fun classify(deltaPawns: Double): MoveClass = when {
+        deltaPawns <= 0.15 -> MoveClass.GREAT
+        deltaPawns <= 0.35 -> MoveClass.GOOD
+        deltaPawns <= 0.70 -> MoveClass.INACCURACY
+        deltaPawns <= 1.50 -> MoveClass.MISTAKE
+        else -> MoveClass.BLUNDER
+    }
+
+    fun accuracy(movesDelta: List<Double>): Double {
+        if (movesDelta.isEmpty()) return 100.0
+        val penalty = movesDelta.sumOf { d ->
+            when (classify(abs(d))) {
+                MoveClass.GREAT -> 0.0
+                MoveClass.GOOD -> 5.0
+                MoveClass.INACCURACY -> 20.0
+                MoveClass.MISTAKE -> 50.0
+                MoveClass.BLUNDER -> 80.0
+            }
+        } / movesDelta.size
+        return max(0.0, min(100.0, 100.0 - penalty))
     }
 }
