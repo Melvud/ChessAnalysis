@@ -1,18 +1,16 @@
 package com.example.chessanalysis.engine
 
-import com.example.chessanalysis.data.api.StockfishOnlineService
+import com.example.chessanalysis.data.api.ChessApiService
 import com.example.chessanalysis.data.model.*
 import com.example.chessanalysis.data.util.BoardState
 import com.example.chessanalysis.data.util.ChessParser
+import com.example.chessanalysis.data.util.MoveClassifier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.ResponseBody
-import org.json.JSONObject
-import java.io.IOException
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-/** Математические функции «как на Lichess/Chess.com». */
+/** Преобразование оценки в вероятность выигрыша (как на Chess.com). */
 object MathEval {
     private const val A = 0.00368208
     fun winPercentFromCp(cp: Int): Double {
@@ -20,158 +18,119 @@ object MathEval {
         val p = 50 + 50 * (2.0 / (1.0 + kotlin.math.exp(-x)) - 1.0)
         return p.coerceIn(0.0, 100.0)
     }
-    private const val K1 = 103.1668
-    private const val K2 = 0.04354
-    private const val K3 = 3.1669
-    fun moveAccuracy(winBefore: Double, winAfter: Double): Double {
-        val drop = (winBefore - winAfter).coerceAtLeast(0.0)
-        val acc = K1 * kotlin.math.exp(-K2 * drop) - K3
-        return acc.coerceIn(0.0, 100.0)
-    }
-    enum class MoveTag { Best, Excellent, Good, Inaccuracy, Mistake, Blunder }
-    fun classifyMove(bestMatch: Boolean, winDrop: Double, mateSwing: Boolean): MoveTag {
-        if (bestMatch) return MoveTag.Best
-        if (mateSwing) return MoveTag.Blunder
-        val d = winDrop
-        return when {
-            d >= 30.0 -> MoveTag.Blunder
-            d >= 20.0 -> MoveTag.Mistake
-            d >= 10.0 -> MoveTag.Inaccuracy
-            d >= 5.0  -> MoveTag.Good
-            else      -> MoveTag.Excellent
-        }
-    }
 }
 
-/** Анализатор партии через онлайн Stockfish. */
+/** Анализ партии посредством chess‑api.com. */
 class StockfishOnlineAnalyzer(
-    private val api: StockfishOnlineService
+    private val chessApi: ChessApiService
 ) {
+
+    /** DTO внутреннего анализа. */
     private data class Eval(
         val evalPawns: Double?,
         val mate: Int?,
-        val bestRaw: String?
+        val bestUci: String?,
+        val winChance: Double?
     )
 
+    /** Вызов chess-api для FEN; глубина ограничена 18 по документации. */
     private suspend fun analyzeFen(fen: String, depth: Int): Eval {
-        try {
-            val resp = api.analyze(fen, depth)
-            val body = resp.body()
-            if (resp.isSuccessful && body != null) {
-                return Eval(body.evaluation, body.mate, body.bestmove)
-            }
-        } catch (_: Exception) { /* ignore */ }
-
-        val rawResp = api.analyzeRaw(fen, depth)
-        val body: ResponseBody = rawResp.body() ?: throw IOException("StockfishOnline: empty body")
-        val text = body.string().trim()
-        val jsonStr = if (text.startsWith("{")) {
-            text
-        } else {
-            val start = text.indexOf('{')
-            val end = text.lastIndexOf('}')
-            if (start >= 0 && end > start) text.substring(start, end + 1)
-            else throw IOException("StockfishOnline: not a JSON")
-        }
-        val obj = JSONObject(jsonStr)
-        val eval = when {
-            obj.has("evaluation") -> obj.optDouble("evaluation")
-            obj.has("eval") -> obj.optDouble("eval")
-            else -> null
-        }
-        val mate = when {
-            obj.has("mate") -> obj.optInt("mate")
-            obj.has("Mate") -> obj.optInt("Mate")
-            else -> null
-        }.let { if (it == 0) null else it }
-        val bestRaw = when {
-            obj.has("bestmove") -> obj.optString("bestmove")
-            obj.has("bestMove") -> obj.optString("bestMove")
-            obj.has("best") -> obj.optString("best")
-            else -> null
-        }
-        return Eval(if (eval != null && !eval.isNaN()) eval else null, mate, bestRaw)
+        val req = com.example.chessanalysis.data.api.ChessApiRequest(
+            fen = fen,
+            variants = 1,
+            depth = depth.coerceIn(2, 18),
+            maxThinkingTime = 1000,
+            searchMoves = null
+        )
+        val resp = chessApi.analyzePosition(req)
+        val evalPawns = resp.eval ?: resp.centipawns?.toDouble()?.div(100.0)
+        val mate = resp.mate
+        val bestMove = resp.move
+        val win = resp.winChance
+        return Eval(evalPawns = evalPawns, mate = mate, bestUci = bestMove, winChance = win)
     }
 
-    private fun bestUciFromRaw(bestRaw: String?): String {
-        if (bestRaw.isNullOrBlank()) return ""
-        val parts = bestRaw.trim().split(Regex("\\s+"))
-        val idx = parts.indexOfFirst { it.equals("bestmove", ignoreCase = true) }
-        return when {
-            idx >= 0 && idx + 1 < parts.size -> parts[idx + 1]
-            parts.isNotEmpty() -> parts.first()
-            else -> ""
-        }
-    }
-
-    private fun sideToMoveIsWhite(fen: String): Boolean =
-        fen.split(' ').getOrNull(1)?.lowercase() == "w"
-
+    /** Оценка в центепешках для белых с учётом мата. */
     private fun cpWhiteFrom(evalPawns: Double?, mate: Int?): Int =
         if (mate != null) if (mate > 0) 20_000 else -20_000
         else ((evalPawns ?: 0.0) * 100.0).roundToInt()
 
-    private fun winForMoverFromCp(cpWhite: Int, moverIsWhite: Boolean): Double {
-        val cpForMover = if (moverIsWhite) cpWhite else -cpWhite
-        return MathEval.winPercentFromCp(cpForMover)
-    }
-
-    suspend fun analyzeGame(pgn: String, depth: Int = 16): AnalysisResult =
+    /** Анализ PGN, возвращает AnalysisResult. */
+    suspend fun analyzeGame(pgn: String, depth: Int = 14): AnalysisResult =
         withContext(Dispatchers.IO) {
             val plies = ChessParser.pgnToPlies(pgn)
             val board = BoardState.initial()
             val moves = ArrayList<MoveAnalysis>(plies.size)
-            val perMoveAcc = ArrayList<Double>()
+            val deltas = mutableListOf<Double>()
+            val perMoveWinAcc = ArrayList<Double>()
+
             plies.forEachIndexed { idx, ply ->
                 val fenBefore = board.toFEN()
-                val moverIsWhite = sideToMoveIsWhite(fenBefore)
+                val moverIsWhite = fenBefore.split(' ')[1] == "w"
                 val before = analyzeFen(fenBefore, depth)
                 val cpBeforeWhite = cpWhiteFrom(before.evalPawns, before.mate)
-                val winBeforeMover = winForMoverFromCp(cpBeforeWhite, moverIsWhite)
+                val winBefore = before.winChance ?: MathEval.winPercentFromCp(if (moverIsWhite) cpBeforeWhite else -cpBeforeWhite)
 
-                board.applySan(ply.san)
+                board.applySan(ply.san, moverIsWhite)
                 val fenAfter = board.toFEN()
                 val after = analyzeFen(fenAfter, depth)
                 val cpAfterWhite = cpWhiteFrom(after.evalPawns, after.mate)
-                val winAfterMover = winForMoverFromCp(cpAfterWhite, moverIsWhite)
+                val winAfter = after.winChance ?: MathEval.winPercentFromCp(if (moverIsWhite) cpAfterWhite else -cpAfterWhite)
 
                 val cpBeforeForMover = if (moverIsWhite) cpBeforeWhite else -cpBeforeWhite
                 val cpAfterForMover = if (moverIsWhite) cpAfterWhite else -cpAfterWhite
                 val deltaPawns = (cpBeforeForMover - cpAfterForMover) / 100.0
+                deltas += deltaPawns
 
-                val drop = (winBeforeMover - winAfterMover).coerceAtLeast(0.0)
-                val clsTag = MathEval.classifyMove(
-                    bestMatch = false,
-                    winDrop = drop,
-                    mateSwing = false
-                )
-                val cls: MoveClass = when (clsTag) {
-                    MathEval.MoveTag.Best, MathEval.MoveTag.Excellent -> MoveClass.GREAT
-                    MathEval.MoveTag.Good -> MoveClass.GOOD
-                    MathEval.MoveTag.Inaccuracy -> MoveClass.INACCURACY
-                    MathEval.MoveTag.Mistake -> MoveClass.MISTAKE
-                    MathEval.MoveTag.Blunder -> MoveClass.BLUNDER
-                }
-
-                val acc = MathEval.moveAccuracy(winBeforeMover, winAfterMover)
-                perMoveAcc += acc
+                val drop = (winBefore - winAfter).coerceAtLeast(0.0)
+                val cls = MoveClassifier.classify(abs(deltaPawns))
+                perMoveWinAcc += 100.0 - drop
 
                 moves += MoveAnalysis(
                     moveNumber = idx + 1,
                     san = ply.san,
-                    bestMove = bestUciFromRaw(before.bestRaw),
+                    bestMove = before.bestUci,
                     evaluation = cpAfterWhite / 100.0,
                     delta = deltaPawns,
                     classification = cls
                 )
             }
-            val counts = moves.groupingBy { it.classification }.eachCount()
-            val accuracy = if (perMoveAcc.isEmpty()) 0.0 else perMoveAcc.average()
-            val summary = AnalysisSummary(
-                totalMoves = moves.size,
-                counts = counts,
-                accuracy = accuracy
+
+            // точность: среднее по win%
+            val totalAcc = if (perMoveWinAcc.isEmpty()) 100.0 else perMoveWinAcc.average()
+            // точность по цветам (ACPL на основе дельт)
+            fun accuracySide(isWhite: Boolean): Double {
+                val side = moves.filter { (it.moveNumber % 2 == 1) == isWhite }
+                if (side.isEmpty()) return 100.0
+                val avgCpLoss = side.sumOf { abs(it.delta) * 100.0 } / side.size
+                return (100.0 - avgCpLoss / 3.0).coerceIn(0.0, 100.0)
+            }
+
+            // классические метрики для перформанса
+            fun scoreByResult(tag: String?, forWhite: Boolean): Double? = when (tag) {
+                "1-0" -> if (forWhite) 1.0 else 0.0
+                "0-1" -> if (forWhite) 0.0 else 1.0
+                "1/2-1/2" -> 0.5
+                else -> null
+            }
+            fun performance(opponentElo: Int?, score: Double?): Int? {
+                if (opponentElo == null || score == null) return null
+                val delta = (400.0 * (score - 0.5)).roundToInt()
+                return (opponentElo + delta).coerceIn(500, 3200)
+            }
+
+            val summaryCounts = moves.groupingBy { it.classification }.eachCount()
+            AnalysisResult(
+                summary = AnalysisSummary(
+                    totalMoves = moves.size,
+                    counts = summaryCounts,
+                    accuracy = totalAcc,
+                    accuracyWhite = accuracySide(true),
+                    accuracyBlack = accuracySide(false),
+                    perfWhite = null,
+                    perfBlack = null
+                ),
+                moves = moves
             )
-            AnalysisResult(summary = summary, moves = moves)
         }
 }

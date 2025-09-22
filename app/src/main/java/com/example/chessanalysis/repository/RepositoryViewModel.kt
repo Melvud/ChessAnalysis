@@ -1,38 +1,41 @@
 package com.example.chessanalysis.repository
 
+import com.example.chessanalysis.data.api.ChessApiService
 import com.example.chessanalysis.data.api.ChessComService
 import com.example.chessanalysis.data.api.LichessService
 import com.example.chessanalysis.data.api.StockfishOnlineService
 import com.example.chessanalysis.data.model.*
 import com.example.chessanalysis.engine.StockfishOnlineAnalyzer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okio.buffer
 import okio.source
 import org.json.JSONObject
 import retrofit2.HttpException
 import java.net.SocketTimeoutException
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-/** Репозиторий: загрузка партий и анализ PGN. */
-@Suppress("NULLABILITY_MISMATCH_BASED_ON_JAVA_ANNOTATIONS")
+/** Репозиторий: отвечает за загрузку партий и анализ PGN. */
 class GameRepository(
     private val lichess: LichessService,
     private val chessCom: ChessComService,
-    private val stockfishOnline: StockfishOnlineService
+    private val stockfishOnline: StockfishOnlineService,
+    private val chessApi: ChessApiService
 ) {
-    private val analyzer = StockfishOnlineAnalyzer(stockfishOnline)
+    private val analyzer = StockfishOnlineAnalyzer(chessApi)
 
+    /** Получить PGN-тег. */
     private fun pgnTag(pgn: String, key: String): String? {
         val re = Regex("\\[$key\\s+\"([^\"]+)\"\\]")
         return re.find(pgn)?.groupValues?.getOrNull(1)
     }
 
+    /** Читаем имя игрока на Lichess. */
     private fun lichessPlayerName(playersObj: JSONObject?, color: String, pgn: String): String {
         val side = playersObj?.optJSONObject(color)
         val fromUser = side?.optJSONObject("user")?.optString("name")?.takeIf { it.isNotBlank() }
@@ -42,6 +45,7 @@ class GameRepository(
         return fromUser ?: fromUserId ?: fromName ?: fromTag ?: if (color == "white") "White" else "Black"
     }
 
+    /** Загрузить партии с сервиса site. */
     suspend fun loadGames(site: ChessSite, username: String, max: Int = 10): List<GameSummary> =
         withContext(Dispatchers.IO) {
             when (site) {
@@ -109,23 +113,24 @@ class GameRepository(
             }
         }
 
-    suspend fun analyzeGame(game: GameSummary, depth: Int = 15): AnalysisResult {
-        val d = depth.coerceIn(1, 15)
+    /** Анализировать одну партию (глубина ограничена 18). */
+    suspend fun analyzeGame(game: GameSummary, depth: Int = 14): AnalysisResult {
+        val d = depth.coerceIn(2, 18)
         try {
-            return analyzer.analyzeGame(game.pgn, depth = d)
+            return analyzer.analyzeGame(game.pgn, d)
         } catch (e: HttpException) {
             val body = e.response()?.errorBody()?.string().orEmpty()
-            throw IllegalStateException("StockfishOnline HTTP ${e.code()} ${e.message()} ${body.take(300)}", e)
+            throw IllegalStateException("HTTP ${e.code()} ${e.message()} ${body.take(300)}", e)
         } catch (e: SocketTimeoutException) {
-            throw IllegalStateException("StockfishOnline timeout: ${e.message ?: "no details"}", e)
+            throw IllegalStateException("Timeout: ${e.message ?: "no details"}", e)
         } catch (e: Throwable) {
             val msg = e.message?.ifBlank { e::class.java.simpleName } ?: e::class.java.simpleName
-            throw IllegalStateException("StockfishOnline error: $msg", e)
+            throw IllegalStateException("Error: $msg", e)
         }
     }
 }
 
-/** ViewModel загрузки списка партий. */
+/** ViewModel списка партий. */
 class GameListViewModel(private val repository: GameRepository) : ViewModel() {
     private val _games = MutableStateFlow<List<GameSummary>>(emptyList())
     val games: StateFlow<List<GameSummary>> = _games
@@ -158,7 +163,7 @@ class AnalysisViewModel(private val repository: GameRepository) : ViewModel() {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
 
-    fun analyze(game: GameSummary, depth: Int = 15) {
+    fun analyze(game: GameSummary, depth: Int = 14) {
         viewModelScope.launch {
             _loading.value = true
             _error.value = null

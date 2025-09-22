@@ -1,6 +1,8 @@
 package com.example.chessanalysis.data.util
 
 import com.example.chessanalysis.data.model.MoveClass
+import java.nio.file.Files
+import kotlin.io.path.writeText
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -8,10 +10,8 @@ import kotlin.math.sign
 import com.github.bhlangonijr.chesslib.Board
 import com.github.bhlangonijr.chesslib.move.MoveList
 import com.github.bhlangonijr.chesslib.pgn.PgnHolder
-import java.nio.file.Files
-import kotlin.io.path.writeText
 
-/** Представление доски и применение SAN‑ходов. */
+/** Представление доски и применение SAN. */
 class BoardState private constructor(
     private val cells: Array<CharArray>,
     private var whiteToMove: Boolean,
@@ -31,9 +31,7 @@ class BoardState private constructor(
             b[6] = charArrayOf('p','p','p','p','p','p','p','p')
             b[7] = charArrayOf('r','n','b','q','k','b','n','r')
             return BoardState(
-                b, true,
-                canCastleWK = true, canCastleWQ = true,
-                canCastleBK = true, canCastleBQ = true,
+                b, true, true, true, true, true,
                 enPassantTarget = null,
                 halfmoveClock = 0,
                 fullmoveNumber = 1
@@ -58,7 +56,6 @@ class BoardState private constructor(
         if (white) isWhitePiece(ch) else isBlackPiece(ch)
     private fun sideChar(white: Boolean, type: Char) =
         if (white) type else type.lowercaseChar()
-
     private fun clearEP() { enPassantTarget = null }
 
     fun applySan(san: String, isWhiteMove: Boolean) {
@@ -138,7 +135,10 @@ class BoardState private constructor(
             clearEP()
         }
 
-        postMoveHousekeeping(pawnMove = movingType == 'P', capture = isCapture && (!epCapture || capturedBefore != '.'))
+        postMoveHousekeeping(
+            pawnMove = movingType == 'P',
+            capture = isCapture && (!epCapture || capturedBefore != '.')
+        )
     }
 
     fun toFEN(): String {
@@ -339,8 +339,7 @@ class BoardState private constructor(
     private fun coordsToSquare(r: Int, f: Int) = "${'a'+f}${'1'+r}"
 }
 
-/* --- PGN‑парсер --- */
-
+/* --- PGN-парсер --- */
 data class PositionSnapshot(
     val fenBefore: String,
     val fenAfter: String,
@@ -376,29 +375,23 @@ object PGNParser {
     }
 }
 
-/* --- ChessParser: токенизация PGN и восстановление UCI по SAN --- */
+/* --- ChessParser: сан -> uci с использованием BoardState. */
 
 data class Ply(val san: String, val uci: String)
 
 object ChessParser {
-    /** Удаляет теги/комментарии/варианты, разбивает на SAN-ходы. */
+    /** Удаляет теги/комментарии/варианты, разбивает на SAN-строки. */
     private fun tokenizeSan(pgn: String): List<String> {
         var s = pgn
-        // 1) удалить теги [Key "Value"]
         s = s.lines().filterNot { it.trimStart().startsWith('[') }.joinToString("\n")
-        // 2) удалить { ... } (может быть многострочным)
         s = s.replace(Regex("\\{.*?\\}", setOf(RegexOption.DOT_MATCHES_ALL)), "")
-        // 3) удалить комментарии через ; до конца строки
         s = s.replace(Regex(";.*"), "")
-        // 4) удалить NAG $n
         s = s.replace(Regex("\\$\\d+"), "")
-        // 5) удалить варианты в скобках (плоский уровень)
         while (true) {
             val t = s.replace(Regex("\\([^()]*\\)"), "")
             if (t == s) break
             s = t
         }
-        // 6) разбить и убрать служебные токены
         val raw = s.replace("\n", " ").trim().split(Regex("\\s+"))
         val skip = setOf("1-0", "0-1", "1/2-1/2", "*")
         val moveNum = Regex("^\\d+\\.+$")
@@ -415,7 +408,7 @@ object ChessParser {
 
     private fun coordsToSquare(r: Int, f: Int) = "${'a'+f}${'1'+r}"
 
-    /** Дифф двух позиций: возвращает UCI-ход под SAN. */
+    /** Дифф двух позиционных состояний: возвращает UCI. */
     private fun diffMove(before: BoardState, after: BoardState, san: String): Pair<String,String> {
         if (san == "O-O" || san == "0-0") {
             return when {
@@ -477,7 +470,7 @@ object ChessParser {
         return coordsToSquare(fromR, fromF) to coordsToSquare(toR, toF)
     }
 
-    /** PGN → список полуходов (SAN + UCI) строго по позиции. */
+    /** PGN → список ходов (SAN и UCI). */
     fun pgnToPlies(pgn: String): List<Ply> {
         val tokens = tokenizeSan(pgn)
         val list = ArrayList<Ply>(tokens.size)
@@ -494,7 +487,7 @@ object ChessParser {
     }
 }
 
-/** Классификатор ходов по дельте (в пешках) и расчет точности. */
+/** Классификатор по потере (в пешках) и вычисление точности. */
 object MoveClassifier {
     fun classify(deltaPawns: Double): MoveClass = when {
         deltaPawns <= 0.15 -> MoveClass.GREAT
@@ -504,9 +497,9 @@ object MoveClassifier {
         else -> MoveClass.BLUNDER
     }
 
-    fun accuracy(movesDelta: List<Double>): Double {
-        if (movesDelta.isEmpty()) return 100.0
-        val penalty = movesDelta.sumOf { d ->
+    fun accuracyDeltas(deltas: List<Double>): Double {
+        if (deltas.isEmpty()) return 100.0
+        val penalty = deltas.sumOf { d ->
             when (classify(abs(d))) {
                 MoveClass.GREAT -> 0.0
                 MoveClass.GOOD -> 5.0
@@ -514,7 +507,7 @@ object MoveClassifier {
                 MoveClass.MISTAKE -> 50.0
                 MoveClass.BLUNDER -> 80.0
             }
-        } / movesDelta.size
+        } / deltas.size
         return max(0.0, min(100.0, 100.0 - penalty))
     }
 }

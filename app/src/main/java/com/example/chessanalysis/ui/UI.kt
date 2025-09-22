@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 
 package com.example.chessanalysis.ui
 
@@ -39,15 +39,13 @@ import com.example.chessanalysis.data.util.BoardState
 import com.example.chessanalysis.repository.AnalysisViewModel
 import com.example.chessanalysis.repository.GameListViewModel
 import com.example.chessanalysis.repository.GameRepository
-import com.example.chessanalysis.ui.theme.*
+import com.example.chessanalysis.ui.theme.ChessAnalyzerTheme
+import com.example.chessanalysis.ui.theme.EvalBarVertical
+import com.example.chessanalysis.ui.theme.classIconRes
 import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-
 /* --- Навигация --- */
-
 sealed class Screen(val route: String) {
     object Login : Screen("login")
     object GameList : Screen("games/{site}/{username}")
@@ -71,7 +69,7 @@ fun AppNavGraph(navController: NavHostController) {
             if (site == null || user.isNullOrBlank()) {
                 navController.popBackStack(); return@composable
             }
-            GameListScreen(site = site, username = user) { game ->
+            GameListScreen(site, user) { game ->
                 navController.currentBackStackEntry
                     ?.savedStateHandle
                     ?.set("selectedGame", game)
@@ -88,34 +86,25 @@ fun AppNavGraph(navController: NavHostController) {
             }
             AnalysisSummaryScreen(
                 game = game,
-                onViewReport = { result ->
-                    navController.currentBackStackEntry
-                        ?.savedStateHandle
-                        ?.set("analysisResult", result)
-                    navController.navigate(Screen.Report.route)
-                },
+                onViewReport = { navController.navigate(Screen.Report.route) },
                 onBack = { navController.popBackStack() }
             )
         }
 
         composable(Screen.Report.route) {
-            val summaryEntry = runCatching {
-                navController.getBackStackEntry(Screen.Summary.route)
-            }.getOrNull()
-            val stateFlow: StateFlow<AnalysisResult?> =
-                summaryEntry?.savedStateHandle?.getStateFlow<AnalysisResult?>("analysisResult", null)
-                    ?: MutableStateFlow(null)
-            val result by stateFlow.collectAsState()
-            when (val r = result) {
-                null -> ReportAwaitScreen(onBack = { navController.popBackStack() })
-                else -> ReportScreen(result = r, onBack = { navController.popBackStack() })
+            // Используем тот же AnalysisViewModel, чтобы подписаться на анализ
+            val game: GameSummary? = navController.getBackStackEntry(Screen.Summary.route)
+                .savedStateHandle
+                .get<GameSummary>("selectedGame")
+            if (game == null) {
+                navController.popBackStack(); return@composable
             }
+            ReportHost(game) { navController.popBackStack() }
         }
     }
 }
 
-/* --- Экран логина --- */
-
+/* --- Экран входа --- */
 @Composable
 fun LoginScreen(onLogin: (ChessSite, String) -> Unit) {
     var username by remember { mutableStateOf("") }
@@ -128,7 +117,7 @@ fun LoginScreen(onLogin: (ChessSite, String) -> Unit) {
                 .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("Вход", style = MaterialTheme.typography.headlineMedium)
+            Text("Вход", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FilterChip(
@@ -159,8 +148,7 @@ fun LoginScreen(onLogin: (ChessSite, String) -> Unit) {
     }
 }
 
-/* --- Экран списка партий --- */
-
+/* --- Экран со списком партий --- */
 @Composable
 fun GameListScreen(
     site: ChessSite,
@@ -173,7 +161,8 @@ fun GameListScreen(
                 GameRepository(
                     ApiClient.lichessService,
                     ApiClient.chessComService,
-                    ApiClient.stockfishOnlineService
+                    ApiClient.stockfishOnlineService,
+                    ApiClient.chessApiService
                 )
             )
         }
@@ -182,7 +171,7 @@ fun GameListScreen(
     val loading by vm.loading.collectAsState()
     val error by vm.error.collectAsState()
     LaunchedEffect(site, username) { vm.loadGames(site, username) }
-    Scaffold(topBar = { TopAppBar(title = { Text("Ваши последние партии") }) }) { padding ->
+    Scaffold(topBar = { TopAppBar(title = { Text("Ваши партии") }) }) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when {
                 loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
@@ -209,8 +198,7 @@ fun GameListScreen(
     }
 }
 
-/* --- Экран сводки анализа --- */
-
+/* --- Сводка анализа --- */
 @Composable
 fun AnalysisSummaryScreen(
     game: GameSummary,
@@ -223,7 +211,8 @@ fun AnalysisSummaryScreen(
                 GameRepository(
                     ApiClient.lichessService,
                     ApiClient.chessComService,
-                    ApiClient.stockfishOnlineService
+                    ApiClient.stockfishOnlineService,
+                    ApiClient.chessApiService
                 )
             )
         }
@@ -237,7 +226,7 @@ fun AnalysisSummaryScreen(
             when {
                 loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 error != null -> Text("Ошибка: $error", Modifier.align(Alignment.Center))
-                result == null -> Text("Выполняется анализ…", Modifier.align(Alignment.Center))
+                result == null -> Text("Анализируем партию…", Modifier.align(Alignment.Center))
                 else -> SummaryContent(game, result!!, onViewReport, onBack)
             }
         }
@@ -252,9 +241,9 @@ private fun bucket(absDelta: Double): Buckets = when {
     absDelta < 1.60 -> Buckets.MIST
     else -> Buckets.BLUN
 }
-private fun accuracyForSide(moves: List<MoveAnalysis>, isWhite: Boolean): Double {
+private fun accuracySide(moves: List<MoveAnalysis>, isWhite: Boolean): Double {
     val sideMoves = moves.filter { (it.moveNumber % 2 == 1) == isWhite }
-    if (sideMoves.isEmpty()) return 0.0
+    if (sideMoves.isEmpty()) return 100.0
     val acpl = sideMoves.sumOf { abs(it.delta) * 100.0 } / sideMoves.size
     return (100.0 - acpl / 3.0).coerceIn(0.0, 100.0)
 }
@@ -269,7 +258,7 @@ private fun countsForSide(moves: List<MoveAnalysis>, isWhite: Boolean): Map<Buck
     }
     return map
 }
-private fun parseElosFromPgn(pgn: String): Pair<Int?, Int?> {
+private fun parseElos(pgn: String): Pair<Int?, Int?> {
     fun tagInt(key: String): Int? =
         Regex("\\[$key\\s+\"(\\d+)\"\\]").find(pgn)?.groupValues?.getOrNull(1)?.toIntOrNull()
     return tagInt("WhiteElo") to tagInt("BlackElo")
@@ -293,13 +282,13 @@ private fun SummaryContent(
     onViewReport: (AnalysisResult) -> Unit,
     onBack: () -> Unit
 ) {
-    val (wElo, bElo) = parseElosFromPgn(game.pgn)
+    val (wElo, bElo) = parseElos(game.pgn)
     val perfW = performanceOneGame(bElo, scoreByResult(game.result, true))
     val perfB = performanceOneGame(wElo, scoreByResult(game.result, false))
-    val accW = accuracyForSide(result.moves, true)
-    val accB = accuracyForSide(result.moves, false)
     val cntW = countsForSide(result.moves, true)
     val cntB = countsForSide(result.moves, false)
+    val accW = result.summary.accuracyWhite
+    val accB = result.summary.accuracyBlack
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("${game.white} — ${game.black}", style = MaterialTheme.typography.headlineSmall)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -326,36 +315,71 @@ private fun SideCard(
             Text(name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f)) {
-                    Text("Accuracy", style = MaterialTheme.typography.labelMedium)
+                    Text("Точность", style = MaterialTheme.typography.labelMedium)
                     Text("${"%.1f".format(accuracy)}%", style = MaterialTheme.typography.headlineLarge)
                 }
                 Column(Modifier.weight(1f)) {
-                    Text("Performance", style = MaterialTheme.typography.labelMedium)
+                    Text("Перфоманс", style = MaterialTheme.typography.labelMedium)
                     Text(performance?.toString() ?: "—", style = MaterialTheme.typography.headlineLarge)
                 }
             }
             Divider()
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Best / Excellent"); Text((counts[Buckets.GREAT] ?: 0).toString())
+                Text("Лучшие/Отлично"); Text((counts[Buckets.GREAT] ?: 0).toString())
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Good"); Text((counts[Buckets.GOOD] ?: 0).toString())
+                Text("Хорошо"); Text((counts[Buckets.GOOD] ?: 0).toString())
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Inaccuracy"); Text((counts[Buckets.INA] ?: 0).toString())
+                Text("Нечётко"); Text((counts[Buckets.INA] ?: 0).toString())
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Mistake"); Text((counts[Buckets.MIST] ?: 0).toString())
+                Text("Ошибка"); Text((counts[Buckets.MIST] ?: 0).toString())
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Blunder"); Text((counts[Buckets.BLUN] ?: 0).toString())
+                Text("Зевок"); Text((counts[Buckets.BLUN] ?: 0).toString())
             }
         }
     }
 }
 
-/* --- Экран ожидания и детального отчёта --- */
+/* --- Экран отчёта. Здесь отслеживаем состояние анализа. --- */
+@Composable
+fun ReportHost(game: GameSummary, onBack: () -> Unit) {
+    val vm: AnalysisViewModel = viewModel(factory = viewModelFactory {
+        initializer {
+            AnalysisViewModel(
+                GameRepository(
+                    ApiClient.lichessService,
+                    ApiClient.chessComService,
+                    ApiClient.stockfishOnlineService,
+                    ApiClient.chessApiService
+                )
+            )
+        }
+    })
+    val result by vm.analysisResult.collectAsState()
+    val loading by vm.loading.collectAsState()
+    val error by vm.error.collectAsState()
+    LaunchedEffect(game.id) { if (result == null) vm.analyze(game) }
+    when {
+        loading -> ReportAwaitScreen(onBack)
+        error != null -> {
+            Scaffold(topBar = {
+                TopAppBar(
+                    title = { Text("Детальный отчёт") },
+                    navigationIcon = { TextButton(onClick = onBack) { Text("Назад") } }
+                )
+            }) { p -> Box(Modifier.padding(p).fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("Ошибка: $error")
+            }}
+        }
+        result == null -> ReportAwaitScreen(onBack)
+        else -> ReportScreen(result!!, onBack)
+    }
+}
 
+/* --- Ожидание отчёта --- */
 @Composable
 fun ReportAwaitScreen(onBack: () -> Unit) {
     Scaffold(topBar = {
@@ -363,13 +387,14 @@ fun ReportAwaitScreen(onBack: () -> Unit) {
             title = { Text("Детальный отчёт") },
             navigationIcon = { TextButton(onClick = onBack) { Text("Назад") } }
         )
-    }) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
+    }) { p ->
+        Box(Modifier.padding(p).fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator()
         }
     }
 }
 
+/* --- Детальный отчёт: доска и список ходов. --- */
 @Composable
 fun ReportScreen(result: AnalysisResult, onBack: () -> Unit) {
     Scaffold(topBar = {
@@ -394,27 +419,33 @@ private fun bucketOf(absDelta: Double): Buckets = when {
 private fun ReportContent(result: AnalysisResult, modifier: Modifier = Modifier) {
     val moves = result.moves
     val context = LocalContext.current
-    val movePlayer = remember { android.media.MediaPlayer.create(context, R.raw.move) }
-    val capturePlayer = remember { android.media.MediaPlayer.create(context, R.raw.capture) }
-    val errorPlayer = remember { android.media.MediaPlayer.create(context, R.raw.error) }
-    DisposableEffect(Unit) { onDispose {
-        runCatching { movePlayer.release() }
-        runCatching { capturePlayer.release() }
-        runCatching { errorPlayer.release() }
-    } }
+    // Звуки ходов
+    val moveSound = remember { android.media.MediaPlayer.create(context, R.raw.move) }
+    val captureSound = remember { android.media.MediaPlayer.create(context, R.raw.capture) }
+    val errorSound = remember { android.media.MediaPlayer.create(context, R.raw.error) }
+    DisposableEffect(Unit) {
+        onDispose {
+            moveSound.release()
+            captureSound.release()
+            errorSound.release()
+        }
+    }
+
+    // Строим последовательность досок
     val boards = remember(moves) {
         val seq = mutableListOf(BoardState.initial())
         var b = seq.first()
         moves.forEach { m ->
             val next = b.copy()
-            val isWhiteMove = (m.moveNumber % 2 == 1)
-            next.applySan(m.san, isWhiteMove)
+            val isWhite = (m.moveNumber % 2 == 1)
+            next.applySan(m.san, isWhite)
             seq += next
             b = next
         }
         seq
     }
-    var index by remember { mutableStateOf(if (moves.isNotEmpty()) moves.lastIndex else -1) }
+
+    var index by remember { mutableStateOf(moves.lastIndex) }
     Column(
         modifier.fillMaxSize().padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -431,7 +462,7 @@ private fun ReportContent(result: AnalysisResult, modifier: Modifier = Modifier)
             Banner(m, cls)
         }
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            val boardSize = 320.dp
+            val size = 320.dp
             if (index >= 0) {
                 val prev = boards[index]
                 val cur = boards[index + 1]
@@ -447,18 +478,13 @@ private fun ReportContent(result: AnalysisResult, modifier: Modifier = Modifier)
                         Buckets.MIST  -> MoveClass.MISTAKE
                         Buckets.BLUN  -> MoveClass.BLUNDER
                     },
-                    boardSize = boardSize
+                    boardSize = size
                 )
             } else {
-                ChessBoard(
-                    board = boards.first(),
-                    lastFrom = null,
-                    lastTo = null,
-                    moveClass = null,
-                    boardSize = 320.dp
-                )
+                ChessBoard(board = boards.first(), lastFrom = null, lastTo = null, moveClass = null, boardSize = 320.dp)
             }
         }
+        // Список ходов
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -469,9 +495,10 @@ private fun ReportContent(result: AnalysisResult, modifier: Modifier = Modifier)
                 AssistChip(
                     onClick = {
                         index = i
+                        // звук
                         when (bucket) {
-                            Buckets.BLUN, Buckets.MIST -> errorPlayer.start()
-                            else -> if (m.san.contains("x")) capturePlayer.start() else movePlayer.start()
+                            Buckets.BLUN, Buckets.MIST -> errorSound.start()
+                            else -> if (m.san.contains("x")) captureSound.start() else moveSound.start()
                         }
                     },
                     label = { Text(m.san) },
@@ -513,15 +540,15 @@ private fun Banner(m: MoveAnalysis, cls: MoveClass) {
         MoveClass.GREAT      -> Color(0xFF66BB6A)
         MoveClass.GOOD       -> Color(0xFF43A047)
         MoveClass.INACCURACY -> Color(0xFFFFC107)
-        MoveClass.MISTAKE    -> Color(0xFFFF6D00)
-        MoveClass.BLUNDER    -> Color(0xFFD32F2F)
+        MoveClass.MISTAKE    -> Color(0xFFFF9800)
+        MoveClass.BLUNDER    -> Color(0xFFE53935)
     }
-    Surface(color = color.copy(alpha = 0.12f)) {
+    Surface(color = color.copy(alpha = 0.15f)) {
         Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(painter = painterResource(id = classIconRes(cls)), contentDescription = null, tint = color)
             Column(Modifier.weight(1f)) {
                 Text(title, fontWeight = FontWeight.SemiBold)
-                Text("Сильнейший: ${m.bestMove}")
+                Text("Лучший: ${m.bestMove ?: "—"}")
             }
             Text("Δ ${"%.2f".format(abs(m.delta))}", color = color, fontWeight = FontWeight.Bold)
         }
@@ -540,11 +567,11 @@ private fun ChessBoard(
     val light = Color(0xFFEEEED2)
     val dark = Color(0xFF769656)
     val overlay = when (moveClass) {
-        MoveClass.GREAT      -> Color(0xFF00C853).copy(alpha = 0.28f)
-        MoveClass.GOOD       -> Color(0xFF4CAF50).copy(alpha = 0.28f)
-        MoveClass.INACCURACY -> Color(0xFFFFC107).copy(alpha = 0.28f)
-        MoveClass.MISTAKE    -> Color(0xFFFF9800).copy(alpha = 0.28f)
-        MoveClass.BLUNDER    -> Color(0xFFE53935).copy(alpha = 0.28f)
+        MoveClass.GREAT      -> Color(0xFF00C853).copy(alpha = 0.30f)
+        MoveClass.GOOD       -> Color(0xFF4CAF50).copy(alpha = 0.30f)
+        MoveClass.INACCURACY -> Color(0xFFFFC107).copy(alpha = 0.30f)
+        MoveClass.MISTAKE    -> Color(0xFFFF9800).copy(alpha = 0.30f)
+        MoveClass.BLUNDER    -> Color(0xFFE53935).copy(alpha = 0.30f)
         null                 -> Color.Transparent
     }
     Box(
@@ -557,9 +584,9 @@ private fun ChessBoard(
             val cell = min(size.width, size.height) / 8f
             for (r in 0..7) {
                 for (c in 0..7) {
-                    val cellColor = if ((r + c) % 2 == 0) light else dark
+                    val col = if ((r + c) % 2 == 0) light else dark
                     drawRect(
-                        color = cellColor,
+                        color = col,
                         topLeft = Offset(c * cell, (7 - r) * cell),
                         size = Size(cell, cell)
                     )
@@ -575,14 +602,13 @@ private fun ChessBoard(
                     style = Fill
                 )
                 drawRect(
-                    color = overlay.copy(alpha = 0.9f),
+                    color = overlay.copy(alpha = 0.8f),
                     topLeft = Offset(c * cell, (7 - r) * cell),
                     size = Size(cell, cell),
                     style = Stroke(width = 2f)
                 )
             }
-            drawOverlay(lastFrom)
-            drawOverlay(lastTo)
+            drawOverlay(lastFrom); drawOverlay(lastTo)
         }
         val glyphStyle = androidx.compose.ui.text.TextStyle(fontSize = (boardSize.value / 10f).sp)
         Column(Modifier.fillMaxSize()) {
@@ -593,11 +619,11 @@ private fun ChessBoard(
                             val ch = board.at(rank, file)
                             val g = glyphFor(ch)
                             if (g != null) {
-                                val isWhitePiece = ch.isUpperCase()
+                                val isWhite = ch.isUpperCase()
                                 Text(
                                     text = g.toString(),
                                     style = glyphStyle,
-                                    color = if (isWhitePiece) Color.Black else Color(0xFF111111)
+                                    color = if (isWhite) Color.Black else Color(0xFF111111)
                                 )
                             }
                         }
@@ -622,6 +648,7 @@ private fun chipColor(b: Buckets, selected: Boolean): Color = when (b) {
     Buckets.BLUN  -> if (selected) Color(0xFFEF9A9A) else Color(0x80EF9A9A)
 }
 
+/** Найти различия между двумя досками. */
 private fun findDiff(a: BoardState, b: BoardState): Pair<Pair<Int,Int>?, Pair<Int,Int>?> {
     var from: Pair<Int,Int>? = null; var to: Pair<Int,Int>? = null
     for (r in 0..7) for (c in 0..7) {

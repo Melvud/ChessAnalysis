@@ -22,28 +22,27 @@ import coil.decode.SvgDecoder
 import coil.request.ImageRequest
 import com.example.chessanalysis.R
 import com.example.chessanalysis.data.model.MoveClass
-import com.example.chessanalysis.ui.Typography
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
-
+import androidx.compose.foundation.layout.aspectRatio
 private val LightColors = lightColorScheme(
     primary = Color(0xFF2E7D32),
     onPrimary = Color.White,
-    secondary = Color(0xFF1B5E20),
+    secondary = Color(0xFF388E3C),
     onSecondary = Color.White,
     background = Color(0xFFF1F8E9),
-    onBackground = Color(0xFF1B1B1B),
+    onBackground = Color(0xFF212121),
     surface = Color.White,
-    onSurface = Color(0xFF101010)
+    onSurface = Color(0xFF212121)
 )
 
 private val DarkColors = darkColorScheme(
     primary = Color(0xFF66BB6A),
     secondary = Color(0xFF43A047),
-    background = Color(0xFF0D0F0D),
-    surface = Color(0xFF121212),
-    onSurface = Color(0xFFEDEDED)
+    background = Color(0xFF0F1E15),
+    surface = Color(0xFF1B362A),
+    onSurface = Color(0xFFE8F5E9)
 )
 
 val Typography = Typography()
@@ -58,8 +57,7 @@ fun ChessAnalyzerTheme(content: @Composable () -> Unit) {
     )
 }
 
-/* --- Иконки ходов --- */
-
+/** Ресурсы для иконок классов. */
 @DrawableRes
 fun classIconRes(cls: MoveClass): Int = when (cls) {
     MoveClass.GREAT      -> R.drawable.excellent
@@ -69,12 +67,14 @@ fun classIconRes(cls: MoveClass): Int = when (cls) {
     MoveClass.BLUNDER    -> R.drawable.blunder
 }
 
-/** Компонент шахматной фигурки из assets */
+/** Отображение SVG фигуры. */
 @Composable
 fun PieceIcon(
     isWhite: Boolean,
     pieceLetter: Char,
-    modifier: Modifier = Modifier.width(20.dp)
+    modifier: Modifier = Modifier
+        .width(24.dp)
+        .aspectRatio(1f)
 ) {
     val colorPrefix = if (isWhite) "w" else "b"
     val fileName = when (pieceLetter.uppercaseChar()) {
@@ -86,20 +86,20 @@ fun PieceIcon(
         else -> "${colorPrefix}P.svg"
     }
     val ctx = LocalContext.current
-    val imageLoader = ImageLoader.Builder(ctx)
+    val loader = ImageLoader.Builder(ctx)
         .components { add(SvgDecoder.Factory()) }
         .build()
     AsyncImage(
         model = ImageRequest.Builder(ctx)
             .data("file:///android_asset/fresca/$fileName")
             .build(),
-        imageLoader = imageLoader,
+        imageLoader = loader,
         contentDescription = null,
         modifier = modifier
     )
 }
 
-/** Полоска оценки (как на Chess.com): сверху белые, снизу чёрные. */
+/** Преобразование оценки в вероятность для вертикальной полоски. */
 private fun evalToWin(e: Double): Double {
     val cp = e * 100.0
     val k = 0.00368208
@@ -107,6 +107,7 @@ private fun evalToWin(e: Double): Double {
     return max(0.0, min(100.0, win))
 }
 
+/** Полоска оценки (как на chess.com). */
 @Composable
 fun EvalBarVertical(
     evaluationPawns: Double,
@@ -115,19 +116,13 @@ fun EvalBarVertical(
         .fillMaxHeight()
 ) {
     val win = evalToWin(evaluationPawns).toFloat() / 100f
-    Box(modifier.background(Color(0xFF0D0F0D))) {
+    Box(modifier.background(MaterialTheme.colorScheme.surface)) {
         Box(
             Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(win)
                 .align(Alignment.TopStart)
-                .background(MaterialTheme.colorScheme.surface)
+                .background(MaterialTheme.colorScheme.primary)
         )
     }
-}
-
-/** Определить букву фигуры из SAN ('K','Q','R','B','N', иначе 'P') */
-fun pieceFromSAN(san: String): Char {
-    val c = san.firstOrNull() ?: 'P'
-    return if (c in listOf('K','Q','R','B','N')) c else 'P'
 }

@@ -1,20 +1,23 @@
 package com.example.chessanalysis.data.api
 
+import com.example.chessanalysis.data.model.ChessSite
 import com.google.gson.annotations.SerializedName
 import okhttp3.OkHttpClient
 import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Headers
 import retrofit2.http.Path
+import retrofit2.http.POST
 import retrofit2.http.Query
 import retrofit2.http.Streaming
 import retrofit2.http.Url
 import java.util.concurrent.TimeUnit
 
-/** Lichess API: экспорт партий пользователя в NDJSON */
+/** Сервис Lichess: выдаёт партии в NDJSON. */
 interface LichessService {
     @Streaming
     @Headers("Accept: application/x-ndjson")
@@ -28,7 +31,7 @@ interface LichessService {
     ): Response<ResponseBody>
 }
 
-/** Chess.com API */
+/** Chess.com: список архивов и сами партии. */
 data class ArchivesResponse(val archives: List<String>)
 data class PlayerDto(val username: String, val rating: Int?, val result: String?)
 data class ChessComGameDto(
@@ -50,7 +53,7 @@ interface ChessComService {
     suspend fun getArchiveGames(@Url archiveUrl: String): GamesResponse
 }
 
-/** Stockfish Online API */
+/** Старый Stockfish для совместимости: можно оставить, но не используется. */
 interface StockfishOnlineService {
     @Headers("Accept: application/json")
     @GET("api/stockfish.php")
@@ -73,7 +76,33 @@ data class StockfishV2Response(
     @SerializedName("bestmove") val bestmove: String? = null
 )
 
-/** Фабрика Retrofit‑сервисов */
+/** API chess-api.com: POST /v1. */
+data class ChessApiRequest(
+    val fen: String,
+    val variants: Int = 1,
+    val depth: Int = 12,
+    @SerializedName("maxThinkingTime") val maxThinkingTime: Int = 50,
+    @SerializedName("searchmoves") val searchMoves: String? = null
+)
+
+data class ChessApiResponse(
+    val text: String?,
+    val eval: Double?,
+    val centipawns: Int?,
+    val move: String?,
+    val fen: String?,
+    val depth: Int?,
+    val winChance: Double?,
+    val mate: Int?
+)
+
+interface ChessApiService {
+    @Headers("Content-Type: application/json")
+    @POST("v1")
+    suspend fun analyzePosition(@Body request: ChessApiRequest): ChessApiResponse
+}
+
+/** Фабрика Retrofit-сервисов. */
 object ApiClient {
     private val httpClient by lazy {
         OkHttpClient.Builder()
@@ -108,5 +137,14 @@ object ApiClient {
             .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(StockfishOnlineService::class.java)
+    }
+
+    val chessApiService: ChessApiService by lazy {
+        Retrofit.Builder()
+            .baseUrl("https://chess-api.com/")
+            .client(httpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(ChessApiService::class.java)
     }
 }
