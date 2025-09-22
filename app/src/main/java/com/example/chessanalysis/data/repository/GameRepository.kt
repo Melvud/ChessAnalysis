@@ -1,149 +1,145 @@
 package com.example.chessanalysis.data.repository
 
-import android.util.Log
+import com.example.chessanalysis.data.api.ChessComService
+import com.example.chessanalysis.data.api.LichessService
+import com.example.chessanalysis.data.api.StockfishOnlineService
 import com.example.chessanalysis.data.model.*
 import com.example.chessanalysis.engine.StockfishOnlineAnalyzer
-import com.example.chessanalysis.data.api.StockfishOnlineService
-import com.example.chessanalysis.data.util.MoveClassifier
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
-import java.util.concurrent.ConcurrentHashMap
-import kotlin.math.max
+import okio.buffer
+import okio.source
+import org.json.JSONObject
+import retrofit2.HttpException
+import java.net.SocketTimeoutException
 
-/**
- * Репозиторий анализирует игру: для каждого ply берёт оценку ДО и ПОСЛЕ хода
- * у Stockfish Online, считает потери в win%, классифицирует, собирает сводку.
- *
- * ВАЖНО: здесь мы больше НЕ используем старый SFOnlineAnalyzer, который
- * пытался найти "eval" в ответе и всегда падал в 0.0. Мы бьём прямо в
- * официальный JSON (evaluation/mate/bestmove/continuation).
- */
 class GameRepository(
-    private val stockfish: StockfishOnlineService
+    private val lichess: LichessService,
+    private val chessCom: ChessComService,
+    private val stockfishOnline: StockfishOnlineService
 ) {
 
-    private val cache = ConcurrentHashMap<String, Double>() // fen -> evaluation (pawns, white POV)
+    private val analyzer = StockfishOnlineAnalyzer(stockfishOnline)
 
-    suspend fun analyzeGame(
-        parsed: List<PlyData>,           // отдаёт ваш PGNParser (ply, san, fenBefore, fenAfter)
-        depth: Int = 15,
-        whiteElo: Int? = null,
-        blackElo: Int? = null,
-        result: String? = null
-    ): AnalysisResult = withContext(Dispatchers.IO) {
+    /** Извлечь значение PGN-тега вида [Key "Value"] */
+    private fun pgnTag(pgn: String, key: String): String? {
+        val re = Regex("\\[$key\\s+\"([^\"]+)\"\\]")
+        return re.find(pgn)?.groupValues?.getOrNull(1)
+    }
 
-        if (parsed.isEmpty()) {
-            return@withContext AnalysisResult(emptyList(), AnalysisSummary(emptyMap(), 0.0, 0.0, 0.0, null, null))
-        }
+    /** Безопасно достаём ник из Lichess JSON */
+    private fun lichessPlayerName(playersObj: JSONObject?, color: String, pgn: String): String {
+        val side = playersObj?.optJSONObject(color)
+        val fromUser = side?.optJSONObject("user")?.optString("name")?.takeIf { it.isNotBlank() }
+        val fromUserId = side?.optString("userId")?.takeIf { it.isNotBlank() }
+        val fromName = side?.optString("name")?.takeIf { it.isNotBlank() }
+        val fromTag = pgnTag(pgn, if (color == "white") "White" else "Black")
+        return fromUser ?: fromUserId ?: fromName ?: fromTag ?: if (color == "white") "White" else "Black"
+    }
 
-        // Сначала — параллельно вытащим оценки для всех уникальных FEN
-        val fens = parsed.flatMap { listOf(it.fenBefore, it.fenAfter) }.toSet()
-        coroutineScope {
-            fens.map { fen ->
-                async {
-                    cache.computeIfAbsent(fen) {
-                        fetchEvalPawns(fen, depth)
+    // --------------------------
+    // ЗАГРУЗКА ПАРТИЙ
+    // --------------------------
+
+    suspend fun loadGames(site: ChessSite, username: String, max: Int = 10): List<GameSummary> =
+        withContext(Dispatchers.IO) {
+            when (site) {
+                ChessSite.LICHESS -> {
+                    // Lichess Export: NDJSON (по одной партии в строке)
+                    val resp = lichess.getGames(
+                        username = username,
+                        max = max,
+                        moves = true,
+                        pgnInJson = true,
+                        opening = true
+                    )
+                    val body = resp.body() ?: throw IllegalStateException("Lichess: empty body")
+                    val list = mutableListOf<GameSummary>()
+                    body.byteStream().source().buffer().use { buf ->
+                        while (true) {
+                            val line = buf.readUtf8Line() ?: break
+                            if (line.isBlank()) continue
+                            val obj = JSONObject(line)
+
+                            val pgn = obj.optString("pgn")
+                            if (pgn.isBlank()) continue
+
+                            val id = obj.optString("id", System.nanoTime().toString())
+                            val players = obj.optJSONObject("players")
+                            val white = lichessPlayerName(players, "white", pgn)
+                            val black = lichessPlayerName(players, "black", pgn)
+
+                            val result = pgnTag(pgn, "Result")
+                                ?: obj.optString("status", null)
+
+                            val tc = obj.optString("speed", null)
+                                ?: pgnTag(pgn, "TimeControl")
+
+                            val startMs = obj.optLong("createdAt", 0L).let { if (it == 0L) null else it }
+                            val endMs = obj.optLong("lastMoveAt", 0L).let { if (it == 0L) null else it }
+
+                            list += GameSummary(
+                                id = id,
+                                site = ChessSite.LICHESS,
+                                white = white,
+                                black = black,
+                                result = result,
+                                startTime = startMs,
+                                endTime = endMs,
+                                timeControl = tc,
+                                pgn = pgn
+                            )
+                        }
+                    }
+                    list
+                }
+
+                ChessSite.CHESS_COM -> {
+                    val archives = chessCom.getArchives(username).archives
+                    val latest = archives.lastOrNull() ?: return@withContext emptyList()
+                    val games = chessCom.getArchiveGames(latest).games
+
+                    games.takeLast(max).map { g ->
+                        val white = g.white.username ?: pgnTag(g.pgn ?: "", "White") ?: "White"
+                        val black = g.black.username ?: pgnTag(g.pgn ?: "", "Black") ?: "Black"
+                        val result = g.pgn?.let { pgnTag(it, "Result") } ?: g.white.result ?: g.black.result
+                        GameSummary(
+                            id = g.url ?: System.nanoTime().toString(),
+                            site = ChessSite.CHESS_COM,
+                            white = white,
+                            black = black,
+                            result = result,
+                            startTime = g.start_time?.times(1000),
+                            endTime = g.end_time?.times(1000),
+                            timeControl = g.time_control,
+                            pgn = g.pgn.orEmpty()
+                        )
                     }
                 }
-            }.awaitAll()
-        }
-
-        // Затем — соберём по ходам.
-        val moves = parsed.map { plyData ->
-            val moverIsWhite = plyData.ply % 2 == 1
-            val evalBefore = cache[plyData.fenBefore] ?: 0.0
-            val evalAfter = cache[plyData.fenAfter] ?: 0.0
-
-            val winBefore = pawnsToWinPctForMover(evalBefore, moverIsWhite)
-            val winAfter  = pawnsToWinPctForMover(evalAfter, moverIsWhite)
-            val lossWin   = max(0.0, winBefore - winAfter)
-
-            val base = MoveAnalysis(
-                ply = plyData.ply,
-                san = plyData.san,
-                fenBefore = plyData.fenBefore,
-                fenAfter = plyData.fenAfter,
-                evalBeforePawns = evalBefore,
-                evalAfterPawns = evalAfter,
-                winBefore = winBefore,
-                winAfter = winAfter,
-                lossWinPct = lossWin,
-                bestMove = null // можно заполнить из continuation при желании
-            )
-            MoveClassifier.classify(base)
-        }
-
-        val counts = moves.groupingBy { it.moveClass }.eachCount()
-        val acc = MoveClassifier.accuracy(moves)
-
-        val summary = AnalysisSummary(
-            counts = counts,
-            accuracyTotal = acc.total,
-            accuracyWhite = acc.white,
-            accuracyBlack = acc.black,
-            whitePerfVs = whiteElo?.let { elo -> perf(elo, scoreFromResult(result, true)) },
-            blackPerfVs = blackElo?.let { elo -> perf(elo, scoreFromResult(result, false)) }
-        )
-
-        AnalysisResult(moves, summary)
-    }
-
-    // --- helpers ---
-
-    private suspend fun fetchEvalPawns(fen: String, depth: Int): Double {
-        return try {
-            val res: StockfishOnlineResponse = stockfish.analyze(fen = fen, depth = depth)
-            // Приоритизируем "mate": считаем как «бесконечная» оценка, но ограничим величину,
-            // чтобы не ломать проценты. Знак определяем по тому, за кого «мат»:
-            // если mate > 0, то мат в пользу текущей стороны (здесь считаем POV белых,
-            // так что ориентируемся на четвертую часть FEN: " w " / " b ").
-            val sideIsWhite = fen.contains(" w ")
-            when {
-                res.evaluation != null -> res.evaluation
-                res.mate != null -> {
-                    val sign = if (sideIsWhite) 1.0 else -1.0
-                    val m = res.mate
-                    // Чем меньше до мата, тем больше по модулю; 10 ходов ~ ±10 пешек.
-                    val mag = (12 - (m ?: 0)).coerceAtLeast(8).toDouble()
-                    sign * mag
-                }
-                else -> 0.0
             }
-        } catch (t: Throwable) {
-            Log.w("StockfishOnline", "fetchEval failed for fen='$fen': ${t.message}")
-            0.0
         }
-    }
 
-    private fun scoreFromResult(result: String?, white: Boolean): Double {
-        return when (result) {
-            "1-0" -> if (white) 1.0 else 0.0
-            "0-1" -> if (white) 0.0 else 1.0
-            "1/2-1/2", "1/2" -> 0.5
-            else -> 0.5 // если неизвестно — нейтрально
-        }
-    }
+    // --------------------------
+    // АНАЛИЗ ПАРТИИ
+    // --------------------------
 
-    // Очень грубая прикидка performance rating (как в ваших логах)
-    private fun perf(opponentElo: Int, score: Double): Int {
-        val delta = when {
-            score >= 0.99 -> 800
-            score >= 0.75 -> 400
-            score >= 0.50 -> 0
-            score >= 0.25 -> -400
-            else          -> -800
+    /**
+     * Запускает полный анализ партии через StockfishOnline (v2).
+     * depth ограничиваем в [1..15] согласно документации сервиса.
+     */
+    suspend fun analyzeGame(game: GameSummary, depth: Int = 15): AnalysisResult {
+        val d = depth.coerceIn(1, 15)
+        try {
+            // ВАЖНО: передаём PGN как строку
+            return analyzer.analyzeGame(game.pgn, depth = d)
+        } catch (e: HttpException) {
+            val body = e.response()?.errorBody()?.string().orEmpty()
+            throw IllegalStateException("StockfishOnline HTTP ${e.code()} ${e.message()} ${body.take(300)}", e)
+        } catch (e: SocketTimeoutException) {
+            throw IllegalStateException("StockfishOnline timeout: ${e.message ?: "no details"}", e)
+        } catch (e: Throwable) {
+            val msg = e.message?.ifBlank { e::class.java.simpleName } ?: e::class.java.simpleName
+            throw IllegalStateException("StockfishOnline error: $msg", e)
         }
-        return opponentElo + delta
     }
 }
-
-/** Минимальные данные по одному полуходу от существующего PGNParser. */
-data class PlyData(
-    val ply: Int,
-    val san: String,
-    val fenBefore: String,
-    val fenAfter: String
-)

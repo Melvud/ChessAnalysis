@@ -1,43 +1,49 @@
 package com.example.chessanalysis.data.api
 
-import com.google.gson.Gson
-import com.google.gson.GsonBuilder
 import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 
+/**
+ * Единая фабрика Retrofit-сервисов с тайм-аутами.
+ */
 object ApiClient {
 
-    // Документы и продакшн-база у stockfish.online без "www"
-    private const val BASE_URL = "https://stockfish.online/"
-
-    private val gson: Gson by lazy {
-        // lenient = true — чтобы не падать, если сервер прислал строки вместо bool и т.п.
-        GsonBuilder()
-            .setLenient()
-            .serializeNulls()
-            .create()
-    }
-
-    private val httpClient: OkHttpClient by lazy {
-        val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BASIC
-        }
+    private val httpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .writeTimeout(20, TimeUnit.SECONDS)
-            .addInterceptor(logging)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
             .build()
     }
 
-    val stockfish: StockfishOnlineService by lazy {
+    /** Lichess */
+    val lichessService: LichessService by lazy {
         Retrofit.Builder()
-            .baseUrl(BASE_URL)
-            .addConverterFactory(GsonConverterFactory.create(gson))
+            .baseUrl("https://lichess.org/")
             .client(httpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(LichessService::class.java)
+    }
+
+    /** Chess.com */
+    val chessComService: ChessComService by lazy {
+        Retrofit.Builder()
+            .baseUrl("https://api.chess.com/")
+            .client(httpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(ChessComService::class.java)
+    }
+
+    /** Stockfish Online (обрати внимание на www. и закрывающий слэш) */
+    val stockfishOnlineService: StockfishOnlineService by lazy {
+        Retrofit.Builder()
+            .baseUrl("https://www.stockfish.online/") // важен закрывающий слэш
+            .client(httpClient)
+            .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(StockfishOnlineService::class.java)
     }
