@@ -67,8 +67,6 @@ dependencies {
     implementation("androidx.compose.runtime:runtime-livedata")
 
     // SVG/изображения
-    implementation("io.coil-kt:coil-compose:2.4.0")
-    implementation("io.coil-kt:coil-svg:2.4.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 
@@ -84,4 +82,7 @@ dependencies {
     // Moshi (рефлекшн, без KSP)
     implementation("com.squareup.moshi:moshi:1.15.1")
     implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
+
+    implementation("io.coil-kt:coil-compose:2.6.0")
+    implementation("io.coil-kt:coil-svg:2.6.0")
 }

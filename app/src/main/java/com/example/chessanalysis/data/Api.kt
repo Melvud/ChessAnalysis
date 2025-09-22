@@ -1,150 +1,88 @@
-package com.example.chessanalysis.data.api
+package com.example.chessanalysis.data
 
-import com.example.chessanalysis.data.model.ChessSite
-import com.google.gson.annotations.SerializedName
-import okhttp3.OkHttpClient
-import okhttp3.ResponseBody
-import retrofit2.Response
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
-import retrofit2.http.Body
-import retrofit2.http.GET
-import retrofit2.http.Headers
-import retrofit2.http.Path
-import retrofit2.http.POST
-import retrofit2.http.Query
-import retrofit2.http.Streaming
-import retrofit2.http.Url
-import java.util.concurrent.TimeUnit
+import android.util.Log
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URLEncoder
+import java.net.URL
+import kotlin.math.roundToInt
 
-/** Сервис Lichess: выдаёт партии в NDJSON. */
-interface LichessService {
-    @Streaming
-    @Headers("Accept: application/x-ndjson")
-    @GET("api/games/user/{username}")
-    suspend fun getGames(
-        @Path("username") username: String,
-        @Query("max") max: Int = 10,
-        @Query("moves") moves: Boolean = true,
-        @Query("pgnInJson") pgnInJson: Boolean = true,
-        @Query("opening") opening: Boolean = true
-    ): Response<ResponseBody>
-}
+/**
+ * Единственный HTTP-клиент для запроса движка Stockfish Online v2.
+ * Никаких вызовов chess-api больше нет.
+ */
+object StockfishApiV2 {
 
-/** Chess.com: список архивов и сами партии. */
-data class ArchivesResponse(val archives: List<String>)
-data class PlayerDto(val username: String, val rating: Int?, val result: String?)
-data class ChessComGameDto(
-    val url: String?,
-    val pgn: String,
-    val end_time: Long?,
-    val start_time: Long?,
-    val time_control: String?,
-    val white: PlayerDto,
-    val black: PlayerDto
-)
-data class GamesResponse(val games: List<ChessComGameDto>)
+    private const val TAG = "StockfishApiV2"
+    // Документация/пример: https://stockfish.online/api/s/v2.php  (v2, all-in-one)
+    private const val ENDPOINT = "https://stockfish.online/api/s/v2.php"
 
-interface ChessComService {
-    @GET("pub/player/{username}/games/archives")
-    suspend fun getArchives(@Path("username") username: String): ArchivesResponse
-
-    @GET
-    suspend fun getArchiveGames(@Url archiveUrl: String): GamesResponse
-}
-
-/** Старый Stockfish для совместимости: можно оставить, но не используется. */
-interface StockfishOnlineService {
-    @Headers("Accept: application/json")
-    @GET("api/stockfish.php")
-    suspend fun analyze(
-        @Query("fen", encoded = true) fen: String,
-        @Query("depth") depth: Int
-    ): Response<StockfishV2Response>
-
-    @GET("api/stockfish.php")
-    suspend fun analyzeRaw(
-        @Query("fen", encoded = true) fen: String,
-        @Query("depth") depth: Int
-    ): Response<ResponseBody>
-}
-
-data class StockfishV2Response(
-    val success: Boolean = true,
-    val evaluation: Double? = null,
-    val mate: Int? = null,
-    @SerializedName("bestmove") val bestmove: String? = null
-)
-
-/** API chess-api.com: POST /v1. */
-data class ChessApiRequest(
-    val fen: String,
-    val variants: Int = 1,
-    val depth: Int = 12,
-    @SerializedName("maxThinkingTime") val maxThinkingTime: Int = 50,
-    @SerializedName("searchmoves") val searchMoves: String? = null
-)
-
-data class ChessApiResponse(
-    val text: String?,
-    val eval: Double?,
-    val centipawns: Int?,
-    val move: String?,
-    val fen: String?,
-    val depth: Int?,
-    val winChance: Double?,
-    val mate: Int?
-)
-
-interface ChessApiService {
-    @Headers("Content-Type: application/json")
-    @POST("v1")
-    suspend fun analyzePosition(@Body request: ChessApiRequest): ChessApiResponse
-}
-
-/** Фабрика Retrofit-сервисов. */
-object ApiClient {
-    private val httpClient by lazy {
-        OkHttpClient.Builder()
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .build()
+    data class Eval(
+        val ok: Boolean,
+        /** оценка в центопешках (относительно белых), если нет mate */
+        val cp: Int?,
+        /** число ходов до мата (>0, если в пользу стороны, положительное как у Stockfish) */
+        val mate: Int?,
+        /** строка вида "bestmove e2e4 ponder ...", если есть */
+        val rawBest: String?,
+        /** principal variation как строка UCI через пробел, если есть */
+        val continuation: String?,
+        val depth: Int?
+    ) {
+        /** UCI лучшего хода, например "e2e4" */
+        val bestMoveUci: String?
+            get() = rawBest?.split(" ")?.getOrNull(1)
     }
 
-    val lichessService: LichessService by lazy {
-        Retrofit.Builder()
-            .baseUrl("https://lichess.org/")
-            .client(httpClient)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(LichessService::class.java)
-    }
-
-    val chessComService: ChessComService by lazy {
-        Retrofit.Builder()
-            .baseUrl("https://api.chess.com/")
-            .client(httpClient)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(ChessComService::class.java)
-    }
-
-    val stockfishOnlineService: StockfishOnlineService by lazy {
-        Retrofit.Builder()
-            .baseUrl("https://www.stockfish.online/")
-            .client(httpClient)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(StockfishOnlineService::class.java)
-    }
-
-    val chessApiService: ChessApiService by lazy {
-        Retrofit.Builder()
-            .baseUrl("https://chess-api.com/")
-            .client(httpClient)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(ChessApiService::class.java)
+    /**
+     * Запрос оценки позиции. depth ∈ [6,15] (сайт v2 ограничивает 15).
+     * Возвращаемое cp уже усечено в диапазон [-1000, 1000] для устойчивости метрик.
+     */
+    fun evaluateFen(fen: String, depth: Int = 14): Eval {
+        val capped = depth.coerceIn(6, 15)
+        val qs = "fen=${URLEncoder.encode(fen, "UTF-8")}&depth=$capped"
+        val url = "$ENDPOINT?$qs"
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 12000
+            readTimeout = 15000
+            requestMethod = "GET"
+        }
+        return try {
+            val code = conn.responseCode
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                Log.w(TAG, "HTTP $code: $body")
+                Eval(false, null, null, null, null, null)
+            } else {
+                // Пример ответа (см. источники):
+                // { "success":true, "evaluation":1.36, "mate":null,
+                //   "bestmove":"bestmove b7b6 ponder f3e5", "continuation":"b7b6 f3e5 ...", "depth":14 }
+                val j = JSONObject(body)
+                val ok = j.optBoolean("success", false)
+                val evalPawns = when {
+                    j.has("evaluation") && !j.isNull("evaluation") -> j.optDouble("evaluation")
+                    j.has("eval") && !j.isNull("eval") -> j.optDouble("eval")
+                    else -> Double.NaN
+                }
+                val cp: Int? = if (evalPawns.isNaN()) null else {
+                    // evaluation приходит в пешках → в центопешки
+                    (evalPawns * 100.0).roundToInt().coerceIn(-1000, 1000)
+                }
+                val mate: Int? = if (j.isNull("mate")) null else j.optInt("mate")
+                Eval(
+                    ok = ok,
+                    cp = cp,
+                    mate = mate,
+                    rawBest = j.optString("bestmove", null),
+                    continuation = j.optString("continuation", null),
+                    depth = j.optInt("depth", 0).takeIf { it > 0 }
+                )
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "evaluateFen failed", t)
+            Eval(false, null, null, null, null, null)
+        } finally {
+            conn.disconnect()
+        }
     }
 }

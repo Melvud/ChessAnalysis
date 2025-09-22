@@ -26,6 +26,8 @@ import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
 import androidx.compose.foundation.layout.aspectRatio
+import com.example.chessanalysis.data.model.MoveClass.*
+
 private val LightColors = lightColorScheme(
     primary = Color(0xFF2E7D32),
     onPrimary = Color.White,
@@ -60,11 +62,17 @@ fun ChessAnalyzerTheme(content: @Composable () -> Unit) {
 /** Ресурсы для иконок классов. */
 @DrawableRes
 fun classIconRes(cls: MoveClass): Int = when (cls) {
-    MoveClass.GREAT      -> R.drawable.excellent
-    MoveClass.GOOD       -> R.drawable.okay
-    MoveClass.INACCURACY -> R.drawable.inaccuracy
-    MoveClass.MISTAKE    -> R.drawable.mistake
-    MoveClass.BLUNDER    -> R.drawable.blunder
+    BEST -> R.drawable.best
+    EXCELLENT -> R.drawable.excellent
+    INACCURACY -> R.drawable.inaccuracy
+    MISTAKE -> R.drawable.mistake
+    BLUNDER -> R.drawable.blunder
+    SPLENDID -> R.drawable.splendid
+    PERFECT -> R.drawable.perfect
+    OPENING -> R.drawable.opening
+    OKAY -> R.drawable.okay
+    GREAT -> R.drawable.perfect
+    GOOD -> R.drawable.okay
 }
 
 /** Отображение SVG фигуры. */

@@ -1,51 +1,73 @@
 package com.example.chessanalysis.data.model
 
-import java.io.Serializable
-
-/** Источник партии. */
-enum class ChessSite : Serializable { LICHESS, CHESS_COM }
-
-/** Короткая информация о партии. */
 data class GameSummary(
     val id: String,
-    val site: ChessSite,
     val white: String,
     val black: String,
+    val whiteElo: Int?,
+    val blackElo: Int?,
     val result: String?,
-    val startTime: Long?,
-    val endTime: Long?,
     val timeControl: String?,
-    val pgn: String
-) : Serializable
+    val pgnMoves: List<String>,
+    val startFen: String = "rn.../pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1" // замените на ваши данные
+)
 
-/** Класс ошибки хода. */
-enum class MoveClass : Serializable {
-    GREAT, GOOD, INACCURACY, MISTAKE, BLUNDER
+data class ParsedGame(
+    val startFen: String,
+    val moves: List<Ply>, // каждый полуход
+    val whiteElo: Int?,
+    val blackElo: Int?,
+    val opening: OpeningMatch?
+) {
+    companion object {
+        fun fromSummary(s: GameSummary): ParsedGame {
+            return ParsedGame(
+                startFen = "startpos_fen_or_from_pgn", // вставьте вашу реализацию
+                moves = s.pgnMoves.mapIndexed { i, san -> Ply(moveNumber = (i+2)/2, san = san, uci = "" /* uci из вашего парсера */) },
+                whiteElo = s.whiteElo,
+                blackElo = s.blackElo,
+                opening = null
+            )
+        }
+    }
 }
 
-/** Анализ одного хода. */
-data class MoveAnalysis(
+data class Ply(
     val moveNumber: Int,
     val san: String,
-    val bestMove: String?,
-    val evaluation: Double,
-    val delta: Double,
-    val classification: MoveClass
-) : Serializable
+    val uci: String
+)
 
-/** Сводка анализа партии. */
-data class AnalysisSummary(
-    val totalMoves: Int,
-    val counts: Map<MoveClass, Int>,
-    val accuracy: Double,
+enum class MoveClass {
+    OPENING, BEST, SPLENDID, PERFECT, EXCELLENT, OKAY, INACCURACY, MISTAKE, BLUNDER, GOOD, GREAT
+}
+
+data class MoveAnalysis(
+    val moveNumber: Int,
+    val uci: String,
+    val san: String,
+    val bestMove: String?,
+    val scoreCpBefore: Int,
+    val scoreCpAfter: Int,
+    val winBefore: Double,
+    val winAfter: Double,
+    val classification: MoveClass
+)
+
+data class OpeningMatch(val eco: String, val name: String, val plyRange: IntRange)
+
+data class SummaryBlock(
+    val acplWhite: Double,
+    val acplBlack: Double,
     val accuracyWhite: Double,
     val accuracyBlack: Double,
     val perfWhite: Int?,
-    val perfBlack: Int?
-) : Serializable
+    val perfBlack: Int?,
+    val opening: OpeningMatch?,
+    val counts: Map<MoveClass, Int>
+)
 
-/** Результат анализа. */
 data class AnalysisResult(
-    val summary: AnalysisSummary,
-    val moves: List<MoveAnalysis>
-) : Serializable
+    val moves: List<MoveAnalysis>,
+    val summary: SummaryBlock
+)

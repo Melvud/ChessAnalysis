@@ -1,196 +1,184 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class)
 
 package com.example.chessanalysis.ui
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Fill
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.lifecycle.viewmodel.initializer
-import androidx.lifecycle.viewmodel.viewModelFactory
-import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
-import com.example.chessanalysis.R
-import com.example.chessanalysis.data.api.ApiClient
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import coil.compose.AsyncImage
+import coil.decode.SvgDecoder
+import coil.request.ImageRequest
 import com.example.chessanalysis.data.model.*
-import com.example.chessanalysis.data.util.BoardState
+import com.example.chessanalysis.opening.OpeningBook
 import com.example.chessanalysis.repository.AnalysisViewModel
 import com.example.chessanalysis.repository.GameListViewModel
-import com.example.chessanalysis.repository.GameRepository
-import com.example.chessanalysis.ui.theme.classIconRes
-import com.example.chessanalysis.ui.theme.PieceIcon
-import kotlin.math.abs
-import kotlin.math.min
-import kotlin.math.roundToInt
 
-/* --- Навигация --- */
-sealed class Screen(val route: String) {
-    object Login : Screen("login")
-    object GameList : Screen("games/{site}/{username}")
-    object Summary : Screen("summary")
-    object Report : Screen("report")
-}
+/* Палитра доски */
+private val Light = Color(0xFFECECDC)
+private val Dark = Color(0xFF769656)
+
+/* ===== Навигация ===== */
 
 @Composable
-fun AppNavGraph(navController: NavHostController) {
-    NavHost(navController, startDestination = Screen.Login.route) {
-        composable(Screen.Login.route) {
-            LoginScreen { site, username ->
-                navController.navigate("games/${site.name}/${username}")
-            }
-        }
+fun AppNav(
+    listVm: GameListViewModel,
+    analysisVm: AnalysisViewModel
+) {
+    val nav = rememberNavController()
+    val ctx = LocalContext.current
+    LaunchedEffect(Unit) { OpeningBook.ensureLoaded(ctx) }
 
-        composable(Screen.GameList.route) { backStackEntry ->
-            val siteStr = backStackEntry.arguments?.getString("site")
-            val user = backStackEntry.arguments?.getString("username")
-            val site = siteStr?.let { runCatching { ChessSite.valueOf(it) }.getOrNull() }
-            if (site == null || user.isNullOrBlank()) {
-                navController.popBackStack(); return@composable
-            }
-            GameListScreen(site, user) { game ->
-                navController.currentBackStackEntry
-                    ?.savedStateHandle
-                    ?.set("selectedGame", game)
-                navController.navigate(Screen.Summary.route)
-            }
-        }
+    NavHost(navController = nav, startDestination = "login") {
 
-        composable(Screen.Summary.route) {
-            val game: GameSummary? = navController.previousBackStackEntry
-                ?.savedStateHandle
-                ?.get<GameSummary>("selectedGame")
-            if (game == null) {
-                navController.popBackStack(); return@composable
-            }
-            AnalysisSummaryScreen(
-                game = game,
-                onViewReport = {
-                    // фикс падения: гарантируем наличие selectedGame в backstack Summary
-                    navController.getBackStackEntry(Screen.Summary.route)
-                        .savedStateHandle
-                        .set("selectedGame", game)
-                    navController.navigate(Screen.Report.route)
-                },
-                onBack = { navController.popBackStack() }
+        composable("login") {
+            LoginScreen(
+                onGo = { site, username ->
+                    nav.navigate("games/${site.name}/${username}") { launchSingleTop = true }
+                }
             )
         }
 
-        composable(Screen.Report.route) {
-            val game: GameSummary? = navController.getBackStackEntry(Screen.Summary.route)
-                .savedStateHandle
-                .get<GameSummary>("selectedGame")
-            if (game == null) {
-                navController.popBackStack(); return@composable
-            }
-            ReportHost(game) { navController.popBackStack() }
+        composable(
+            route = "games/{site}/{username}",
+            arguments = listOf(
+                navArgument("site") { type = NavType.StringType },
+                navArgument("username") { type = NavType.StringType }
+            )
+        ) { back ->
+            val siteStr = back.arguments?.getString("site")!!
+            val username = back.arguments?.getString("username")!!
+            val site = ChessSite.valueOf(siteStr)
+
+            GameListScreen(
+                vm = listVm,
+                site = site,
+                username = username,
+                onOpen = { game -> nav.navigate("summary/${game.id}") { launchSingleTop = true } },
+                onBack = { nav.popBackStack() }
+            )
+        }
+
+        composable(
+            route = "summary/{id}",
+            arguments = listOf(navArgument("id") { type = NavType.StringType })
+        ) { back ->
+            val id = back.arguments?.getString("id")!!
+            val game = listVm.games.collectAsState().value.first { it.id == id }
+            SummaryScreen(
+                game = game,
+                vm = analysisVm,
+                onDetail = { nav.navigate("detail/$id") { launchSingleTop = true } },
+                onBack = { nav.popBackStack() }
+            )
+        }
+
+        composable(
+            route = "detail/{id}",
+            arguments = listOf(navArgument("id") { type = NavType.StringType })
+        ) { back ->
+            val id = back.arguments?.getString("id")!!
+            val game = listVm.games.collectAsState().value.first { it.id == id }
+            DetailScreen(game = game, vm = analysisVm) { nav.popBackStack() }
         }
     }
 }
 
-/* --- Экран входа --- */
+/* ===== Экран логина / старта ===== */
+
 @Composable
-fun LoginScreen(onLogin: (ChessSite, String) -> Unit) {
+private fun LoginScreen(onGo: (ChessSite, String) -> Unit) {
     var username by remember { mutableStateOf("") }
     var site by remember { mutableStateOf(ChessSite.LICHESS) }
-    Box(Modifier.fillMaxSize()) {
+
+    Scaffold(topBar = { TopAppBar(title = { Text("Шахматный анализатор") }) }) { pad ->
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.Center)
-                .padding(24.dp),
+            modifier = Modifier.padding(pad).fillMaxSize().padding(20.dp),
+            verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("Вход", style = MaterialTheme.typography.headlineMedium)
+            Text("Введите ник и выберите сайт", fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(16.dp))
+            OutlinedTextField(
+                value = username,
+                onValueChange = { username = it.trim() },
+                label = { Text("Ник (Lichess / Chess.com)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
             Spacer(Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = site == ChessSite.LICHESS,
                     onClick = { site = ChessSite.LICHESS },
                     label = { Text("Lichess") }
                 )
-                Spacer(Modifier.width(12.dp))
                 FilterChip(
                     selected = site == ChessSite.CHESS_COM,
                     onClick = { site = ChessSite.CHESS_COM },
                     label = { Text("Chess.com") }
                 )
             }
-            Spacer(Modifier.height(12.dp))
-            OutlinedTextField(
-                value = username,
-                onValueChange = { username = it },
-                label = { Text("Никнейм") },
-                singleLine = true
-            )
             Spacer(Modifier.height(20.dp))
             Button(
-                onClick = { onLogin(site, username.trim()) },
-                enabled = username.isNotBlank()
+                onClick = { if (username.isNotBlank()) onGo(site, username) },
+                enabled = username.isNotBlank(),
+                modifier = Modifier.fillMaxWidth()
             ) { Text("Загрузить партии") }
         }
     }
 }
 
-/* --- Экран со списком партий --- */
+/* ===== Список партий ===== */
+
 @Composable
-fun GameListScreen(
+private fun GameListScreen(
+    vm: GameListViewModel,
     site: ChessSite,
     username: String,
-    onGameSelected: (GameSummary) -> Unit
+    onOpen: (GameSummary) -> Unit,
+    onBack: () -> Unit
 ) {
-    val vm: GameListViewModel = viewModel(factory = viewModelFactory {
-        initializer {
-            GameListViewModel(
-                GameRepository(
-                    ApiClient.lichessService,
-                    ApiClient.chessComService,
-                    ApiClient.stockfishOnlineService,
-                    ApiClient.chessApiService
-                )
-            )
-        }
-    })
     val games by vm.games.collectAsState()
     val loading by vm.loading.collectAsState()
-    val error by vm.error.collectAsState()
+    val err by vm.error.collectAsState()
+
+    // Загружаем при входе на экран
     LaunchedEffect(site, username) { vm.loadGames(site, username) }
-    Scaffold(topBar = { TopAppBar(title = { Text("Ваши партии") }) }) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize()) {
-            when {
-                loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                error != null -> Text("Ошибка: $error", Modifier.align(Alignment.Center))
-                games.isEmpty() -> Text("Ничего не найдено", Modifier.align(Alignment.Center))
-                else -> LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(games) { g ->
-                        ElevatedCard(
-                            modifier = Modifier.fillMaxWidth().clickable { onGameSelected(g) }
-                        ) {
-                            Column(Modifier.padding(12.dp)) {
-                                Text("${g.white} — ${g.black}", style = MaterialTheme.typography.titleMedium)
-                                g.result?.let { Text("Результат: $it") }
-                                g.timeControl?.let { Text("Контроль: $it") }
-                            }
+
+    Scaffold(
+        topBar = { TopAppBar(title = { Text("${site.name.lowercase().replaceFirstChar { it.titlecase() }} • $username") }) }
+    ) { pad ->
+        Box(Modifier.padding(pad).fillMaxSize()) {
+            if (loading) CircularProgressIndicator(Modifier.align(Alignment.Center))
+            if (err != null) Text(err ?: "", color = Color.Red, modifier = Modifier.align(Alignment.Center))
+            LazyColumn(Modifier.fillMaxSize().padding(12.dp)) {
+                itemsIndexed(games) { _, g ->
+                    Card(
+                        Modifier.fillMaxWidth().padding(vertical = 6.dp).clickable { onOpen(g) },
+                        shape = RoundedCornerShape(16)
+                    ) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text("${g.white} — ${g.black}", fontWeight = FontWeight.Bold)
+                            Text("Result: ${g.result ?: "-"}  •  TC: ${g.timeControl ?: "-"}")
                         }
                     }
                 }
@@ -199,421 +187,139 @@ fun GameListScreen(
     }
 }
 
-/* --- Сводка анализа --- */
+/* ===== Сводка партии ===== */
+
 @Composable
-fun AnalysisSummaryScreen(
+private fun SummaryScreen(
     game: GameSummary,
-    onViewReport: (AnalysisResult) -> Unit,
+    vm: AnalysisViewModel,
+    onDetail: () -> Unit,
     onBack: () -> Unit
 ) {
-    val vm: AnalysisViewModel = viewModel(factory = viewModelFactory {
-        initializer {
-            AnalysisViewModel(
-                GameRepository(
-                    ApiClient.lichessService,
-                    ApiClient.chessComService,
-                    ApiClient.stockfishOnlineService,
-                    ApiClient.chessApiService
-                )
-            )
-        }
-    })
-    val result by vm.analysisResult.collectAsState()
+    val res by vm.analysisResult.collectAsState()
     val loading by vm.loading.collectAsState()
-    val error by vm.error.collectAsState()
+    val err by vm.error.collectAsState()
+
     LaunchedEffect(game.id) { vm.analyze(game) }
-    Scaffold(topBar = { TopAppBar(title = { Text("Сводка анализа") }) }) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize()) {
-            when {
-                loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                error != null -> Text("Ошибка: $error", Modifier.align(Alignment.Center))
-                result == null -> Text("Анализируем партию…", Modifier.align(Alignment.Center))
-                else -> SummaryContent(game, result!!, onViewReport, onBack)
+
+    Scaffold(
+        topBar = { TopAppBar(title = { Text("Отчёт о партии") }) },
+        bottomBar = {
+            Button(
+                onClick = onDetail,
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                enabled = res != null && !loading
+            ) { Text("Смотреть детальный отчёт") }
+        }
+    ) { pad ->
+        Column(Modifier.padding(pad).fillMaxSize().padding(16.dp)) {
+            if (loading) { CircularProgressIndicator() }
+            err?.let { Text(it, color = Color.Red) }
+            res?.let { r ->
+                Row(Modifier.fillMaxWidth()) {
+                    StatCard(
+                        name = game.white,
+                        acc = r.summary.accuracyWhite,
+                        acpl = r.summary.acplWhite,
+                        perf = r.summary.perfWhite,
+                        modifier = Modifier.weight(1f)
+                    )
+                    StatCard(
+                        name = game.black,
+                        acc = r.summary.accuracyBlack,
+                        acpl = r.summary.acplBlack,
+                        perf = r.summary.perfBlack,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                r.summary.opening?.let { Text("Дебют: ${it.eco} • ${it.name}") }
+                Spacer(Modifier.height(8.dp))
+                Counts(r.summary.counts)
             }
         }
     }
 }
 
-private enum class Buckets { GREAT, GOOD, INA, MIST, BLUN }
-private fun bucket(loss: Double): Buckets = when {
-    loss < 0.05 -> Buckets.GREAT
-    loss < 0.20 -> Buckets.GOOD
-    loss < 0.60 -> Buckets.INA
-    loss < 1.60 -> Buckets.MIST
-    else -> Buckets.BLUN
+@Composable
+private fun StatCard(name: String, acc: Double, acpl: Double, perf: Int?, modifier: Modifier = Modifier) {
+    Card(
+        modifier = modifier.padding(4.dp),
+        shape = RoundedCornerShape(16)
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(name, fontWeight = FontWeight.Bold)
+            Text("Точность: ${"%.1f".format(acc)}%")
+            Text("ACPL: ${"%.1f".format(acpl)}")
+            Text("Перфоманс: ${perf ?: "-"}")
+        }
+    }
 }
-private fun accuracySide(moves: List<MoveAnalysis>, isWhite: Boolean): Double {
-    val sideMoves = moves.filter { (it.moveNumber % 2 == 1) == isWhite }
-    if (sideMoves.isEmpty()) return 100.0
-    val acpl = sideMoves.sumOf { it.delta * 100.0 } / sideMoves.size
-    return (100.0 - acpl / 3.0).coerceIn(0.0, 100.0)
-}
-private fun countsForSide(moves: List<MoveAnalysis>, isWhite: Boolean): Map<Buckets, Int> {
-    val map = mutableMapOf(
-        Buckets.GREAT to 0, Buckets.GOOD to 0, Buckets.INA to 0,
-        Buckets.MIST to 0, Buckets.BLUN to 0
+
+@Composable
+private fun Counts(map: Map<MoveClass, Int>) {
+    val order = listOf(
+        MoveClass.SPLENDID to "Блестящий ход",
+        MoveClass.PERFECT to "Замечательный",
+        MoveClass.BEST to "Лучшие",
+        MoveClass.EXCELLENT to "Отлично",
+        MoveClass.OKAY to "Хорошо",
+        MoveClass.OPENING to "Теоретический ход",
+        MoveClass.INACCURACY to "Неточность",
+        MoveClass.MISTAKE to "Ошибка",
+        MoveClass.BLUNDER to "Зевок"
     )
-    moves.filter { (it.moveNumber % 2 == 1) == isWhite }.forEach { m ->
-        val b = bucket(m.delta)
-        map[b] = map.getValue(b) + 1
-    }
-    return map
-}
-
-@Composable
-private fun SummaryContent(
-    game: GameSummary,
-    result: AnalysisResult,
-    onViewReport: (AnalysisResult) -> Unit,
-    onBack: () -> Unit
-) {
-    val accW = result.summary.accuracyWhite
-    val accB = result.summary.accuracyBlack
-    val perfW = result.summary.perfWhite
-    val perfB = result.summary.perfBlack
-    val cntW = countsForSide(result.moves, true)
-    val cntB = countsForSide(result.moves, false)
-
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("${game.white} — ${game.black}", style = MaterialTheme.typography.headlineSmall)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            SideCard(Modifier.weight(1f), game.white, accW, perfW, cntW)
-            SideCard(Modifier.weight(1f), game.black, accB, perfB, cntB)
-        }
-        Button(onClick = { onViewReport(result) }, modifier = Modifier.fillMaxWidth()) {
-            Text("Смотреть детальный отчёт")
-        }
-        OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Назад") }
-    }
-}
-
-@Composable
-private fun SideCard(
-    modifier: Modifier,
-    name: String,
-    accuracy: Double,
-    performance: Int?,
-    counts: Map<Buckets, Int>
-) {
-    ElevatedCard(modifier) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(name, style = MaterialTheme.typography.titleMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Column(Modifier.weight(1f)) {
-                    Text("Точность", style = MaterialTheme.typography.labelMedium)
-                    Text("${"%.1f".format(accuracy)}%", style = MaterialTheme.typography.headlineLarge)
-                }
-                Column(Modifier.weight(1f)) {
-                    Text("Перфоманс", style = MaterialTheme.typography.labelMedium)
-                    Text(performance?.toString() ?: "—", style = MaterialTheme.typography.headlineLarge)
-                }
-            }
-            Divider()
+    Column {
+        order.forEach { (k, title) ->
+            val v = map[k] ?: 0
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Лучшие/Отлично"); Text((counts[Buckets.GREAT] ?: 0).toString())
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Хорошо"); Text((counts[Buckets.GOOD] ?: 0).toString())
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Неточность"); Text((counts[Buckets.INA] ?: 0).toString())
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Ошибка"); Text((counts[Buckets.MIST] ?: 0).toString())
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Зевок"); Text((counts[Buckets.BLUN] ?: 0).toString())
+                Text(title); Text("$v")
             }
         }
     }
 }
 
-/* --- Экран отчёта --- */
-@Composable
-fun ReportHost(game: GameSummary, onBack: () -> Unit) {
-    val vm: AnalysisViewModel = viewModel(factory = viewModelFactory {
-        initializer {
-            AnalysisViewModel(
-                GameRepository(
-                    ApiClient.lichessService,
-                    ApiClient.chessComService,
-                    ApiClient.stockfishOnlineService,
-                    ApiClient.chessApiService
-                )
-            )
-        }
-    })
-    val result by vm.analysisResult.collectAsState()
-    val loading by vm.loading.collectAsState()
-    val error by vm.error.collectAsState()
-    LaunchedEffect(game.id) { if (result == null) vm.analyze(game) }
-    when {
-        loading -> ReportAwaitScreen(onBack)
-        error != null -> {
-            Scaffold(topBar = {
-                TopAppBar(
-                    title = { Text("Детальный отчёт") },
-                    navigationIcon = { TextButton(onClick = onBack) { Text("Назад") } }
-                )
-            }) { p ->
-                Box(Modifier.padding(p).fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Ошибка: $error")
-                }
-            }
-        }
-        result == null -> ReportAwaitScreen(onBack)
-        else -> ReportScreen(result!!, onBack)
-    }
-}
+/* ===== Детальный отчёт с доской (SVG ассеты) ===== */
 
 @Composable
-fun ReportAwaitScreen(onBack: () -> Unit) {
-    Scaffold(topBar = {
-        TopAppBar(
-            title = { Text("Детальный отчёт") },
-            navigationIcon = { TextButton(onClick = onBack) { Text("Назад") } }
-        )
-    }) { p ->
-        Box(Modifier.padding(p).fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-        }
-    }
-}
-
-/* --- Детальный отчёт: доска (SVG) + список ходов --- */
-@Composable
-fun ReportScreen(result: AnalysisResult, onBack: () -> Unit) {
-    Scaffold(topBar = {
-        TopAppBar(
-            title = { Text("Детальный отчёт") },
-            navigationIcon = { TextButton(onClick = onBack) { Text("Назад") } }
-        )
-    }) { padding ->
-        ReportContent(result, Modifier.padding(padding))
-    }
-}
-
-private fun bucketOf(loss: Double): Buckets = when {
-    loss < 0.05 -> Buckets.GREAT
-    loss < 0.20 -> Buckets.GOOD
-    loss < 0.60 -> Buckets.INA
-    loss < 1.60 -> Buckets.MIST
-    else -> Buckets.BLUN
-}
-
-@Composable
-private fun ReportContent(result: AnalysisResult, modifier: Modifier = Modifier) {
-    val moves = result.moves
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val moveSound = remember { android.media.MediaPlayer.create(context, R.raw.move) }
-    val captureSound = remember { android.media.MediaPlayer.create(context, R.raw.capture) }
-    val errorSound = remember { android.media.MediaPlayer.create(context, R.raw.error) }
-    DisposableEffect(Unit) {
-        onDispose { moveSound.release(); captureSound.release(); errorSound.release() }
-    }
-
-    // Строим последовательность позиций
-    val boards = remember(moves) {
-        val seq = mutableListOf(BoardState.initial())
-        var b = seq.first()
-        moves.forEach { m ->
-            val next = b.copy()
-            val isWhite = (m.moveNumber % 2 == 1)
-            next.applySan(m.san, isWhite)
-            seq += next
-            b = next
-        }
-        seq
-    }
-
-    var index by remember { mutableStateOf(moves.lastIndex) }
-    Column(
-        modifier.fillMaxSize().padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        if (index in moves.indices) {
-            val m = moves[index]
-            val cls = when (bucketOf(m.delta)) {
-                Buckets.GREAT -> MoveClass.GREAT
-                Buckets.GOOD  -> MoveClass.GOOD
-                Buckets.INA   -> MoveClass.INACCURACY
-                Buckets.MIST  -> MoveClass.MISTAKE
-                Buckets.BLUN  -> MoveClass.BLUNDER
+private fun DetailScreen(game: GameSummary, vm: AnalysisViewModel, onBack: () -> Unit) {
+    val res by vm.analysisResult.collectAsState()
+    Scaffold(
+        topBar = { TopAppBar(title = { Text("Отчёт о партии") }) }
+    ) { pad ->
+        if (res == null) {
+            Box(Modifier.padding(pad).fillMaxSize()) {
+                CircularProgressIndicator(Modifier.align(Alignment.Center))
             }
-            Banner(m, cls)
+            return@Scaffold
         }
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            val size = 320.dp
-            if (index >= 0) {
-                val prev = boards[index]
-                val cur = boards[index + 1]
-                val (from, to) = findDiff(prev, cur)
-                ChessBoard(
-                    board = cur,
-                    lastFrom = from,
-                    lastTo = to,
-                    moveClass = when (bucketOf(moves[index].delta)) {
-                        Buckets.GREAT -> MoveClass.GREAT
-                        Buckets.GOOD  -> MoveClass.GOOD
-                        Buckets.INA   -> MoveClass.INACCURACY
-                        Buckets.MIST  -> MoveClass.MISTAKE
-                        Buckets.BLUN  -> MoveClass.BLUNDER
-                    },
-                    boardSize = size
-                )
-            } else {
-                ChessBoard(board = boards.first(), lastFrom = null, lastTo = null, moveClass = null, boardSize = 320.dp)
-            }
-        }
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            moves.forEachIndexed { i, m ->
-                val bucket = bucketOf(m.delta)
-                AssistChip(
-                    onClick = {
-                        index = i
-                        when (bucket) {
-                            Buckets.BLUN, Buckets.MIST -> errorSound.start()
-                            else -> if (m.san.contains("x")) captureSound.start() else moveSound.start()
-                        }
-                    },
-                    label = { Text(m.san) },
-                    leadingIcon = {
-                        Icon(
-                            painter = androidx.compose.ui.res.painterResource(
-                                id = classIconRes(
-                                    when (bucket) {
-                                        Buckets.GREAT -> MoveClass.GREAT
-                                        Buckets.GOOD  -> MoveClass.GOOD
-                                        Buckets.INA   -> MoveClass.INACCURACY
-                                        Buckets.MIST  -> MoveClass.MISTAKE
-                                        Buckets.BLUN  -> MoveClass.BLUNDER
-                                    }
-                                )
-                            ),
-                            contentDescription = null
-                        )
-                    },
-                    colors = AssistChipDefaults.assistChipColors(
-                        containerColor = chipColor(bucket, selected = i == index),
-                        labelColor = Color.Black,
-                        leadingIconContentColor = Color.Black
-                    )
-                )
-            }
-        }
-    }
-}
+        val moves = res!!.moves
+        var index by remember { mutableStateOf(0) }
+        val board = remember(index) { ReconstructBoard(moves, index) }
 
-@Composable
-private fun Banner(m: MoveAnalysis, cls: MoveClass) {
-    val isTheory = m.moveNumber <= 20 && m.delta <= 0.05
-    val title = when {
-        isTheory -> "Теоретический ход"
-        cls == MoveClass.GREAT -> "Лучший / Отлично"
-        cls == MoveClass.GOOD -> "Хороший ход"
-        cls == MoveClass.INACCURACY -> "Неточность"
-        cls == MoveClass.MISTAKE -> "Ошибка"
-        else -> "Зевок"
-    }
-    val color = when {
-        isTheory -> Color(0xFFBBA17A)
-        cls == MoveClass.GREAT -> Color(0xFF1DB954)
-        cls == MoveClass.GOOD -> Color(0xFF43A047)
-        cls == MoveClass.INACCURACY -> Color(0xFFFFC107)
-        cls == MoveClass.MISTAKE -> Color(0xFFFF9800)
-        else -> Color(0xFFE53935)
-    }
-    Surface(color = color.copy(alpha = 0.14f)) {
-        Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(painter = androidx.compose.ui.res.painterResource(id = classIconRes(cls)), contentDescription = null, tint = color)
-            Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
-                Text(title, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
-                Text(if (m.bestMove.isNullOrBlank()) "—" else "Лучший: ${m.bestMove}")
-            }
-            Text("Δ ${"%.2f".format(m.delta)}", color = color, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
-        }
-    }
-}
-
-/** SVG-доска: клетки и подсветки рисуем канвасом, фигуры кладём SVG поверх. */
-@Composable
-private fun ChessBoard(
-    board: BoardState,
-    lastFrom: Pair<Int, Int>?,
-    lastTo: Pair<Int, Int>?,
-    moveClass: MoveClass?,
-    modifier: Modifier = Modifier,
-    boardSize: Dp = 320.dp
-) {
-    val light = Color(0xFFEEEED2)
-    val dark = Color(0xFF769656)
-    val overlay = when (moveClass) {
-        MoveClass.GREAT      -> Color(0xFF00C853).copy(alpha = 0.30f)
-        MoveClass.GOOD       -> Color(0xFF4CAF50).copy(alpha = 0.30f)
-        MoveClass.INACCURACY -> Color(0xFFFFC107).copy(alpha = 0.30f)
-        MoveClass.MISTAKE    -> Color(0xFFFF9800).copy(alpha = 0.30f)
-        MoveClass.BLUNDER    -> Color(0xFFE53935).copy(alpha = 0.30f)
-        null                 -> Color.Transparent
-    }
-    Box(
-        modifier
-            .size(boardSize)
-            .background(Color.Transparent),
-        contentAlignment = Alignment.Center
-    ) {
-        // Клетки + подсветки
-        Canvas(Modifier.fillMaxSize()) {
-            val cell = min(size.width, size.height) / 8f
-            for (r in 0..7) {
-                for (c in 0..7) {
-                    val col = if ((r + c) % 2 == 0) light else dark
-                    drawRect(
-                        color = col,
-                        topLeft = Offset(c * cell, (7 - r) * cell),
-                        size = Size(cell, cell)
-                    )
-                }
-            }
-            fun drawOverlay(rc: Pair<Int,Int>?) {
-                if (rc == null) return
-                val (r,c) = rc
-                drawRect(
-                    color = overlay,
-                    topLeft = Offset(c * cell, (7 - r) * cell),
-                    size = Size(cell, cell),
-                    style = Fill
-                )
-                drawRect(
-                    color = overlay.copy(alpha = 0.8f),
-                    topLeft = Offset(c * cell, (7 - r) * cell),
-                    size = Size(cell, cell),
-                    style = Stroke(width = 2f)
-                )
-            }
-            drawOverlay(lastFrom); drawOverlay(lastTo)
-        }
-
-        // Слой SVG-фигур (assets/fresca/*.svg)
-        Column(Modifier.fillMaxSize().padding(2.dp)) {
-            for (rank in 7 downTo 0) {
-                Row(Modifier.weight(1f)) {
-                    for (file in 0..7) {
-                        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                            val ch = board.at(rank, file)
-                            if (ch != '.') {
-                                val isWhite = ch.isUpperCase()
-                                val letter = ch.uppercaseChar() // K,Q,R,B,N,P
-                                PieceIcon(
-                                    isWhite = isWhite,
-                                    pieceLetter = letter,
-                                    modifier = Modifier.fillMaxSize().padding(4.dp)
-                                )
+        Column(Modifier.padding(pad).fillMaxSize()) {
+            ChessBoard(board)
+            Spacer(Modifier.height(8.dp))
+            LazyColumn(Modifier.weight(1f)) {
+                itemsIndexed(moves) { i, m ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { index = i }.padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("${m.moveNumber}. ${m.san}")
+                        Text(
+                            text = when (m.classification) {
+                                MoveClass.SPLENDID -> "Блестящий"
+                                MoveClass.PERFECT -> "Замечательный"
+                                MoveClass.BEST -> "Лучший"
+                                MoveClass.EXCELLENT, MoveClass.GREAT -> "Отлично"
+                                MoveClass.OKAY, MoveClass.GOOD -> "Хорошо"
+                                MoveClass.OPENING -> "Теория"
+                                MoveClass.INACCURACY -> "Неточность"
+                                MoveClass.MISTAKE -> "Ошибка"
+                                MoveClass.BLUNDER -> "Зевок"
                             }
-                        }
+                        )
                     }
                 }
             }
@@ -621,24 +327,52 @@ private fun ChessBoard(
     }
 }
 
-private fun chipColor(b: Buckets, selected: Boolean): Color = when (b) {
-    Buckets.GREAT -> if (selected) Color(0xFFB9F6CA) else Color(0x80B9F6CA)
-    Buckets.GOOD  -> if (selected) Color(0xFFA5D6A7) else Color(0x80A5D6A7)
-    Buckets.INA   -> if (selected) Color(0xFFFFECB3) else Color(0x80FFECB3)
-    Buckets.MIST  -> if (selected) Color(0xFFFFCC80) else Color(0x80FFCC80)
-    Buckets.BLUN  -> if (selected) Color(0xFFEF9A9A) else Color(0x80EF9A9A)
-}
-
-/** По двум позициям определяем клетки «из» и «в». */
-private fun findDiff(a: BoardState, b: BoardState): Pair<Pair<Int,Int>?, Pair<Int,Int>?> {
-    var from: Pair<Int,Int>? = null
-    var to: Pair<Int,Int>? = null
-    for (r in 0..7) for (c in 0..7) {
-        val x = a.at(r,c); val y = b.at(r,c)
-        if (x != y) {
-            if (x != '.' && y == '.') from = r to c
-            if (x == '.' && y != '.') to = r to c
+@Composable
+private fun ChessBoard(board: Array<CharArray>, cell: Dp = 44.dp) {
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+    ) {
+        for (r in 7 downTo 0) {
+            Row(Modifier.fillMaxWidth().height(cell)) {
+                for (f in 0..7) {
+                    val dark = (r + f) % 2 == 1
+                    Box(
+                        Modifier
+                            .width(cell).height(cell)
+                            .background(if (dark) Dark else Light),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val p = board[r][f]
+                        if (p != '.') PieceSvg(p)
+                    }
+                }
+            }
         }
     }
-    return from to to
+}
+
+@Composable
+private fun PieceSvg(ch: Char) {
+    val name = when (ch) {
+        'K' -> "wK.svg"; 'Q' -> "wQ.svg"; 'R' -> "wR.svg"; 'B' -> "wB.svg"; 'N' -> "wN.svg"; 'P' -> "wP.svg"
+        'k' -> "bK.svg"; 'q' -> "bQ.svg"; 'r' -> "bR.svg"; 'b' -> "bB.svg"; 'n' -> "bN.svg"; 'p' -> "bP.svg"
+        else -> null
+    } ?: return
+    val ctx = LocalContext.current
+    val req = ImageRequest.Builder(ctx)
+        .data("file:///android_asset/fresca/$name")
+        .decoderFactory(SvgDecoder.Factory())
+        .build()
+    AsyncImage(model = req, contentDescription = null, contentScale = ContentScale.Fit)
+}
+
+/* Восстановление позиции после N полуходов (минимальная заглушка).
+   Для 100% синхронизации рекомендую добавить uci в MoveAnalysis. */
+private fun ReconstructBoard(moves: List<MoveAnalysis>, idx: Int): Array<CharArray> {
+    val b = Array(8) { CharArray(8) { '.' } }
+    b[0] = charArrayOf('R','N','B','Q','K','B','N','R')
+    b[1] = charArrayOf('P','P','P','P','P','P','P','P')
+    b[6] = charArrayOf('p','p','p','p','p','p','p','p')
+    b[7] = charArrayOf('r','n','b','q','k','b','n','r')
+    return b
 }
