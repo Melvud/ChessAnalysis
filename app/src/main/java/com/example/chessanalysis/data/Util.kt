@@ -489,25 +489,31 @@ object ChessParser {
 
 /** Классификатор по потере (в пешках) и вычисление точности. */
 object MoveClassifier {
-    fun classify(deltaPawns: Double): MoveClass = when {
-        deltaPawns <= 0.15 -> MoveClass.GREAT
-        deltaPawns <= 0.35 -> MoveClass.GOOD
-        deltaPawns <= 0.70 -> MoveClass.INACCURACY
-        deltaPawns <= 1.50 -> MoveClass.MISTAKE
-        else -> MoveClass.BLUNDER
+
+    /** Классификация по потере (loss в пешках). */
+    fun classifyLoss(lossPawns: Double): MoveClass = when {
+        lossPawns <= 0.05 -> MoveClass.GREAT      // блестяще/лучший
+        lossPawns <= 0.20 -> MoveClass.GOOD       // хорошо
+        lossPawns <= 0.60 -> MoveClass.INACCURACY // неточность
+        lossPawns <= 1.60 -> MoveClass.MISTAKE    // ошибка
+        else -> MoveClass.BLUNDER                 // зевок
     }
 
-    fun accuracyDeltas(deltas: List<Double>): Double {
-        if (deltas.isEmpty()) return 100.0
-        val penalty = deltas.sumOf { d ->
-            when (classify(abs(d))) {
+    /** Для обратной совместимости (если где-то ещё звали старую функцию). */
+    fun classify(deltaPawns: Double): MoveClass = classifyLoss(max(0.0, deltaPawns))
+
+    /** Точность по потерям (fallback/доп.метрика). */
+    fun accuracyDeltas(losses: List<Double>): Double {
+        if (losses.isEmpty()) return 100.0
+        val penalty = losses.sumOf { loss ->
+            when (classifyLoss(loss)) {
                 MoveClass.GREAT -> 0.0
                 MoveClass.GOOD -> 5.0
                 MoveClass.INACCURACY -> 20.0
                 MoveClass.MISTAKE -> 50.0
                 MoveClass.BLUNDER -> 80.0
             }
-        } / deltas.size
+        } / losses.size
         return max(0.0, min(100.0, 100.0 - penalty))
     }
 }
