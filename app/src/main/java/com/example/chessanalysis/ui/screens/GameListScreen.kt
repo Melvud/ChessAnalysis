@@ -1,5 +1,3 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-
 package com.example.chessanalysis.ui.screens
 
 import androidx.compose.foundation.clickable
@@ -11,20 +9,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.example.chessanalysis.data.model.ChessSite
-import com.example.chessanalysis.data.model.GameSummary
-import com.example.chessanalysis.data.repository.GameRepository
-import com.example.chessanalysis.viewmodel.GameListViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.chessanalysis.data.api.ApiClient
-
-private fun tag(pgn: String, key: String): String? {
-    // [Key "Value"]
-    val re = Regex("\\[$key\\s+\"([^\"]+)\"\\]")
-    return re.find(pgn)?.groupValues?.getOrNull(1)
-}
+import com.example.chessanalysis.data.model.ChessSite
+import com.example.chessanalysis.data.model.GameSummary
+import com.example.chessanalysis.data.repository.GameRepository
+import com.example.chessanalysis.viewmodel.GameListViewModel
 
 @Composable
 fun GameListScreen(
@@ -32,26 +24,39 @@ fun GameListScreen(
     username: String,
     onGameSelected: (GameSummary) -> Unit
 ) {
-    val vm: GameListViewModel = viewModel(factory = viewModelFactory {
+    // ViewModel with repository injection (includes chessApiService for analyzer)
+    val viewModel: GameListViewModel = viewModel(factory = viewModelFactory {
         initializer {
             GameListViewModel(
                 GameRepository(
                     ApiClient.lichessService,
                     ApiClient.chessComService,
-                    ApiClient.stockfishOnlineService
+                    ApiClient.stockfishOnlineService,
+                    ApiClient.chessApiService
                 )
             )
         }
     })
 
-    val games by vm.games.collectAsState()
-    val loading by vm.loading.collectAsState()
-    val error by vm.error.collectAsState()
+    val games by viewModel.games.collectAsState()
+    val loading by viewModel.loading.collectAsState()
+    val error by viewModel.error.collectAsState()
 
-    LaunchedEffect(site, username) { vm.loadGames(site, username) }
+    // Trigger load when inputs change
+    LaunchedEffect(site, username) {
+        viewModel.loadGames(site, username)
+    }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("Ваши последние партии") }) }) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize()) {
+    Scaffold(
+        topBar = {
+            TopAppBar(title = { Text("Ваши последние партии") })
+        }
+    ) { paddingValues ->
+        Box(
+            Modifier
+                .padding(paddingValues)
+                .fillMaxSize()
+        ) {
             when {
                 loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 error != null -> Text("Ошибка: $error", Modifier.align(Alignment.Center))
@@ -60,24 +65,17 @@ fun GameListScreen(
                     modifier = Modifier.fillMaxSize().padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(games) { g ->
-                        // Фолбэк для имён из PGN
-                        val whiteName = when {
-                            !g.white.isNullOrBlank() -> g.white
-                            else -> tag(g.pgn, "White") ?: "White"
-                        }
-                        val blackName = when {
-                            !g.black.isNullOrBlank() -> g.black
-                            else -> tag(g.pgn, "Black") ?: "Black"
-                        }
-
+                    items(games) { game ->
                         ElevatedCard(
-                            modifier = Modifier.fillMaxWidth().clickable { onGameSelected(g) }
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onGameSelected(game) }
                         ) {
                             Column(Modifier.padding(12.dp)) {
-                                Text("$whiteName — $blackName", style = MaterialTheme.typography.titleMedium)
-                                g.result?.let { Text("Результат: $it") }
-                                g.timeControl?.let { Text("Контроль: $it") }
+                                // Display players' names (fallback to PGN tags if missing)
+                                Text("${game.white} — ${game.black}", style = MaterialTheme.typography.titleMedium)
+                                game.result?.let { Text("Результат: $it", style = MaterialTheme.typography.bodyMedium) }
+                                game.timeControl?.let { Text("Контроль: $it", style = MaterialTheme.typography.bodyMedium) }
                             }
                         }
                     }

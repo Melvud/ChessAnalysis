@@ -6,7 +6,7 @@ import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 
 /**
- * Единая фабрика Retrofit-сервисов с тайм-аутами.
+ * Unified Retrofit service factory with timeouts.
  */
 object ApiClient {
 
@@ -18,7 +18,7 @@ object ApiClient {
             .build()
     }
 
-    /** Lichess */
+    /** Lichess API service */
     val lichessService: LichessService by lazy {
         Retrofit.Builder()
             .baseUrl("https://lichess.org/")
@@ -28,7 +28,7 @@ object ApiClient {
             .create(LichessService::class.java)
     }
 
-    /** Chess.com */
+    /** Chess.com API service */
     val chessComService: ChessComService by lazy {
         Retrofit.Builder()
             .baseUrl("https://api.chess.com/")
@@ -38,13 +38,23 @@ object ApiClient {
             .create(ChessComService::class.java)
     }
 
-    /** Stockfish Online (обрати внимание на www. и закрывающий слэш) */
+    /** Stockfish Online service (for single-position analysis) */
     val stockfishOnlineService: StockfishOnlineService by lazy {
         Retrofit.Builder()
-            .baseUrl("https://www.stockfish.online/") // важен закрывающий слэш
+            .baseUrl("https://www.stockfish.online/")  // note trailing slash
             .client(httpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(StockfishOnlineService::class.java)
+    }
+
+    /** Chess-API.com service (for parallel analysis) */
+    val chessApiService: ChessApiService by lazy {
+        Retrofit.Builder()
+            .baseUrl("https://chess-api.com/")
+            .client(httpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(ChessApiService::class.java)
     }
 }
