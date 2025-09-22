@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Chess Analysis</string>
+    <string name="login_title">Load Games</string>
+    <string name="nickname_label">Nickname</string>
+    <string name="load_games">Load Games</string>
+    <string name="source_lichess">Lichess</string>
+    <string name="source_chesscom">Chess.com</string>
+    <string name="analyze">Analyze</string>
+    <string name="view_report">View Report</string>
+    <string name="move_number">Move %1$s.</string>
+    <string name="prev">Prev</string>
+    <string name="next">Next</string>
+    <string name="accuracy">Accuracy</string>
+    <string name="game_result">Result</string>
+    <string name="opening">Opening</string>
+    <string name="move_quality">Move Quality</string>
+    <string name="best_move">Best</string>
+    <string name="excellent_move">Excellent</string>
+    <string name="good_move">Good</string>
+    <string name="theory_move">Theory</string>
+    <string name="inaccuracy_move">Inaccuracy</string>
+    <string name="mistake_move">Mistake</string>
+    <string name="blunder_move">Blunder</string>
+    <string name="missed_win_move">Missed Win</string>
+    <string name="ok_move">Okay</string>
+    <string name="analysis_title">Analysis Overview</string>
+    <string name="report_title">Game Report</string>
+    <string name="unknown">Unknown</string>
+</resources>

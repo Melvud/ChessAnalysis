@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Chessboard colors -->
+    <color name="chess_light">#EEEED2</color>
+    <color name="chess_dark">#769656</color>
+</resources>
