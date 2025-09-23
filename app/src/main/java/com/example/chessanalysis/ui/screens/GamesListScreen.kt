@@ -15,8 +15,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.chessanalysis.*
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,6 +39,7 @@ fun GamesListScreen(
     var progress by remember { mutableStateOf(0f) }      // 0f..1f
     var progressText by remember { mutableStateOf("Анализ...") }
 
+    // Подгрузка списка партий при входе на экран
     LaunchedEffect(provider, username) {
         if (items.isNotEmpty()) return@LaunchedEffect
         isLoading = true
@@ -100,12 +101,22 @@ fun GamesListScreen(
     ) { padding ->
         when {
             isLoading -> {
-                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .padding(padding),
+                    contentAlignment = Alignment.Center
+                ) {
                     CircularProgressIndicator()
                 }
             }
             items.isEmpty() -> {
-                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .padding(padding),
+                    contentAlignment = Alignment.Center
+                ) {
                     Text("Партий не найдено")
                 }
             }
@@ -140,8 +151,14 @@ fun GamesListScreen(
                                             progress = 0.08f
                                             progressText = "Анализ позиций…"
 
-                                            // Вызов твоего анализа (синхронный/долгий)
-                                            val report = reportFromPgn(header = g, openingFens = openingFens)
+                                            // Полный анализ партии -> формирование отчёта
+                                            // ВАЖНО: передаём именно текущий заголовок g
+                                            val report = buildReportFromPgn(
+                                                header = g,
+                                                openingFens = openingFens,
+                                                depth = 14,
+                                                throttleMs = 40L
+                                            )
 
                                             // Завершение: добиваем до 100% и закрываем оверлей
                                             progressText = "Готово"
