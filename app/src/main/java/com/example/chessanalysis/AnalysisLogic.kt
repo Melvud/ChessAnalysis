@@ -107,8 +107,15 @@ object LichessFormulas {
         if (rating == null) return base
         val expAcpl = expectedAcplFromElo(rating)
         val diff = gameAcpl - expAcpl
-        val factor = exp(-0.005 * diff)
-        return max(0, (rating * factor).roundToInt())
+        val factor = exp(-0.005 * abs(diff))
+        val adjustment = if (diff > 0) {
+            // Играл хуже ожидаемого
+            rating - (rating - base) * (1 - factor)
+        } else {
+            // Играл лучше ожидаемого
+            rating + (base - rating) * (1 - factor)
+        }
+        return max(0, adjustment.roundToInt())
     }
 }
 
@@ -118,7 +125,7 @@ object AnalysisLogic {
     data class EvalPoint(
         val cp: Double?,     // в пешках (со стороны белых)
         val mate: Int?,      // мат в N
-        val bestCp: Double?, // best для ПРЕД. позиции (если есть)
+        val bestCp: Double?, // оценка лучшего хода для ТЕКУЩЕЙ позиции
         val bestMate: Int?
     )
 
@@ -150,11 +157,14 @@ object AnalysisLogic {
             val epPrev = evals[i - 1]
             val epAfter = evals[i]
 
+            // Оценка сыгранного хода (позиция после)
             val playedCp = when {
                 epAfter.cp != null -> epAfter.cp * 100.0
                 epAfter.mate != null -> if (epAfter.mate > 0) 100000.0 else -100000.0
                 else -> null
             }
+
+            // Оценка лучшего хода из предыдущей позиции
             val bestCp = when {
                 epPrev.bestCp != null -> epPrev.bestCp * 100.0
                 epPrev.bestMate != null -> if (epPrev.bestMate > 0) 100000.0 else -100000.0
@@ -162,8 +172,9 @@ object AnalysisLogic {
             }
 
             val cpl: Double = if (bestCp != null && playedCp != null) {
+                // CPL с точки зрения ходящей стороны
                 val deltaForSide = if (isWhite) (bestCp - playedCp) else (playedCp - bestCp)
-                abs(deltaForSide)
+                max(0.0, deltaForSide)
             } else {
                 // fallback: аппроксимация через Win%
                 abs(before - after) * 10.0
@@ -264,6 +275,10 @@ object AnalysisLogic {
         val blackWeighted = LichessFormulas.weightedMean(blackIter, blackW)
         val blackHarm = LichessFormulas.harmonic(blackIter)
 
+        // Финальная accuracy = среднее из weighted и harmonic
+        val whiteAcc = (whiteWeighted + whiteHarm) / 2.0
+        val blackAcc = (blackWeighted + blackHarm) / 2.0
+
         val acc = AccuracySummary(
             whiteMovesAcc = AccByColor(whiteIter, whiteHarm, whiteWeighted),
             blackMovesAcc = AccByColor(blackIter, blackHarm, blackWeighted)
@@ -357,14 +372,15 @@ suspend fun reportFromPgn(
     }
 
     val positions = ArrayList<PositionEval>(allFens.size)
-    val evalPoints = MutableList(allFens.size) {
-        AnalysisLogic.EvalPoint(cp = null, mate = null, bestCp = null, bestMate = null)
-    }
+    val evalPoints = ArrayList<AnalysisLogic.EvalPoint>(allFens.size)
 
+    // Сначала анализируем все позиции и сохраняем результаты
+    val rawEvals = ArrayList<StockfishResponse>(allFens.size)
     for ((idx, fen) in allFens.withIndex()) {
         val r = EngineClient.analyzeFen(fen, depth = depth)
+        rawEvals.add(r)
 
-        val cpInt: Int? = r.evaluation?.let { (it * 100).roundToInt() } // пешки -> cP (для UI)
+        val cpInt: Int? = r.evaluation?.let { (it * 100).roundToInt() }
         val mate = r.mate
         val best = r.bestmove
         val pv = r.continuation?.trim()?.split(" ")?.filter { it.isNotBlank() } ?: emptyList()
@@ -382,15 +398,28 @@ suspend fun reportFromPgn(
             )
         )
 
-        val cpPawns = r.evaluation // в пешках (Double)
-        evalPoints[idx] = AnalysisLogic.EvalPoint(
-            cp = cpPawns,
-            mate = r.mate,
-            bestCp = cpPawns,   // используем как root best для предыдущего ply
-            bestMate = r.mate
-        )
-
         if (throttleMs > 0) delay(throttleMs)
+    }
+
+    // Теперь создаем evalPoints с правильными bestCp/bestMate
+    for (idx in allFens.indices) {
+        val currentEval = rawEvals[idx]
+
+        // Для текущей позиции берем оценку после хода
+        val cp = currentEval.evaluation
+        val mate = currentEval.mate
+
+        // bestCp и bestMate - это оценка лучшего хода из ЭТОЙ позиции
+        // Если есть bestmove, его оценка уже в cp/mate (т.к. движок дает оценку лучшего хода)
+        val bestCp = cp
+        val bestMate = mate
+
+        evalPoints += AnalysisLogic.EvalPoint(
+            cp = cp,
+            mate = mate,
+            bestCp = bestCp,
+            bestMate = bestMate
+        )
     }
 
     val moveReports = AnalysisLogic.classifyWithAltDiffs(

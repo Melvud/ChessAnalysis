@@ -103,19 +103,52 @@ fun ReportScreen(
 
             ClassificationTable(report)
 
+            // Карточка с перформансом обоих игроков
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2A27)),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
+                Column(
                     Modifier
                         .fillMaxWidth()
-                        .padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .padding(12.dp)
                 ) {
-                    StatBox(value = report.estimatedElo.whiteEst?.toString() ?: "—")
-                    StatBox(value = report.estimatedElo.blackEst?.toString() ?: "—", dark = true)
+                    Text(
+                        "Оценка перформанса",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                report.header.white ?: "White",
+                                color = Color.LightGray,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            StatBox(
+                                value = report.estimatedElo.whiteEst?.toString() ?: "—",
+                                dark = false
+                            )
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                report.header.black ?: "Black",
+                                color = Color.LightGray,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            StatBox(
+                                value = report.estimatedElo.blackEst?.toString() ?: "—",
+                                dark = true
+                            )
+                        }
+                    }
                 }
             }
 
@@ -136,9 +169,10 @@ private fun PlayerColumn(name: String, acc: AccByColor, acpl: Int, inverted: Boo
         Text(name, color = Color.LightGray)
         Spacer(Modifier.height(8.dp))
 
-        // Большое число — взвешенная точность (как в отчёте)
+        // Финальная точность = (weighted + harmonic) / 2
+        val finalAcc = (acc.weighted + acc.harmonic) / 2.0
         StatBox(
-            value = String.format("%.1f%%", acc.weighted),
+            value = String.format("%.1f%%", finalAcc),
             dark = inverted
         )
 
