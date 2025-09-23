@@ -16,6 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.chessanalysis.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -50,6 +51,39 @@ fun GamesListScreen(
             emptyList()
         }
         isLoading = false
+    }
+
+    // Автоинкремент прогресса, пока showAnalysis = true.
+    // Держим прогресс в коридоре [0.05 .. 0.92], чтобы оставлять «пространство» для завершения (1.0).
+    LaunchedEffect(showAnalysis) {
+        if (showAnalysis) {
+            // “раскачка”, чтобы избежать залипания на 0
+            if (progress < 0.05f) progress = 0.05f
+            var tick = 0
+            while (showAnalysis) {
+                delay(120)
+                tick++
+
+                // Плавный рост; чуть замедляем по мере приближения к верхней границе
+                val cap = 0.92f
+                val step = when {
+                    progress < 0.25f -> 0.015f
+                    progress < 0.5f  -> 0.010f
+                    progress < 0.75f -> 0.006f
+                    else             -> 0.003f
+                }
+                progress = (progress + step).coerceAtMost(cap)
+
+                // Подсказки статуса для UX
+                progressText = when {
+                    progress < 0.15f -> "Подготовка…"
+                    progress < 0.35f -> "Анализ позиций…"
+                    progress < 0.6f  -> "Классификация ходов…"
+                    progress < 0.8f  -> "Расчёт точности и ACPL…"
+                    else             -> "Формирование отчёта…"
+                }
+            }
+        }
     }
 
     Scaffold(
@@ -97,20 +131,24 @@ fun GamesListScreen(
 
                                         // Показать оверлей прогресса
                                         showAnalysis = true
-                                        progress = 0f
+                                        progress = 0.0f
                                         progressText = "Подготовка…"
 
                                         try {
-                                            // Используем новую логику из AnalysisLogic:
-                                            // один вызов собирает все позиции, метрики, классификацию и лог.
-                                            progress = 0.05f
+                                            // Небольшой стартовый апдейт,
+                                            // дальше LaunchedEffect(showAnalysis) начнёт плавный автораст
+                                            progress = 0.08f
                                             progressText = "Анализ позиций…"
+
+                                            // Вызов твоего анализа (синхронный/долгий)
                                             val report = reportFromPgn(header = g, openingFens = openingFens)
 
-                                            // Финализация
-                                            progress = 1f
+                                            // Завершение: добиваем до 100% и закрываем оверлей
                                             progressText = "Готово"
+                                            progress = 1f
+                                            delay(120) // короткая задержка, чтобы пользователь увидел 100%
                                             showAnalysis = false
+
                                             onOpenReport(report)
                                         } catch (t: Throwable) {
                                             showAnalysis = false
@@ -128,7 +166,6 @@ fun GamesListScreen(
                     }
 
                     if (showAnalysis) {
-                        // Оверлей прогресса поверх списка
                         Box(
                             Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
@@ -145,7 +182,10 @@ fun GamesListScreen(
                                 ) {
                                     Text("Анализ партии", style = MaterialTheme.typography.titleMedium)
                                     Spacer(Modifier.height(12.dp))
-                                    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                                    LinearProgressIndicator(
+                                        progress = { progress },
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
                                     Spacer(Modifier.height(8.dp))
                                     Text(progressText)
                                     Spacer(Modifier.height(6.dp))

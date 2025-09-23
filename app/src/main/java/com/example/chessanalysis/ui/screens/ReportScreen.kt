@@ -34,7 +34,7 @@ import kotlin.math.min
 fun ReportScreen(
     report: FullReport,
     onBack: () -> Unit,
-    onOpenBoard: () -> Unit
+    onOpenBoard: (() -> Unit)? = null
 ) {
     Scaffold(
         topBar = {
@@ -48,7 +48,6 @@ fun ReportScreen(
             )
         },
         bottomBar = {
-            // Фиксированная кнопка внизу экрана — всегда видна
             Surface(tonalElevation = 3.dp) {
                 Box(
                     Modifier
@@ -56,13 +55,13 @@ fun ReportScreen(
                         .padding(12.dp)
                 ) {
                     Button(
-                        onClick = onOpenBoard,
+                        onClick = { onOpenBoard?.invoke() ?: onBack() },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(56.dp),
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text("Смотреть отчёт")
+                        Text(if (onOpenBoard == null) "Вернуться" else "Смотреть отчёт")
                     }
                 }
             }
@@ -120,7 +119,6 @@ fun ReportScreen(
                 }
             }
 
-            // Дополнительный нижний отступ, чтобы контент не прятался под bottomBar
             Spacer(Modifier.height(80.dp))
         }
     }
@@ -138,13 +136,12 @@ private fun PlayerColumn(name: String, acc: AccByColor, acpl: Int, inverted: Boo
         Text(name, color = Color.LightGray)
         Spacer(Modifier.height(8.dp))
 
-        // Основное большое число — взвешенная точность
+        // Большое число — взвешенная точность (как в отчёте)
         StatBox(
             value = String.format("%.1f%%", acc.weighted),
             dark = inverted
         )
 
-        // Подпись мелким шрифтом: гармоническая + ACPL
         Spacer(Modifier.height(6.dp))
         Text(
             text = String.format("harm=%.1f%%  ACPL=%d", acc.harmonic, acpl),
@@ -185,7 +182,7 @@ private fun ClassificationTable(report: FullReport) {
         Triple("Теоретический ход", R.drawable.opening, MoveClass.OPENING),
         Triple("Неточность", R.drawable.inaccuracy, MoveClass.INACCURACY),
         Triple("Ошибка", R.drawable.mistake, MoveClass.MISTAKE),
-        Triple("Упущенная возмож...", R.drawable.forced, MoveClass.FORCED),
+        Triple("Упущенная возмож.", R.drawable.forced, MoveClass.FORCED),
         Triple("Зевок", R.drawable.blunder, MoveClass.BLUNDER)
     )
 

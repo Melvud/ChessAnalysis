@@ -1,6 +1,14 @@
 package com.example.chessanalysis
 
 import kotlin.math.max
+import kotlin.math.min
+import kotlinx.coroutines.delay
+import com.github.bhlangonijr.chesslib.Board
+import com.github.bhlangonijr.chesslib.Square
+import com.github.bhlangonijr.chesslib.move.Move
+import com.github.bhlangonijr.chesslib.move.MoveGenerator
+import com.github.bhlangonijr.chesslib.Piece
+import com.github.bhlangonijr.chesslib.Side
 
 object MoveClassifier {
 
@@ -16,16 +24,17 @@ object MoveClassifier {
         return if (whiteMove) max(0, b - a) else max(0, a - b)
     }
 
-    /** Онли-мув (вынужденный): если все альтернативы ведут к огромной потере. */
+    /** Онли-мув (вынужденный): если все альтернативы ведут к большой потере (Chesskit-подход). */
     private fun isForced(loss: Int, altDiff: Int?): Boolean {
         if (altDiff == null) return false
-        return loss < 30 && altDiff > 250 // только один безопасный вариант
+        // лучший ход почти без потерь, а следующая альтернатива сильно хуже
+        return loss < 30 && altDiff > 250
     }
 
-    /** Блестящий: жертва фигуры / серьёзная кратковременная потеря в cp, но так требует движок. */
+    /** Блестящий (splendid/brilliant): жертва/тактика при малой потере и большой разнице с альтернативами. */
     private fun isSplendid(loss: Int, altDiff: Int?, after: LineEval): Boolean {
         val pv = after.pv
-        val sac = pv.take(6).any { it.contains("x") } // есть взятие в начале варианта
+        val sac = pv.take(6).any { it.contains("x") } // грубый индикатор тактики/жертвы
         return (sac && loss in 80..200) || (altDiff != null && altDiff > 300 && loss < 60)
     }
 
@@ -39,33 +48,29 @@ object MoveClassifier {
 
     /**
      * Классифицирует список ходов.
-     * @param moves   список ходов с FEN до/после.
-     * @param positions  список оценённых позиций (та же длина + 1).
-     * @param winPercents win% для позиций.
-     * @param accPerMove точность по-ходно (для информации; можно пустой).
-     * @param openingFens база теоретических позиций.
+     * positions[i] — позиция ДО хода i, positions[i+1] — ПОСЛЕ.
+     *
+     * altDiffs — (опционально) разница «лучшая − вторая лучшая» в cP ДО хода.
+     * Если null — поведение как раньше (консервативно).
      */
     fun classifyAll(
         moves: List<PgnChess.MoveItem>,
         positions: List<PositionEval>,
         winPercents: List<Double>,
         accPerMove: List<Double>,
-        openingFens: Set<String> = emptySet()
+        openingFens: Set<String> = emptySet(),
+        altDiffs: List<Int?>? = null
     ): List<MoveReport> {
         val out = mutableListOf<MoveReport>()
 
-        fun idxToAltDiff(@Suppress("UNUSED_PARAMETER") idx: Int, @Suppress("UNUSED_PARAMETER") whiteMove: Boolean): Int? {
-            // Сейчас у движка берём одну PV. Если понадобится — можно расширить EngineClient до multiPv=2
-            // и здесь вычислять разницу «лучший vs второй лучший». Пока используем консервативную эвристику.
-            return 200
-        }
+        fun altAt(i: Int): Int? = altDiffs?.getOrNull(i)
 
         for (i in moves.indices) {
             val isWhite = i % 2 == 0
             val before = positions[i].lines.first()
             val after = positions[i + 1].lines.first()
             val loss = lossCp(before, after, isWhite)
-            val alt = idxToAltDiff(i, isWhite)
+            val alt = altAt(i)
 
             val klass: MoveClass
             val tags = mutableListOf<String>()
@@ -104,5 +109,115 @@ object MoveClassifier {
             )
         }
         return out
+    }
+
+    // -------------------- Дополнительно: расчёт altDiff «как в Chesskit» --------------------
+
+    /**
+     * Посчитать altDiff (best − secondBest) в cP ДО каждого хода.
+     * Делаем ограниченное число вызовов движка на глубине depth для альтернативных ходов,
+     * чтобы не упереться в лимиты.
+     */
+    suspend fun computeAltDiffs(
+        moves: List<PgnChess.MoveItem>,
+        positions: List<PositionEval>,
+        depth: Int = 10,
+        maxCandidates: Int = 4,
+        lossThresholdCp: Int = 30,
+        throttleMs: Long = 80L
+    ): List<Int?> {
+        if (moves.isEmpty()) return emptyList()
+        val result = MutableList<Int?>(moves.size) { null }
+
+        for (i in moves.indices) {
+            val isWhite = i % 2 == 0
+            val before = positions[i].lines.first()
+            val after = positions[i + 1].lines.first()
+            val loss = lossCp(before, after, isWhite)
+
+            if (loss >= lossThresholdCp) continue
+
+            val fenBefore = moves[i].beforeFen
+            val bestUci = before.best
+
+            val b = Board().apply { loadFromFen(fenBefore) }
+            val legal = MoveGenerator.generateLegalMoves(b).map { it.toUci() }
+
+            val alternatives = legal.filter { it != null && it != bestUci }.map { it!! }
+            if (alternatives.isEmpty()) continue
+
+            var bestCp = Int.MIN_VALUE
+            var secondCp = Int.MIN_VALUE
+
+            val bestCpFromRoot = before.cp
+            if (bestCpFromRoot != null) {
+                // оценка для стороны на ходу:
+                bestCp = if (isWhite) bestCpFromRoot else -bestCpFromRoot
+            }
+
+            val takeN = min(maxCandidates, alternatives.size)
+            for (altUci in alternatives.take(takeN)) {
+                val altFen = try {
+                    val bb = Board().apply { loadFromFen(fenBefore) }
+                    bb.doMove(uciToMove(bb, altUci))
+                    bb.fen
+                } catch (_: Exception) {
+                    continue
+                }
+
+                val e = EngineClient.analyzeFen(altFen, depth = depth)
+                val altCp = when {
+                    e.evaluation != null -> (e.evaluation * 100).toInt()
+                    e.mate != null -> if (e.mate > 0) 100000 else -100000
+                    else -> null
+                } ?: continue
+
+                val scoreForRootSide =
+                    if (b.sideToMove == Side.WHITE) altCp else -altCp
+
+                if (scoreForRootSide > bestCp) {
+                    secondCp = bestCp
+                    bestCp = scoreForRootSide
+                } else if (scoreForRootSide > secondCp) {
+                    secondCp = scoreForRootSide
+                }
+
+                delay(throttleMs)
+            }
+
+            if (bestCp != Int.MIN_VALUE && secondCp != Int.MIN_VALUE) {
+                result[i] = (bestCp - secondCp).coerceAtLeast(0)
+            }
+        }
+
+        return result
+    }
+
+    // --- Вспомогательное: UCI конверсия для chesslib ---
+
+    private fun Move.toUci(): String? {
+        val from = this.from?.value() ?: return null
+        val to = this.to?.value() ?: return null
+        val promo = when (this.promotion) {
+            Piece.WHITE_QUEEN, Piece.BLACK_QUEEN -> "q"
+            Piece.WHITE_ROOK, Piece.BLACK_ROOK -> "r"
+            Piece.WHITE_BISHOP, Piece.BLACK_BISHOP -> "b"
+            Piece.WHITE_KNIGHT, Piece.BLACK_KNIGHT -> "n"
+            else -> ""
+        }
+        return from.lowercase() + to.lowercase() + promo
+    }
+
+    private fun uciToMove(board: Board, uci: String): Move {
+        val from = Square.valueOf(uci.substring(0, 2).uppercase())
+        val to = Square.valueOf(uci.substring(2, 4).uppercase())
+        val promo = if (uci.length > 4) when (uci[4]) {
+            'q' -> if (board.sideToMove == Side.WHITE) Piece.WHITE_QUEEN else Piece.BLACK_QUEEN
+            'r' -> if (board.sideToMove == Side.WHITE) Piece.WHITE_ROOK else Piece.BLACK_ROOK
+            'b' -> if (board.sideToMove == Side.WHITE) Piece.WHITE_BISHOP else Piece.BLACK_BISHOP
+            'n' -> if (board.sideToMove == Side.WHITE) Piece.WHITE_KNIGHT else Piece.BLACK_KNIGHT
+            else -> null
+        } else null
+        return Move(from, to, promo)
     }
 }

@@ -16,8 +16,7 @@ import coil.decode.SvgDecoder
 import coil.request.ImageRequest
 
 /**
- * Отрисовка доски по FEN. Фигуры — SVG из assets/fresca (твои ассеты).
- * Примеры путей: file:///android_asset/fresca/wP.svg, bK.svg и т.п.
+ * Отрисовка доски по FEN. Фигуры — SVG из assets/fresca.
  */
 @Composable
 fun FenBoard(
@@ -26,8 +25,6 @@ fun FenBoard(
 ) {
     val context = LocalContext.current
 
-    // Явно настраиваем ImageLoader с SvgDecoder (без этого Android пытается
-    // дать аппаратный декодер и сыпет "Failed to create image decoder: unimplemented").
     val svgLoader = remember(context) {
         ImageLoader.Builder(context)
             .components { add(SvgDecoder.Factory()) }
@@ -43,7 +40,8 @@ fun FenBoard(
                 var file = 0
                 @Composable
                 fun square(mod: Modifier, piece: Char?) {
-                    val isDark = (rIndex + file) % 2 == 1
+                    // a8 — тёмное. Мы идём сверху вниз (8->1), слева направо (a->h).
+                    val isDark = ((rIndex + file) % 2 == 0)
                     Box(
                         modifier = mod
                             .weight(1f)
