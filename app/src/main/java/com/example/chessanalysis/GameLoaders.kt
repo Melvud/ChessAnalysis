@@ -59,7 +59,6 @@ object GameLoaders {
                 if (!resp.isSuccessful) return@use emptyList<GameHeader>()
                 val ctypeHeader = resp.header("Content-Type").orEmpty()
                 val media = ctypeHeader.toMediaTypeOrNull()
-                val ctype = media?.type.orEmpty()
 
                 val body = resp.body?.string().orEmpty()
                 if (body.isBlank()) return@use emptyList<GameHeader>()
