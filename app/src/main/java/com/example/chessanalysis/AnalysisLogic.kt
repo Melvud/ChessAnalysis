@@ -5,83 +5,87 @@ import kotlin.math.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
-import kotlin.math.roundToInt
+
 private const val TAG = "AnalysisDebug"
 private const val DEBUG_ANALYSIS = true
 
-/** Debug helper: logs to Logcat and also appends to the on-screen log (if provided). */
 private fun dbg(sink: MutableList<String>?, msg: String) {
     if (DEBUG_ANALYSIS) Log.d(TAG, msg)
     sink?.add(msg)
 }
 
-/** Mathematical helpers + mappings kept close to lichess conventions. */
 object LichessFormulas {
 
-    // --- Win% from CP (relative to mover) ---
-    // Logistic mapping parameters (close to lichess-like calibration)
-    private const val K_CP = 0.00368208  // slope
+    // Точная формула Lichess для Win% из сентипешек
     fun cpToWinPercent(cp: Double): Double {
-        val p = 1.0 / (1.0 + exp(-K_CP * cp))
-        return (p * 100.0).coerceIn(0.0, 100.0)
+        // Официальная формула Lichess: 50 + 50 * (2 / (1 + exp(-0.00368208 * cp)) - 1)
+        val k = -0.00368208
+        val p = 50 + 50 * (2 / (1 + exp(k * cp)) - 1)
+        return p.coerceIn(0.0, 100.0)
     }
 
-    // --- Win% from mate (relative to mover) ---
+    // Win% из мата
     fun mateToWinPercent(mateForWhite: Int, isForMoverWhite: Boolean): Double {
-        // Engine mate sign is relative to White. Re-sign for mover POV.
         val signed = if (isForMoverWhite) mateForWhite else -mateForWhite
         return if (signed > 0) 100.0 else 0.0
     }
 
-    /** Single-move accuracy function from loss in Win% (lichess fit). */
+    // Формула точности хода от Lichess
     fun moveAccuracyFromLoss(loss: Double): Double {
-        val nonNeg = max(0.0, loss)
-        val raw = 103.1668100711649 * exp(-0.04354415386753951 * nonNeg) - 3.166924740191411
-        return (raw + 1.0).coerceIn(0.0, 100.0)
+        val accuracy = 103.1668 * exp(-0.04354 * loss) - 3.1669
+        return accuracy.coerceIn(0.0, 100.0)
     }
 
-    /** Dynamic window for volatility based on plies. */
-    fun windowSizeForPlies(plies: Int): Int = (plies / 8.0).roundToInt().coerceIn(4, 14)
+    // Размер окна волатильности
+    fun windowSizeForPlies(plies: Int): Int {
+        return max(6, plies / 8)
+    }
 
+    // Округление волатильности к шагу
     fun ceilToStep(value: Double, step: Double, min: Double, max: Double): Double {
         val v = ceil(value / step) * step
         return v.coerceIn(min, max)
     }
 
-    /** Volatility weights per ply, computed on Win%(mover), then discretized to step=0.5 in [1..12]. */
+    // Расчет весов волатильности для всех ходов
     fun volatilityWeightsAll(
         winPercents: List<Double>,
         window: Int,
         sink: MutableList<String>? = null
     ): List<Double> {
         if (winPercents.size < 2) return emptyList()
-        dbg(sink, "— Volatility weights: window=$window, points=${winPercents.size}")
-        val out = MutableList(winPercents.size - 1) { 1.0 }
-        val n = winPercents.size
-        val w = window.coerceAtLeast(2)
 
-        for (i in 1 until n) {
-            // Early indices: enforce minimal weight = 1 to avoid overpull.
-            if (i < w) {
-                out[i - 1] = 1.0
-                dbg(sink, "   σ[$i] early -> weight=1.0")
+        dbg(sink, "— Volatility weights: window=$window, points=${winPercents.size}")
+        val weights = MutableList(winPercents.size - 1) { 1.0 }
+
+        for (i in 1 until winPercents.size) {
+            val startIdx = max(0, i - window / 2)
+            val endIdx = min(winPercents.size - 1, i + window / 2)
+
+            if (endIdx - startIdx < 2) {
+                weights[i - 1] = 1.0
                 continue
             }
-            val start = max(0, i - w)
-            val end = min(n - 1, i + w / 2)
-            val seg = winPercents.subList(start, end + 1)
-            val mean = seg.average()
-            val varSum = seg.fold(0.0) { acc, v -> acc + (v - mean) * (v - mean) }
-            val std = if (seg.size > 1) sqrt(varSum / (seg.size - 1)) else 0.0
-            val weight = ceilToStep(std, 0.5, 1.0, 12.0)
-            out[i - 1] = weight
-            dbg(sink, "   σ[$i] for window [$start..$end] mean=%.2f std=%.3f -> weight=%.1f"
-                .format(mean, std, weight))
+
+            // Вычисляем стандартное отклонение в окне
+            val windowValues = winPercents.subList(startIdx, endIdx + 1)
+            val mean = windowValues.average()
+            val variance = windowValues.fold(0.0) { acc, v ->
+                acc + (v - mean) * (v - mean)
+            } / windowValues.size
+            val std = sqrt(variance)
+
+            // Преобразуем в вес (как в Lichess)
+            val weight = ceilToStep(std / 10.0, 0.5, 0.5, 12.0)
+            weights[i - 1] = weight
+
+            dbg(sink, "   σ[$i] std=%.3f -> weight=%.1f".format(std, weight))
         }
-        return out
+
+        return weights
     }
 
-    /** Harmonic mean on [0..100] values (ignoring zeros). */
+    // Гармоническое среднее
     fun harmonic(xs: List<Double>): Double {
         val filtered = xs.filter { it > 0.0 }
         if (filtered.isEmpty()) return 0.0
@@ -89,64 +93,72 @@ object LichessFormulas {
         return (filtered.size / inv).coerceIn(0.0, 100.0)
     }
 
-    /** Weighted mean with clamp to [0..100]; if total weight is 0, fallback to simple average. */
+    // Взвешенное среднее
     fun weightedMean(values: List<Double>, weights: List<Double>): Double {
         if (values.isEmpty()) return 0.0
-        var ws = 0.0
-        var s = 0.0
+        var weightSum = 0.0
+        var sum = 0.0
         val n = min(values.size, weights.size)
+
         for (i in 0 until n) {
-            val w = max(0.0, weights[i])
-            ws += w
-            s += values[i] * w
+            val w = 1.0 / max(0.5, weights[i]) // Инвертируем вес (меньший вес = больше важности)
+            weightSum += w
+            sum += values[i] * w
         }
-        val mean = if (ws > 0) s / ws else values.average()
-        return mean.coerceIn(0.0, 100.0)
+
+        return if (weightSum > 0) (sum / weightSum).coerceIn(0.0, 100.0) else values.average()
     }
 
-    // --- Performance (Estimated Elo) from ACPL: simple chesskit-like calibration ---
-    fun eloFromAcpl(acpl: Double): Int = (3100.0 * exp(-0.01 * acpl)).roundToInt()
-    fun expectedAcplFromElo(elo: Int): Double =
-        (-100.0 * ln((elo.toDouble() / 3100.0).coerceIn(1e-9, 1.0))).coerceIn(0.0, 1000.0)
+    // Оценка перфоманса из ACPL
+    fun eloFromAcpl(acpl: Double): Int {
+        // Формула приближения от Lichess
+        return (-3.68 * acpl * acpl + 2764).roundToInt().coerceIn(400, 3000)
+    }
 
-    /** Anchor performance to known rating; clip ACPL into a sane band first. */
+    fun expectedAcplFromElo(elo: Int): Double {
+        // Обратная формула
+        val acpl = sqrt(max(0.0, (2764 - elo) / 3.68))
+        return acpl.coerceIn(0.0, 350.0)
+    }
+
     fun anchoredEloFromGameAcpl(gameAcpl: Double, rating: Int?, sink: MutableList<String>? = null): Int {
-        val clipped = gameAcpl.coerceIn(4.0, 350.0)
+        val clipped = gameAcpl.coerceIn(0.0, 200.0)
         val base = eloFromAcpl(clipped)
-        if (rating == null) {
-            dbg(sink, "— Performance no-anchor: ACPL=%.1f (clip=%.1f) -> %d".format(gameAcpl, clipped, base))
+
+        if (rating == null || rating == 0) {
+            dbg(sink, "— Performance no-anchor: ACPL=%.1f -> %d".format(clipped, base))
             return base
         }
-        val expAcpl = expectedAcplFromElo(rating)
-        val diff = clipped - expAcpl
-        val factor = exp(-0.005 * abs(diff))
-        val adjustment = if (diff > 0) {
-            rating - (rating - base) * (1 - factor)
-        } else {
-            rating + (base - rating) * (1 - factor)
-        }
-        val out = max(0, adjustment.roundToInt())
-        dbg(sink, "— Performance anchored: rating=$rating, expACPL=%.1f, gameACPL=%.1f (clip=%.1f), base=%d, out=%d"
-            .format(expAcpl, gameAcpl, clipped, base, out))
-        return out
+
+        // Мягкое привязывание к известному рейтингу
+        val weight = 0.7 // Вес оценки движка
+        val anchored = (base * weight + rating * (1 - weight)).roundToInt()
+
+        dbg(sink, "— Performance anchored: rating=$rating, ACPL=%.1f, base=%d, anchored=%d"
+            .format(clipped, base, anchored))
+
+        return anchored.coerceIn(max(400, rating - 500), min(3000, rating + 500))
     }
 }
 
+// Находим первый мат в позициях
 private fun firstMateIndex(positions: List<PositionEval>): Int {
     val idx = positions.indexOfFirst { it.lines.firstOrNull()?.mate != null }
     return if (idx >= 0) idx else positions.size - 1
 }
 
-/** Win% for the mover (side to move) at each ply. */
+// Расчет Win% для ходящего в каждой позиции
 private fun winPercentsForMover(positions: List<PositionEval>, sink: MutableList<String>?): List<Double> {
     val out = ArrayList<Double>(positions.size)
     dbg(sink, "== Win%% for mover ==")
+
     positions.forEachIndexed { i, pos ->
         val fen = pos.fen
         val moverWhite = fen.contains(" w ")
         val line = pos.lines.firstOrNull()
         val cp = line?.cp
         val mate = line?.mate
+
         val winForMover = when {
             cp != null -> {
                 val cpForMover = if (moverWhite) cp.toDouble() else -cp.toDouble()
@@ -155,47 +167,60 @@ private fun winPercentsForMover(positions: List<PositionEval>, sink: MutableList
             mate != null -> LichessFormulas.mateToWinPercent(mate, moverWhite)
             else -> 50.0
         }
-        dbg(sink, "pos#%02d [%s] mover=%s, cp=%s, mate=%s -> Win%%(mover)=%.2f"
-            .format(i, fen, if (moverWhite) "W" else "B", cp?.toString() ?: "-", mate?.toString() ?: "-", winForMover))
+
+        dbg(sink, "pos#%02d [mover=%s] cp=%s mate=%s -> Win%%=%.2f"
+            .format(i, if (moverWhite) "W" else "B", cp?.toString() ?: "-", mate?.toString() ?: "-", winForMover))
+
         out += winForMover
     }
+
     return out
 }
 
-/** CPL per ply, capped to 500 to stabilize ACPL. */
+// Расчет CPL по ходам
 private fun cplPerMove(positions: List<PositionEval>, sink: MutableList<String>?): List<Double> {
     if (positions.size < 2) return emptyList()
+
     val last = firstMateIndex(positions)
-    val out = ArrayList<Double>(min(positions.size - 1, last))
-    val CPL_CAP = 500.0
+    val out = ArrayList<Double>()
+    val CPL_CAP = 300.0
+
     dbg(sink, "== CPL per move ==")
+
     for (i in 0 until min(positions.size - 1, last)) {
         val isWhite = positions[i].fen.contains(" w ")
         val before = positions[i].lines.firstOrNull()
         val after = positions[i + 1].lines.firstOrNull()
+
         val bestCp = when {
-            before?.cp != null -> before.cp!!.toDouble()
-            before?.mate != null -> if (before.mate!! > 0) 1000.0 else -1000.0
+            before?.cp != null -> before.cp.toDouble()
+            before?.mate != null -> if (before.mate > 0) 1000.0 else -1000.0
             else -> null
         }
+
         val playedCp = when {
-            after?.cp != null -> after.cp!!.toDouble()
-            after?.mate != null -> if (after.mate!! > 0) 1000.0 else -1000.0
+            after?.cp != null -> after.cp.toDouble()
+            after?.mate != null -> if (after.mate > 0) 1000.0 else -1000.0
             else -> null
         }
+
         val cpl = if (bestCp != null && playedCp != null) {
-            val deltaForMover = if (isWhite) (bestCp - playedCp) else (playedCp - bestCp)
+            val deltaForWhite = bestCp - playedCp
+            val deltaForMover = if (isWhite) deltaForWhite else -deltaForWhite
             max(0.0, deltaForMover).coerceAtMost(CPL_CAP)
         } else 0.0
+
         dbg(sink, "ply#%02d mover=%s bestCp=%s playedCp=%s -> CPL=%.1f"
             .format(i + 1, if (isWhite) "W" else "B",
-                bestCp?.let { "%.0f".format(it) } ?: "-", playedCp?.let { "%.0f".format(it) } ?: "-", cpl))
+                bestCp?.toString() ?: "-", playedCp?.toString() ?: "-", cpl))
+
         out += cpl
     }
+
     return out
 }
 
-/** Per-move accuracy + weights + flags (isWhite). Cuts everything after first mate. */
+// Расчет точности по ходам с весами
 private fun perMoveAccAndWeights(
     positions: List<PositionEval>,
     sink: MutableList<String>?
@@ -205,31 +230,34 @@ private fun perMoveAccAndWeights(
     val allWin = winPercentsForMover(positions, sink)
     val winForMover = allWin.subList(0, min(allWin.size, cutIdx + 1))
     val plies = winForMover.size - 1
+
     if (plies <= 0) return Triple(emptyList(), emptyList(), emptyList())
 
-    dbg(sink, "== Per-move accuracy (lichess) ==")
-    val perMoveAcc = ArrayList<Double>(plies)
-    val isWhiteFlags = ArrayList<Boolean>(plies)
+    dbg(sink, "== Per-move accuracy ==")
+    val perMoveAcc = ArrayList<Double>()
+    val isWhiteFlags = ArrayList<Boolean>()
+
     for (i in 0 until plies) {
         val isWhite = positions[i].fen.contains(" w ")
-        val before = winForMover[i]                  // Win% для текущего ходящего
-        val afterSame = 100.0 - winForMover[i + 1]   // Win% того же игрока ПОСЛЕ хода
-        val loss = max(0.0, before - afterSame)      // одинаково для белых и чёрных
+        val before = winForMover[i]
+        val afterSame = 100.0 - winForMover[i + 1]
+        val loss = max(0.0, before - afterSame)
         val acc = LichessFormulas.moveAccuracyFromLoss(loss)
-        dbg(sink, "ply#%02d mover=%s: WinBefore=%.2f WinAfterSame=%.2f loss=%.2f -> acc=%.2f"
-            .format(i + 1, if (isWhite) "W" else "B", before, afterSame, loss, acc))
+
         perMoveAcc += acc
         isWhiteFlags += isWhite
+
         dbg(sink, "ply#%02d mover=%s: WinBefore=%.2f WinAfter=%.2f loss=%.2f -> acc=%.2f"
             .format(i + 1, if (isWhite) "W" else "B", before, afterSame, loss, acc))
     }
 
     val window = LichessFormulas.windowSizeForPlies(plies)
     val weightsAll = LichessFormulas.volatilityWeightsAll(winForMover, window, sink)
+
     return Triple(perMoveAcc, weightsAll, isWhiteFlags)
 }
 
-/** Summarize accuracy/ACPL/performance by color with volatility weights aligned to move indices. */
+// Итоговая статистика
 fun summarize(
     positions: List<PositionEval>,
     whiteRating: Int?,
@@ -239,9 +267,10 @@ fun summarize(
 
     val (perMoveAccAll, weightsAll, isWhiteFlags) = perMoveAccAndWeights(positions, sink)
 
-    // Split by color (align indices for weights)
+    // Разделяем по цветам
     val whiteIdx = isWhiteFlags.indices.filter { isWhiteFlags[it] }
     val blackIdx = isWhiteFlags.indices.filter { !isWhiteFlags[it] }
+
     val whiteAcc = whiteIdx.map { perMoveAccAll[it] }
     val blackAcc = blackIdx.map { perMoveAccAll[it] }
     val whiteW = whiteIdx.map { weightsAll[it] }
@@ -252,10 +281,8 @@ fun summarize(
     val whiteHarm = LichessFormulas.harmonic(whiteAcc)
     val blackHarm = LichessFormulas.harmonic(blackAcc)
 
-    dbg(sink, "White itera=[${whiteAcc.joinToString { "%.2f".format(it) }}]")
-    dbg(sink, "Black itera=[${blackAcc.joinToString { "%.2f".format(it) }}]")
-    dbg(sink, "White weighted=%.2f, harmonic=%.2f".format(whiteWeighted, whiteHarm))
-    dbg(sink, "Black weighted=%.2f, harmonic=%.2f".format(blackWeighted, blackHarm))
+    dbg(sink, "White: weighted=%.2f harmonic=%.2f".format(whiteWeighted, whiteHarm))
+    dbg(sink, "Black: weighted=%.2f harmonic=%.2f".format(blackWeighted, blackHarm))
 
     val accSummary = AccuracySummary(
         whiteMovesAcc = AccByColor(itera = whiteAcc, weighted = whiteWeighted, harmonic = whiteHarm),
@@ -264,24 +291,27 @@ fun summarize(
 
     // ACPL
     val cpl = cplPerMove(positions, sink)
-    val whiteAcplD = whiteIdx.map { cpl.getOrElse(it) { 0.0 } }.let { if (it.isEmpty()) 0.0 else it.average() }
-    val blackAcplD = blackIdx.map { cpl.getOrElse(it) { 0.0 } }.let { if (it.isEmpty()) 0.0 else it.average() }
+    val whiteAcpl = if (whiteIdx.isEmpty()) 0.0 else
+        whiteIdx.mapNotNull { cpl.getOrNull(it) }.average()
+    val blackAcpl = if (blackIdx.isEmpty()) 0.0 else
+        blackIdx.mapNotNull { cpl.getOrNull(it) }.average()
 
-    dbg(sink, "== ACPL ==")
-    dbg(sink, "White CPLs=[${whiteIdx.joinToString { "%.1f".format(cpl.getOrElse(it) { 0.0 }) }}] -> ACPL=%.1f".format(whiteAcplD))
-    dbg(sink, "Black CPLs=[${blackIdx.joinToString { "%.1f".format(cpl.getOrElse(it) { 0.0 }) }}] -> ACPL=%.1f".format(blackAcplD))
-    val acplPair = Acpl(white = whiteAcplD.roundToInt(), black = blackAcplD.roundToInt())
+    dbg(sink, "ACPL: White=%.1f Black=%.1f".format(whiteAcpl, blackAcpl))
 
-    // Performance
-    dbg(sink, "== Performance (anchored) ==")
-    val perfWhite = LichessFormulas.anchoredEloFromGameAcpl(whiteAcplD, whiteRating, sink)
-    val perfBlack = LichessFormulas.anchoredEloFromGameAcpl(blackAcplD, blackRating, sink)
+    val acplPair = Acpl(white = whiteAcpl.roundToInt(), black = blackAcpl.roundToInt())
+
+    // Performance (с учетом рейтингов если есть)
+    val perfWhite = if (whiteAcpl > 0)
+        LichessFormulas.anchoredEloFromGameAcpl(whiteAcpl, whiteRating, sink) else null
+    val perfBlack = if (blackAcpl > 0)
+        LichessFormulas.anchoredEloFromGameAcpl(blackAcpl, blackRating, sink) else null
+
     val perf = EstimatedElo(perfWhite, perfBlack)
 
     return Triple(accSummary, acplPair, perf)
 }
 
-/** Bridge to the classifier (with cut at first mate already applied inside helper paths). */
+// Классификация с altDiffs
 suspend fun classifyWithAltDiffs(
     moves: List<PgnChess.MoveItem>,
     positions: List<PositionEval>,
@@ -297,6 +327,7 @@ suspend fun classifyWithAltDiffs(
     val positionsCapped = positions.subList(0, min(positions.size, cutIdx + 1))
     val movesToUse = min(moves.size, max(0, positionsCapped.size - 1))
     val movesCapped = moves.subList(0, movesToUse)
+
     val (perMoveAcc, _, _) = perMoveAccAndWeights(positionsCapped, sink)
     val winPercentsForGraph = winPercentsForMover(positionsCapped, sink)
 
@@ -321,6 +352,7 @@ suspend fun classifyWithAltDiffs(
     )
 }
 
+// Полный анализ PGN
 suspend fun buildReportFromPgn(
     header: GameHeader,
     openingFens: Set<String> = emptySet(),
@@ -347,11 +379,11 @@ suspend fun buildReportFromPgn(
     val positions = ArrayList<PositionEval>(allFens.size)
     for ((idx, fen) in allFens.withIndex()) {
         val r = EngineClient.analyzeFen(fen, depth = depth)
-        val cpCentipawns: Int? = r.evaluation?.let { (it * 100).roundToInt() } // eval «за белых»
-        val mateForWhite: Int?  = r.mate
+        val cpCentipawns: Int? = r.evaluation?.let { (it * 100).roundToInt() }
+        val mateForWhite: Int? = r.mate
         val pv = r.continuation?.trim()?.split(" ")?.filter { it.isNotBlank() } ?: emptyList()
 
-        dbg(logLines, "SF#${idx} FEN=$fen eval=${r.evaluation} (cp=${cpCentipawns}) mate=${r.mate} best=${r.bestmove} pv=${pv.take(10)}")
+        dbg(logLines, "SF#${idx} cp=${cpCentipawns} mate=${r.mate} best=${r.bestmove}")
 
         positions += PositionEval(
             fen = fen,
@@ -362,7 +394,7 @@ suspend fun buildReportFromPgn(
         if (throttleMs > 0) delay(throttleMs)
     }
 
-    // Классификация + altDiffs (учитывает отсечку на мате внутри)
+    // Классификация ходов
     val moveReports = classifyWithAltDiffs(
         moves = moves,
         positions = positions,
@@ -374,7 +406,7 @@ suspend fun buildReportFromPgn(
         sink = logLines
     )
 
-    // Итоговые метрики (отсечка на мате, корректные веса/accuracy/ACPL)
+    // Итоговые метрики
     val (acc, acpl, perf) = summarize(
         positions = positions,
         whiteRating = header.whiteElo,
@@ -393,20 +425,9 @@ suspend fun buildReportFromPgn(
         header = header,
         positions = positions,
         moves = moveReports,
-        accuracy = AccuracySummary(
-            whiteMovesAcc = AccByColor(
-                itera = acc.whiteMovesAcc.itera,
-                harmonic = acc.whiteMovesAcc.harmonic,
-                weighted = acc.whiteMovesAcc.weighted
-            ),
-            blackMovesAcc = AccByColor(
-                itera = acc.blackMovesAcc.itera,
-                harmonic = acc.blackMovesAcc.harmonic,
-                weighted = acc.blackMovesAcc.weighted
-            )
-        ),
-        acpl = Acpl(acpl.white, acpl.black),
-        estimatedElo = EstimatedElo(perf.whiteEst, perf.blackEst),
+        accuracy = acc,
+        acpl = acpl,
+        estimatedElo = perf,
         analysisLog = logLines.toList()
     )
 }
