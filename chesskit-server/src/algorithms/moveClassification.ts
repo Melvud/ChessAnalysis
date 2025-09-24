@@ -112,7 +112,7 @@ export const getMovesClassification = (
     const lastPositionWinPercentage = positionsWinPercentage[index - 1];
     const positionWinPercentage = positionsWinPercentage[index];
     // index = позиция после хода; index % 2 === 1 означает ход белых
-    const isWhiteMove = index % 2 === 0;
+    const isWhiteMove = index % 2 === 1;
 
     // Проверка на Splendid (жертва фигуры с компенсацией)
     if (

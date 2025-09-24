@@ -30,9 +30,9 @@ export default async function gameByFensRoutes(
     }
 
     const progressId = q.progressId || randomUUID();
-    const depth = q.depth ? Number(q.depth) : 14;
+    const depth = q.depth ? Number(q.depth) : 15;
     const movetime = q.movetime ? Number(q.movetime) : undefined;
-    const multiPv = q.multiPv ? Number(q.multiPv) : 1;
+    const multiPv = q.multiPv ? Number(q.multiPv) : 3;
 
     try {
       // Запускаем анализ и ждем результат

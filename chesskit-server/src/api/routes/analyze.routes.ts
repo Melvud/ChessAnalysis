@@ -19,8 +19,8 @@ type EvalResponse = {
 // Локальный вызов Stockfish (uci) с MultiPV
 async function evalFenWithStockfish(
   fen: string,
-  depth = 14,
-  multiPv = 1,
+  depth = 15,
+  multiPv = 3,
   enginePath = process.env.STOCKFISH_PATH || "stockfish"
 ): Promise<{ lines: { multipv: number; cp?: number; mate?: number; pv: string[] }[]; bestMove?: string | null }> {
   return new Promise((resolve, reject) => {
@@ -87,8 +87,8 @@ export default async function routes(f: FastifyInstance) {
   f.post<{ Body: EvalRequest }>("/api/v1/evaluate/position", async (request, reply) => {
     const body = request.body || ({} as EvalRequest);
     const fen = body.fen;
-    const depth = typeof body.depth === "number" ? body.depth : 14;
-    const multiPv = typeof body.multiPv === "number" ? body.multiPv : 1;
+    const depth = typeof body.depth === "number" ? body.depth : 15;
+    const multiPv = typeof body.multiPv === "number" ? body.multiPv : 3;
 
     if (!fen) {
       return reply.code(400).send({ error: "bad_request", message: "fen is required" });

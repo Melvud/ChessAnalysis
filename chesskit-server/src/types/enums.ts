@@ -1,5 +1,5 @@
 // chesskit-server/src/core/types.ts
-export enum MoveClass {
+export enum MoveClassification {
   OPENING = 'OPENING',
   FORCED = 'FORCED',
   BEST = 'BEST',
@@ -36,7 +36,7 @@ export type MoveReport = {
   winBefore: number;  // 0..100
   winAfter: number;   // 0..100
   accuracy: number;   // 0..100
-  classification: MoveClass;
+  classification: MoveClassification;
   tags: string[];
 };
 

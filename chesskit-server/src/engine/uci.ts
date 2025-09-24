@@ -77,6 +77,10 @@ export class UciEngine {
       }
     | undefined;
 
+  // сохраняем последнее установленное MultiPV,
+  // чтобы уметь корректно “подменять” его на время go(...)
+  private currentMultiPv?: number;
+
   constructor(
     private readonly path: string,
     private readonly options: UciOptions = {},
@@ -148,6 +152,9 @@ export class UciEngine {
     // Применяем все опции
     for (const [name, value] of Object.entries(normalized)) {
       this.send(buildSetOption(name, value));
+      if (name === "MultiPV") {
+        this.currentMultiPv = Number(value);
+      }
     }
 
     await this.isReady();
@@ -195,36 +202,56 @@ export class UciEngine {
       throw new Error("go is already running");
     }
 
-    const cmd: string[] = ["go"];
+    // --- ВАЖНО: MultiPV — это setoption, а не параметр go ---
+    let restoreMultiPv: number | undefined;
+    if (params.multiPv !== undefined) {
+      const requested = Number(params.multiPv);
+      // Если требуется другой MultiPV — временно подменим
+      if (this.currentMultiPv !== requested) {
+        restoreMultiPv = this.currentMultiPv;
+        this.send(buildSetOption("MultiPV", requested));
+        this.currentMultiPv = requested;
+        await this.isReady();
+      }
+    }
 
-    if (params.depth !== undefined) cmd.push("depth", String(params.depth));
+    const cmd: string[] = ["go"];
+    if (params.depth !== undefined)    cmd.push("depth",    String(params.depth));
     if (params.movetime !== undefined) cmd.push("movetime", String(params.movetime));
-    if (params.nodes !== undefined) cmd.push("nodes", String(params.nodes));
-    if (params.mate !== undefined) cmd.push("mate", String(params.mate));
-    if (params.multiPv !== undefined) cmd.push("multiPv", String(params.multiPv));
+    if (params.nodes !== undefined)    cmd.push("nodes",    String(params.nodes));
+    if (params.mate !== undefined)     cmd.push("mate",     String(params.mate));
+    // НЕ добавляем никакого "multiPv" в команду go — UCI такого параметра не имеет.
 
     const goTimeout =
       params.timeoutMs ??
       (params.movetime ? Math.max(params.movetime * 2, 5_000) : DEFAULT_GO_TIMEOUT);
 
-    const result = await new Promise<GoResult>((resolve, reject) => {
-      const state = {
-        resolve,
-        reject,
-        lines: [] as string[],
-        timeout: setTimeout(() => {
-          // Страховочный таймаут: останавливаем поиск и завершаем чем есть
-          try {
-            this.send("stop");
-          } catch { /* noop */ }
-          reject(new Error("go timeout"));
-        }, goTimeout),
-      };
-      this.activeGo = state;
-      this.send(cmd.join(" "));
-    });
+    try {
+      const result = await new Promise<GoResult>((resolve, reject) => {
+        const state = {
+          resolve,
+          reject,
+          lines: [] as string[],
+          timeout: setTimeout(() => {
+            // Страховочный таймаут: останавливаем поиск и завершаем чем есть
+            try { this.send("stop"); } catch { /* noop */ }
+            reject(new Error("go timeout"));
+          }, goTimeout),
+        };
+        this.activeGo = state;
+        this.send(cmd.join(" "));
+      });
 
-    return result;
+      return result;
+    } finally {
+      // Вернём MultiPV назад, если подменяли
+      if (restoreMultiPv !== undefined && restoreMultiPv !== this.currentMultiPv) {
+        this.send(buildSetOption("MultiPV", restoreMultiPv));
+        this.currentMultiPv = restoreMultiPv;
+        // isReady, чтобы опция точно применилась до следующего вызова
+        await this.isReady().catch(() => {});
+      }
+    }
   }
 
   /**

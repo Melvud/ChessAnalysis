@@ -83,7 +83,7 @@ export class AnalyzeService {
 
   // Анализ игры по всем FEN'ам и UCI-ходам
   async evaluateGame(input: EvaluateGameInput): Promise<FullReport> {
-    const { fens, uciMoves, depth = 14, multiPv = 3, playersRatings, header } = input;
+    const { fens, uciMoves, depth = 15, multiPv = 3, playersRatings, header } = input;
     
     const positions: PositionEval[] = [];
     const analysisLog: string[] = [];
