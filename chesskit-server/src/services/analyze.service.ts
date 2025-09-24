@@ -1,22 +1,28 @@
 // src/services/analyze.service.ts
 import { EnginePool } from "../engine/pool";
-import { UciEngine } from "../engine/uci";
 import { progressStore, ProgressStage } from "../api/progressStore";
 import { parseEvaluationResults } from "../engine/parse";
-import { computeAccuracy } from "../algorithms/accuracy";
-import { computeAcpl } from "../algorithms/acpl";
-import { computeEstimatedElo } from "../algorithms/estimateElo";
-import { getMovesClassification } from "../algorithms/moveClassification";
-import { 
-  PositionEval, 
-  LineEval, 
-  GameEval,
+import { computeAccuracy } from "@/algorithms/accuracy";
+import { computeAcpl } from "@/algorithms/acpl";
+import { computeEstimatedElo } from "@/algorithms/estimateElo";
+import { Chess } from "chess.js";
+import { getMovesClassification } from "@/algorithms/moveClassification";
+
+// Импортируем типы для клиента
+import type { 
+  PositionEval as ClientPositionEval,
+  LineEval as ClientLineEval,
   MoveReport,
   AccuracySummary,
   FullReport,
-  GameHeader
+  GameHeader,
+  MoveClass
 } from "../types/clientReport";
-import { Chess } from "chess.js";
+
+import type {
+  PositionEval,
+  LineEval
+} from "../types/eval";
 
 export type EvaluateOptions = {
   depth?: number;
@@ -41,16 +47,16 @@ function now() {
   return Date.now();
 }
 
+// Классификация ходов определяется функцией getMovesClassification из algorithms/moveClassification
+
 export class AnalyzeService {
   constructor(private readonly pool: EnginePool) {}
 
-  /**
-   * Анализ одной позиции
-   */
+  // Анализ одной позиции
   async evaluatePosition(
     fen: string,
-    depth: number = 14,
-    multiPv: number = 1,
+    depth: number = 15,
+    multiPv: number = 3,
     onInfo?: (line: string) => void
   ): Promise<PositionEval> {
     const engine = await this.pool.acquire();
@@ -64,12 +70,10 @@ export class AnalyzeService {
         movetime: undefined
       });
 
-      // Отправляем info строки если есть колбэк
       if (onInfo) {
         result.lines.forEach(line => onInfo(line));
       }
 
-      // Парсим результаты
       const parsed = parseEvaluationResults(result.lines, fen, multiPv);
       return parsed;
     } finally {
@@ -77,11 +81,9 @@ export class AnalyzeService {
     }
   }
 
-  /**
-   * Анализ полной партии с классификацией ходов
-   */
+  // Анализ игры по всем FEN'ам и UCI-ходам
   async evaluateGame(input: EvaluateGameInput): Promise<FullReport> {
-    const { fens, uciMoves, depth = 14, multiPv = 1, playersRatings } = input;
+    const { fens, uciMoves, depth = 14, multiPv = 3, playersRatings } = input;
     
     const positions: PositionEval[] = [];
     const analysisLog: string[] = [];
@@ -110,48 +112,64 @@ export class AnalyzeService {
       this.pool.release(engine);
     }
 
-    // Классификация ходов
+    // Создаем классифицированные позиции для определения категорий ходов
     const classifiedPositions = getMovesClassification(positions, uciMoves, fens);
-    
-    // Создание отчетов по ходам
+
+    // Создание отчётов по ходам с правильной классификацией
     const moves: MoveReport[] = [];
     for (let i = 0; i < uciMoves.length; i++) {
-      const beforePos = classifiedPositions[i];
-      const afterPos = classifiedPositions[i + 1];
+      const beforePos = positions[i];
+      const afterPos = positions[i + 1];
       if (!afterPos) break;
       
       const winBefore = this.getWinPercentage(beforePos);
       const winAfter = this.getWinPercentage(afterPos);
       
+      // Определяем, кто ходил (четный индекс = белые, нечетный = чёрные)
+      const isWhiteMove = i % 2 === 0;
+      
+      // Классификация из getMovesClassification. Берём следующую позицию (после хода)
+      const classification = (classifiedPositions[i + 1] as any).moveClassification as MoveClass;
+      
       // Конвертируем UCI в SAN
       const chess = new Chess();
-      chess.load(beforePos.fen || fens[i]);
-      const move = chess.move({ 
-        from: uciMoves[i].slice(0, 2), 
-        to: uciMoves[i].slice(2, 4),
-        promotion: uciMoves[i][4] 
-      });
+      chess.load(fens[i]);
+      const fromSquare = uciMoves[i].slice(0, 2);
+      const toSquare = uciMoves[i].slice(2, 4);
+      const promotion = uciMoves[i][4];
+      
+      let san = uciMoves[i];
+      try {
+        const move = chess.move({
+          from: fromSquare,
+          to: toSquare,
+          promotion: promotion as any,
+        });
+        if (move) san = move.san;
+      } catch {
+        // если не удалось конвертировать, оставляем UCI
+      }
       
       const moveReport: MoveReport = {
-        san: move?.san || uciMoves[i],
+        san,
         uci: uciMoves[i],
-        beforeFen: beforePos.fen || fens[i],
-        afterFen: afterPos.fen || fens[i + 1],
+        beforeFen: fens[i],
+        afterFen: fens[i + 1],
         winBefore,
         winAfter,
-        accuracy: this.getMoveAccuracy(winBefore, winAfter, i % 2 === 0),
-        classification: afterPos.moveClassification || "OKAY",
-        tags: []
+        accuracy: this.getMoveAccuracy(winBefore, winAfter, isWhiteMove),
+        classification,
+        tags: [],
       };
       
       moves.push(moveReport);
     }
     
-    // Вычисление метрик
-    const accuracy = computeAccuracy(classifiedPositions);
-    const acpl = computeAcpl(classifiedPositions);
+    // Вычисление метрик точности, ACPL и предполагаемого рейтинга
+    const accuracy = computeAccuracy(positions);
+    const acpl = computeAcpl(positions);
     const estimatedElo = computeEstimatedElo(
-      classifiedPositions, 
+      positions, 
       playersRatings?.white, 
       playersRatings?.black
     );
@@ -170,18 +188,20 @@ export class AnalyzeService {
       }
     };
     
+    const clientPositions: ClientPositionEval[] = positions.map((p, idx) => ({
+      fen: fens[idx],
+      idx,
+      lines: p.lines.map(l => ({
+        pv: l.pv,
+        cp: l.cp,
+        mate: l.mate,
+        best: p.bestMove
+      } as ClientLineEval))
+    }));
+    
     const report: FullReport = {
-      header: {} as GameHeader, // Будет заполнен в роуте
-      positions: classifiedPositions.map((p, idx) => ({
-        fen: p.fen || fens[idx],
-        idx,
-        lines: p.lines.map(l => ({
-          pv: l.pv,
-          cp: l.cp,
-          mate: l.mate,
-          best: p.bestMove
-        }))
-      })),
+      header: {} as GameHeader,
+      positions: clientPositions,
       moves,
       accuracy: accuracySummary,
       acpl,
@@ -195,9 +215,7 @@ export class AnalyzeService {
     return report;
   }
 
-  /**
-   * Анализ массива FEN с прогрессом
-   */
+  // Асинхронный анализ arbitrary массива FEN'ов с поддержкой прогресса
   async evaluateFens(
     progressId: string,
     payload: EvaluateFensInput,
@@ -212,9 +230,8 @@ export class AnalyzeService {
 
     const depth = options?.depth ?? 14;
     const movetime = options?.movetimeMs;
-    const multiPv = options?.multiPv ?? 1;
+    const multiPv = options?.multiPv ?? 3;
 
-    // Создаём прогресс
     progressStore.createOrReset(progressId, {
       total: fens.length,
       done: 0,
@@ -233,10 +250,9 @@ export class AnalyzeService {
         });
     });
 
-    // Ждем завершения анализа
+    // Ждём завершения
     await this.waitForCompletion(progressId);
     
-    // Получаем результат из хранилища
     const result = progressStore.getResult(progressId);
     if (!result) {
       throw new Error("Analysis failed");
@@ -245,6 +261,7 @@ export class AnalyzeService {
     return result as FullReport;
   }
 
+  // Внутренняя функция для фонового анализа без блокировки
   private async runEvaluation(
     progressId: string,
     fens: string[],
@@ -267,10 +284,10 @@ export class AnalyzeService {
         const result = await engine.go({
           depth: cfg.depth,
           movetime: cfg.movetime,
-          multiPv: cfg.multiPv ?? 1
+          multiPv: cfg.multiPv ?? 3
         });
 
-        const parsed = parseEvaluationResults(result.lines, fens[i], cfg.multiPv ?? 1);
+        const parsed = parseEvaluationResults(result.lines, fens[i], cfg.multiPv ?? 3);
         positions.push(parsed);
 
         progressStore.update(progressId, {
@@ -283,30 +300,20 @@ export class AnalyzeService {
       this.pool.release(engine);
     }
 
-    // Создаем полный отчет
-    const report = await this.createFullReport(fens, uciMoves, positions, cfg);
+    // Создаём полный отчёт с правильными данными
+    const report = await this.evaluateGame({
+      fens,
+      uciMoves,
+      depth: cfg.depth,
+      multiPv: cfg.multiPv ?? 3,
+      playersRatings: {}
+    });
     
-    // Сохраняем результат и завершаем
     progressStore.setResult(progressId, report);
     progressStore.complete(progressId);
   }
 
-  private async createFullReport(
-    fens: string[],
-    uciMoves: string[],
-    positions: PositionEval[],
-    cfg: { depth?: number; multiPv?: number }
-  ): Promise<FullReport> {
-    // Используем метод evaluateGame для полного анализа
-    return this.evaluateGame({
-      fens,
-      uciMoves,
-      depth: cfg.depth,
-      multiPv: cfg.multiPv,
-      playersRatings: {}
-    });
-  }
-
+  // Ожидаем завершения фонового анализа
   private async waitForCompletion(progressId: string, timeoutMs: number = 300000): Promise<void> {
     const startTime = Date.now();
     
@@ -333,11 +340,13 @@ export class AnalyzeService {
     }
   }
 
+  // Преобразует оценку позиции (cp/mate) в вероятность выигрыша текущей стороны
   private getWinPercentage(position: PositionEval): number {
     const line = position.lines?.[0];
     if (!line) return 50;
     
     if (line.cp !== undefined) {
+      // Lichess formula for win percentage
       const cpClamped = Math.max(-1000, Math.min(1000, line.cp));
       const winChances = 2 / (1 + Math.exp(-0.00368208 * cpClamped)) - 1;
       return 50 + 50 * winChances;
@@ -350,11 +359,13 @@ export class AnalyzeService {
     return 50;
   }
 
+  // Преобразует разницу win% в точность хода
   private getMoveAccuracy(winBefore: number, winAfter: number, isWhiteMove: boolean): number {
     const winDiff = isWhiteMove 
       ? Math.max(0, winBefore - winAfter)
       : Math.max(0, winAfter - winBefore);
     
+    // Lichess accuracy formula
     const rawAccuracy = 103.1668100711649 * Math.exp(-0.04354415386753951 * winDiff) - 3.166924740191411;
     return Math.min(100, Math.max(0, rawAccuracy + 1));
   }

@@ -5,7 +5,7 @@ import { once } from "node:events";
 
 export type UciOptions = {
   /** Анализ несколькими вариантами */
-  MultiPV?: number;
+  multiPv?: number;
   /** Количество потоков */
   Threads?: number;
   /** Размер кеша (MB) */
@@ -30,7 +30,7 @@ export type GoParams = {
   /** Поиск мата в N */
   mate?: number;
   /** Кол-во вариантов (перекрывает установленный в опциях MultiPV) */
-  multipv?: number;
+  multiPv?: number;
   /** Жёсткий таймаут выполнения go (ms), по умолчанию берётся из movetime*2 либо 30s */
   timeoutMs?: number;
 };
@@ -201,7 +201,7 @@ export class UciEngine {
     if (params.movetime !== undefined) cmd.push("movetime", String(params.movetime));
     if (params.nodes !== undefined) cmd.push("nodes", String(params.nodes));
     if (params.mate !== undefined) cmd.push("mate", String(params.mate));
-    if (params.multipv !== undefined) cmd.push("multipv", String(params.multipv));
+    if (params.multiPv !== undefined) cmd.push("multiPv", String(params.multiPv));
 
     const goTimeout =
       params.timeoutMs ??

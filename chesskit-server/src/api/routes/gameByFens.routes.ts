@@ -1,4 +1,3 @@
-// src/api/routes/gameByFens.routes.ts
 import { FastifyInstance } from "fastify";
 import { AnalyzeService } from "../../services/analyze.service";
 import { randomUUID } from "node:crypto";

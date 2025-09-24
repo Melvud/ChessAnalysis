@@ -72,7 +72,7 @@ data class StockfishResponse(
 data class GameFullRequest(
     val pgn: String,
     val depth: Int = 14,
-    val multiPv: Int = 1
+    val multiPv: Int = 3
 )
 
 @Serializable
@@ -100,14 +100,14 @@ data class ProgressSnapshot(
 
 /** Анализ одной позиции. */
 suspend fun analyzeFen(fen: String, depth: Int = 14): StockfishResponse =
-    withContext(Dispatchers.IO) { requestEvaluatePosition(fen, depth, 1) }
+    withContext(Dispatchers.IO) { requestEvaluatePosition(fen, depth, 3) }
 
 /** Анализ партии по FEN/UCIs с реальным прогрессом. */
 suspend fun analyzeGameByFensWithProgress(
     fens: List<String>,
     uciMoves: List<String>?,
     depth: Int = 14,
-    multiPv: Int = 1,
+    multiPv: Int = 3,
     header: GameHeader? = null,
     onProgress: (ProgressSnapshot) -> Unit
 ): FullReport = coroutineScope {
@@ -169,7 +169,7 @@ suspend fun analyzeGameByFens(
     fens: List<String>,
     uciMoves: List<String>?,
     depth: Int = 14,
-    multiPv: Int = 1,
+    multiPv: Int = 3,
     header: GameHeader? = null
 ): FullReport = withContext(Dispatchers.IO) {
     pingOrThrow()

@@ -1,4 +1,3 @@
-// src/api/progressStore.ts
 export type ProgressStage = "idle" | "evaluating" | "done" | "error" | "canceled";
 
 export type Progress = {
@@ -65,7 +64,6 @@ class ProgressStore {
     p.updatedAt = Date.now();
   }
 
-  // Алиас для обратной совместимости
   finish(id: string): void {
     this.complete(id);
   }

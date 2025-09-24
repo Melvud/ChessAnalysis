@@ -134,8 +134,8 @@ fun GamesListScreen(
                                                 analyzeGameByFensWithProgress(
                                                     fens = built.fens,
                                                     uciMoves = built.uciMoves,
-                                                    depth = 14,
-                                                    multiPv = 1,
+                                                    depth = 15,
+                                                    multiPv = 3,
                                                     header = built.header
                                                 ) { snap ->
                                                     // Апдейты прогресса приходят с сервера

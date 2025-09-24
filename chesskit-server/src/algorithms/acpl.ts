@@ -1,5 +1,11 @@
 export type Acpl = { white: number; black: number };
 
+/**
+ * Рассчитывает средний centipawn loss (ACPL) отдельно для белых и чёрных
+ * по логике Chesskit: учитываем ТОЛЬКО потери (ухудшение оценки для стороны, делающей ход).
+ * Улучшение позиции даёт нулевой вклад в CPL.
+ * Матовые оценки пропускаем. Значения cp заранее ориентированы относительно стороны, которая ходит.
+ */
 export function computeAcpl(positions: any[], cplCap = 500): Acpl {
   if (!Array.isArray(positions) || positions.length < 2) {
     return { white: 0, black: 0 };
@@ -10,7 +16,6 @@ export function computeAcpl(positions: any[], cplCap = 500): Acpl {
   let blackSum = 0;
   let blackCnt = 0;
 
-  // Идём по полуходам: i -> ход сыгран, сравниваем оценку до и после
   for (let i = 0; i < positions.length - 1; i++) {
     const before = positions[i];
     const after = positions[i + 1];
@@ -21,25 +26,19 @@ export function computeAcpl(positions: any[], cplCap = 500): Acpl {
     const l0After = after.lines?.[0];
     if (!fen || !l0Before || !l0After) continue;
 
-    const sideToMove = sideFromFen(fen); // 'w' | 'b'
-
-    // Пропускаем, если матовые оценки (mate) — cp в таких случаях некорректно усреднять
+    // Пропускаем, если есть матовые оценки
     if (l0Before.mate != null || l0After.mate != null) continue;
 
-    // Требуются численные cp
+    // Должны быть численные cp (ориентированные относительно стороны, делающей ход)
     if (typeof l0Before.cp !== "number" || typeof l0After.cp !== "number") continue;
 
-    // Приводим знак cp к стороне, которая ХОДИТ в "before":
-    //  - Белые ходят:  signed(cp) = cp
-    //  - Чёрные ходят: signed(cp) = -cp
-    const bestBeforeSigned = sideToMove === "w" ? l0Before.cp : -l0Before.cp;
-    const afterSigned = sideToMove === "w" ? l0After.cp : -l0After.cp;
-
-    // Потеря (clipped)
-    const loss = Math.abs(bestBeforeSigned - afterSigned);
+    // По логике Chesskit считаем только ухудшение оценки для стороны, которая ходила на позиции 'before'.
+    // Если оценка улучшилась, потери равны 0.
+    const loss = Math.max(0, l0Before.cp - l0After.cp);
     const clipped = Math.min(loss, cplCap);
 
-    if (sideToMove === "w") {
+    const side = sideFromFen(fen);
+    if (side === "w") {
       whiteSum += clipped;
       whiteCnt++;
     } else {
@@ -53,10 +52,8 @@ export function computeAcpl(positions: any[], cplCap = 500): Acpl {
   return { white, black };
 }
 
-/** Вытаскиваем, кто ходит, из FEN (второе поле) */
+/** Кто должен ходить в позиции по FEN */
 function sideFromFen(fen: string): "w" | "b" {
-  // FEN: "<pieces> <side> <castling> <enpassant> <halfmove> <fullmove>"
-  // Пример: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
   try {
     const parts = fen.trim().split(/\s+/);
     const side = parts[1];

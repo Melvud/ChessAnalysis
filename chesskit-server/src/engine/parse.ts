@@ -1,4 +1,3 @@
-// src/engine/parse.ts
 import { PositionEval, LineEval } from "../types/eval";
 
 const RE_INFO = /info .*?depth (\d+).*?(?:multipv (\d+))?.*?score (cp (-?\d+)|mate (-?\d+)).*?pv (.+)$/;
@@ -35,10 +34,8 @@ export function parseEvaluationResults(
 
   const linesSorted = Array.from(map.values())
     .sort((a, b) => {
-      // Сортируем по оценке (лучший ход первым)
-      const scoreA = a.cp ?? (a.mate ? a.mate * 10000 : 0);
-      const scoreB = b.cp ?? (b.mate ? b.mate * 10000 : 0);
-      return scoreB - scoreA;
+      // Сортируем по multiPv (1 - лучший)
+      return a.multiPv - b.multiPv;
     })
     .slice(0, multiPv);
 
