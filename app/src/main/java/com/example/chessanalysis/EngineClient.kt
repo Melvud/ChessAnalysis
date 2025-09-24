@@ -11,6 +11,8 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -155,7 +157,36 @@ suspend fun analyzeGameByFensWithProgress(
                 if (!resp.isSuccessful) {
                     throw IllegalStateException("HTTP ${resp.code}: ${body.take(300)}")
                 }
-                return@withContext json.decodeFromString<FullReport>(body)
+
+                // ----- RAW LOG FALLBACK: читаем analysisLog прямо из текста, даже если модель его не знает -----
+                try {
+                    val root = Json.parseToJsonElement(body)
+                    val arr = root.jsonObject["analysisLog"]?.jsonArray
+                    if (arr != null) {
+                        Log.d("EngineDiagnostics", "---- analysisLog (${arr.size}) [raw] ----")
+                        arr.forEachIndexed { i, el ->
+                            // el — JsonElement, печатаем как строку без кавычек по краям
+                            val line = el.toString().trim('"')
+                            Log.d("EngineDiagnostics", "#$i $line")
+                        }
+                        Log.d("EngineDiagnostics", "---- end analysisLog [raw] ----")
+                    } else {
+                        Log.d("EngineDiagnostics", "analysisLog field not present in raw JSON")
+                    }
+                } catch (t: Throwable) {
+                    Log.w("EngineDiagnostics", "Failed to read analysisLog from raw body", t)
+                }
+
+                // Теперь обычная десериализация отчёта
+                val report = json.decodeFromString<FullReport>(body)
+
+                // Дополнительный безопасный лог размера массива (если поле присутствует в модели)
+                try {
+                    val size = report.analysisLog?.size ?: 0
+                    Log.d("EngineDiagnostics", "analysisLog size (decoded) = $size")
+                } catch (_: Throwable) { /* игнор */ }
+
+                return@withContext report
             }
         }
     } finally {
@@ -184,7 +215,34 @@ suspend fun analyzeGameByFens(
     client.newCall(req).execute().use { resp ->
         val body = resp.body?.string().orEmpty()
         if (!resp.isSuccessful) throw IllegalStateException("http_${resp.code}: ${body.take(300)}")
-        return@use json.decodeFromString<FullReport>(body)
+
+        // RAW LOG FALLBACK и тут, для режима без прогресса
+        try {
+            val root = Json.parseToJsonElement(body)
+            val arr = root.jsonObject["analysisLog"]?.jsonArray
+            if (arr != null) {
+                Log.d("EngineDiagnostics", "---- analysisLog (${arr.size}) [raw] ----")
+                arr.forEachIndexed { i, el ->
+                    val line = el.toString().trim('"')
+                    Log.d("EngineDiagnostics", "#$i $line")
+                }
+                Log.d("EngineDiagnostics", "---- end analysisLog [raw] ----")
+            } else {
+                Log.d("EngineDiagnostics", "analysisLog field not present in raw JSON")
+            }
+        } catch (t: Throwable) {
+            Log.w("EngineDiagnostics", "Failed to read analysisLog from raw body", t)
+        }
+
+        val report = json.decodeFromString<FullReport>(body)
+
+        // Дополнительный безопасный лог размера массива (если поле присутствует в модели)
+        try {
+            val size = report.analysisLog?.size ?: 0
+            Log.d("EngineDiagnostics", "analysisLog size (decoded) = $size")
+        } catch (_: Throwable) { /* игнор */ }
+
+        return@use report
     }
 }
 

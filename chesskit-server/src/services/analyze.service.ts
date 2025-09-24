@@ -75,6 +75,32 @@ export class AnalyzeService {
       }
 
       const parsed = parseEvaluationResults(result.lines, fen, multiPv);
+
+      // Диагностика одиночной позиции: где пропадает primary line
+      try {
+        const primary = (parsed?.lines ?? [])[0] as any;
+        const needWarn =
+          !primary ||
+          (typeof primary?.cp !== "number" && typeof primary?.mate !== "number");
+        if (needWarn || (Array.isArray((result as any)?.lines) && (result as any).lines.length < (multiPv ?? 3))) {
+          const safe = (v: any) => {
+            try {
+              const s = JSON.stringify(v);
+              return s.length > 800 ? s.slice(0, 800) + "…" : s;
+            } catch {
+              return String(v);
+            }
+          };
+          console.warn("[analyze] engine lines anomaly", {
+            fen,
+            wantMulti: multiPv ?? 3,
+            got: Array.isArray((result as any)?.lines) ? (result as any).lines.length : "n/a",
+            firstRaw: (result as any)?.lines?.[0],
+            firstParsed: primary,
+          });
+        }
+      } catch {}
+
       return parsed;
     } finally {
       this.pool.release(engine);
@@ -104,6 +130,30 @@ export class AnalyzeService {
         });
         
         const parsed = parseEvaluationResults(result.lines, fen, multiPv);
+
+        // Диагностический лог: где пропадает primary line / меньше линий, чем multiPv
+        try {
+          const primary = (parsed?.lines ?? [])[0] as any;
+          const needWarn =
+            !primary ||
+            (typeof primary?.cp !== "number" && typeof primary?.mate !== "number");
+          if (needWarn || (Array.isArray((result as any)?.lines) && (result as any).lines.length < (multiPv ?? 3))) {
+            const safe = (v: any) => {
+              try {
+                const s = JSON.stringify(v);
+                return s.length > 800 ? s.slice(0, 800) + "…" : s;
+              } catch {
+                return String(v);
+              }
+            };
+            analysisLog.push(
+              `WARN engine lines anomaly at idx=${i} wantMulti=${multiPv ?? 3} ` +
+              `got=${Array.isArray((result as any)?.lines) ? (result as any).lines.length : "n/a"}; ` +
+              `firstRaw=${safe((result as any)?.lines?.[0])}; firstParsed=${safe(primary)}; fen=${fen}`
+            );
+          }
+        } catch {}
+
         positions.push(parsed);
         
         analysisLog.push(`Position ${i}/${fens.length} analyzed`);
@@ -288,6 +338,7 @@ export class AnalyzeService {
         });
 
         const parsed = parseEvaluationResults(result.lines, fens[i], cfg.multiPv ?? 3);
+        // (на этапе прогресса не добавляем в analysisLog, он формируется в evaluateGame)
         positions.push(parsed);
 
         progressStore.update(progressId, {
