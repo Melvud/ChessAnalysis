@@ -6,6 +6,11 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.encodeToJsonElement
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -97,7 +102,7 @@ data class ProgressSnapshot(
 suspend fun analyzeFen(fen: String, depth: Int = 14): StockfishResponse =
     withContext(Dispatchers.IO) { requestEvaluatePosition(fen, depth, 1) }
 
-/** Анализ партии по FEN/UCIs с реальным прогрессом (poll /progress/{id}). */
+/** Анализ партии по FEN/UCIs с реальным прогрессом. */
 suspend fun analyzeGameByFensWithProgress(
     fens: List<String>,
     uciMoves: List<String>?,
@@ -106,33 +111,52 @@ suspend fun analyzeGameByFensWithProgress(
     header: GameHeader? = null,
     onProgress: (ProgressSnapshot) -> Unit
 ): FullReport = coroutineScope {
-    pingOrThrow() // проверяем доступность сервера (IO внутри)
+    pingOrThrow()
 
     val progressId = UUID.randomUUID().toString()
 
-    // Поллер прогресса в фоновом IO-потоке
+    // Поллер прогресса
     val poller = launch(Dispatchers.IO) {
         pollProgress(progressId, onProgress)
     }
 
     try {
-        // САМ ЗАПРОС АНАЛИЗА — строго на IO
         withContext(Dispatchers.IO) {
-            val url = "$BASE/api/v1/evaluate/game/by-fens?progressId=$progressId"
-            val payload = json.encodeToString(GameByFensRequest(fens, uciMoves, depth, multiPv, header))
+            val url = "$BASE/api/v1/evaluate/game/by-fens?" +
+                    "progressId=$progressId" +
+                    "&depth=$depth" +
+                    "&multiPv=$multiPv"
+
+            val requestBody = buildJsonObject {
+                putJsonArray("fens") {
+                    fens.forEach { add(it) }
+                }
+                uciMoves?.let {
+                    putJsonArray("uciMoves") {
+                        it.forEach { uciMove -> add(uciMove) }
+                    }
+                }
+                header?.let { h ->
+                    put("header", json.encodeToJsonElement(h))
+                }
+            }
+
+            val payload = requestBody.toString()
             val req = Request.Builder()
                 .url(url)
                 .header("Accept", "application/json")
                 .header("User-Agent", UA)
+                .header("Content-Type", "application/json")
                 .post(payload.toRequestBody(JSON_MEDIA))
                 .build()
+
             client.newCall(req).execute().use { resp ->
                 val body = resp.body?.string().orEmpty()
-                if (!resp.isSuccessful) throw IllegalStateException("http_${resp.code}: ${body.take(300)}")
-                return@use json.decodeFromString<FullReport>(body)
+                if (!resp.isSuccessful) {
+                    throw IllegalStateException("HTTP ${resp.code}: ${body.take(300)}")
+                }
+                return@withContext json.decodeFromString<FullReport>(body)
             }
-        }.also { report ->
-            return@coroutineScope report
         }
     } finally {
         poller.cancel()

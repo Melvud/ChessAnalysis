@@ -1,5 +1,6 @@
 package com.example.chessanalysis.ui.screens
 
+import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -97,6 +98,7 @@ fun GamesListScreen(
                                 supportingContent = { Text(g.date ?: "") },
                                 modifier = Modifier.clickable {
                                     scope.launch {
+                                        Log.d("GamesListScreen", "Starting analysis...")
                                         try {
                                             val pgn = g.pgn
                                             if (pgn.isNullOrBlank()) {
@@ -108,12 +110,17 @@ fun GamesListScreen(
                                             showAnalysis = true
                                             stage = "Разбор PGN…"
                                             progress = 0.02f
+
+                                            Log.d("GamesListScreen", "Parsing PGN...")
                                             val built = PgnToFens.fromPgn(pgn)
+
                                             if (built.fens.isEmpty() || built.uciMoves.isEmpty()) {
                                                 showAnalysis = false
                                                 Toast.makeText(context, "Не удалось распарсить PGN", Toast.LENGTH_SHORT).show()
                                                 return@launch
                                             }
+
+                                            Log.d("GamesListScreen", "FENs: ${built.fens.size}, UCIs: ${built.uciMoves.size}")
 
                                             // Старт «реального» анализа с прогрессом
                                             stage = "Ожидание сервера…"
@@ -122,38 +129,54 @@ fun GamesListScreen(
                                             total = built.fens.size
                                             etaMs = null
 
-                                            val report = analyzeGameByFensWithProgress(
-                                                fens = built.fens,
-                                                uciMoves = built.uciMoves,
-                                                depth = 14,
-                                                multiPv = 1,
-                                                header = built.header
-                                            ) { snap ->
-                                                // Апдейты прогресса приходят с сервера
-                                                total = snap.total
-                                                done = snap.done
-                                                stage = when (snap.stage) {
-                                                    "queued"      -> "В очереди…"
-                                                    "preparing"   -> "Подготовка…"
-                                                    "evaluating"  -> "Анализ позиций…"
-                                                    "postprocess" -> "Постобработка…"
-                                                    "done"        -> "Готово"
-                                                    else          -> "Анализ…"
+                                            Log.d("GamesListScreen", "Starting server analysis...")
+                                            val report = try {
+                                                analyzeGameByFensWithProgress(
+                                                    fens = built.fens,
+                                                    uciMoves = built.uciMoves,
+                                                    depth = 14,
+                                                    multiPv = 1,
+                                                    header = built.header
+                                                ) { snap ->
+                                                    // Апдейты прогресса приходят с сервера
+                                                    total = snap.total
+                                                    done = snap.done
+                                                    stage = when (snap.stage) {
+                                                        "queued"      -> "В очереди…"
+                                                        "preparing"   -> "Подготовка…"
+                                                        "evaluating"  -> "Анализ позиций…"
+                                                        "postprocess" -> "Постобработка…"
+                                                        "done"        -> "Готово"
+                                                        else          -> "Анализ…"
+                                                    }
+                                                    progress = if (snap.total > 0)
+                                                        snap.done.toFloat() / snap.total.toFloat()
+                                                    else progress
+                                                    etaMs = snap.etaMs
+
+                                                    Log.d("GamesListScreen", "Progress: $done/$total - $stage")
                                                 }
-                                                progress = if (snap.total > 0)
-                                                    snap.done.toFloat() / snap.total.toFloat()
-                                                else progress
-                                                etaMs = snap.etaMs
+                                            } catch (e: Exception) {
+                                                Log.e("GamesListScreen", "Analysis error", e)
+                                                throw e
                                             }
 
+                                            Log.d("GamesListScreen", "Analysis complete! Report positions: ${report.positions.size}, moves: ${report.moves.size}")
+                                            Log.d("GamesListScreen", "Accuracy: white=${report.accuracy.whiteMovesAcc.weighted}, black=${report.accuracy.blackMovesAcc.weighted}")
+
                                             showAnalysis = false
+
+                                            // Открываем отчет
+                                            Log.d("GamesListScreen", "Opening report screen...")
                                             onOpenReport(report)
+
                                         } catch (t: Throwable) {
+                                            Log.e("GamesListScreen", "Error during analysis", t)
                                             showAnalysis = false
                                             Toast.makeText(
                                                 context,
                                                 "Ошибка анализа: ${t.message ?: "неизвестно"}",
-                                                Toast.LENGTH_SHORT
+                                                Toast.LENGTH_LONG
                                             ).show()
                                         }
                                     }

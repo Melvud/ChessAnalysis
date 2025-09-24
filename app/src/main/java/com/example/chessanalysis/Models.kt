@@ -1,11 +1,29 @@
 package com.example.chessanalysis
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
 
 // Провайдер игр
-enum class Provider { LICHESS, CHESSCOM }
+@Serializable
+enum class Provider {
+    LICHESS,
+    CHESSCOM
+}
 
-// Ответ движка для одной позиции — как и раньше использовался в AnalysisLogic
+// Классы ходов - синхронизированы с сервером
+@Serializable
+enum class MoveClass {
+    @SerialName("OPENING") OPENING,
+    @SerialName("FORCED") FORCED,
+    @SerialName("BEST") BEST,
+    @SerialName("PERFECT") PERFECT,
+    @SerialName("SPLENDID") SPLENDID,
+    @SerialName("EXCELLENT") EXCELLENT,
+    @SerialName("OKAY") OKAY,
+    @SerialName("INACCURACY") INACCURACY,
+    @SerialName("MISTAKE") MISTAKE,
+    @SerialName("BLUNDER") BLUNDER
+}
 
 // Заголовок партии
 @Serializable
@@ -38,12 +56,6 @@ data class PositionEval(
     val idx: Int,
     val lines: List<LineEval>
 )
-
-// Классы ходов
-@Serializable
-enum class MoveClass {
-    OPENING, FORCED, BEST, PERFECT, SPLENDID, EXCELLENT, OKAY, INACCURACY, MISTAKE, BLUNDER
-}
 
 // Отчёт по одному ходу
 @Serializable

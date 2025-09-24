@@ -1,5 +1,6 @@
 package com.example.chessanalysis.ui
 
+import android.util.Log
 import android.widget.Toast
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -72,10 +73,12 @@ fun AppRoot() {
                     provider = prov,
                     username = username,
                     games = games,
-                    openingFens = emptySet(), // если у тебя есть множество FEN дебютов — подставь сюда
+                    openingFens = emptySet(),
                     onBack = { nav.popBackStack() },
                     onOpenReport = { report ->
+                        Log.d("AppRoot", "onOpenReport called with report: positions=${report.positions.size}, moves=${report.moves.size}")
                         currentReport = report
+                        Log.d("AppRoot", "Navigating to report screen...")
                         nav.navigate("report")
                     }
                 )
@@ -83,6 +86,8 @@ fun AppRoot() {
 
             composable("report") {
                 val report = currentReport
+                Log.d("AppRoot", "ReportScreen: currentReport is ${if (report == null) "NULL" else "present"}")
+
                 if (report == null) {
                     Toast.makeText(ctx, "Отчёт не найден", Toast.LENGTH_SHORT).show()
                     nav.popBackStack()
