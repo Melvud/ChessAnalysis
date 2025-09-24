@@ -10,12 +10,13 @@
         android:allowBackup="true"
         android:label="Chessanalysis"
         android:supportsRtl="true"
-        android:theme="@style/Theme.ChessAnalyzer">
-
+        android:theme="@style/Theme.ChessAnalyzer"
+        android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/network_security_config">
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:screenOrientation="portrait">
+            android:screenOrientation="fullSensor">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

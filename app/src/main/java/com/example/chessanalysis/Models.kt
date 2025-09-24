@@ -2,63 +2,51 @@ package com.example.chessanalysis
 
 import kotlinx.serialization.Serializable
 
+// Провайдер игр
 enum class Provider { LICHESS, CHESSCOM }
 
-/** Ответ от движка/облака. */
-@Serializable
-data class StockfishResponse(
-    val success: Boolean,
-    val evaluation: Double? = null,   // оценка в пешках (с точки зрения белых)
-    val mate: Int? = null,            // +N / -N — мат в N ходов (положительное — за белых)
-    val bestmove: String? = null,     // лучший ход, в UCI
-    val continuation: String? = null, // pv/продолжение через пробел
-    val error: String? = null
-)
+// Ответ движка для одной позиции — как и раньше использовался в AnalysisLogic
 
-/** Краткая шапка партии. */
+// Заголовок партии
+@Serializable
 data class GameHeader(
-    val site: Provider,
+    val site: Provider? = null,
     val white: String? = null,
     val black: String? = null,
     val result: String? = null,
     val date: String? = null,
     val eco: String? = null,
     val opening: String? = null,
-    val pgn: String,
+    val pgn: String? = null,
     val whiteElo: Int? = null,
-    val blackElo: Int? = null,
+    val blackElo: Int? = null
 )
 
-/** Оценка одной линии в позиции. */
+// Линия оценки
+@Serializable
 data class LineEval(
     val pv: List<String> = emptyList(),
-    val cp: Int? = null,     // centipawns relative to White
-    val mate: Int? = null,   // +/- mate in N (sign is from White point of view)
-    val best: String? = null // best move suggested by engine, UCI
+    val cp: Int? = null,
+    val mate: Int? = null,
+    val best: String? = null
 )
 
-/** Оценка позиции. */
+// Оценка позиции
+@Serializable
 data class PositionEval(
     val fen: String,
-    val idx: Int,                 // 0 = старт перед 1-м ходом, 1 = после 1-го хода и т.д.
+    val idx: Int,
     val lines: List<LineEval>
 )
 
-/** Классы ходов (иконки лежат в drawable). */
+// Классы ходов
+@Serializable
 enum class MoveClass {
-    OPENING,     // теоретический
-    FORCED,      // вынужденный
-    BEST,        // лучший
-    PERFECT,     // «лучший+» (нулевая/микро-потеря)
-    SPLENDID,    // блестящий
-    EXCELLENT,   // отличный
-    OKAY,        // хороший
-    INACCURACY,  // неточность
-    MISTAKE,     // ошибка
-    BLUNDER      // зевок
+    OPENING, FORCED, BEST, PERFECT, SPLENDID, EXCELLENT, OKAY, INACCURACY, MISTAKE, BLUNDER
 }
 
-/** Отчёт по конкретному ходу. */
+// Отчёт по одному ходу
+@Serializable
 data class MoveReport(
     val san: String,
     val uci: String,
@@ -71,32 +59,37 @@ data class MoveReport(
     val tags: List<String> = emptyList()
 )
 
-/** Пер-цветная детализация точности. */
+// Точность по цветам
+@Serializable
 data class AccByColor(
-    val itera: List<Double>, // по-ходно
-    val harmonic: Double,    // гармоническое среднее
-    val weighted: Double     // взвешенное среднее
+    val itera: Double,
+    val harmonic: Double,
+    val weighted: Double
 )
 
-/** Сводная точность. */
+// Сводка точности
+@Serializable
 data class AccuracySummary(
     val whiteMovesAcc: AccByColor,
     val blackMovesAcc: AccByColor
 )
 
-/** Средняя потеря в центропешках. */
+// ACPL
+@Serializable
 data class Acpl(
     val white: Int,
     val black: Int
 )
 
-/** Оценка перфоманса по сравнению с известным рейтингом. */
+// Оценка перфоманса по ACPL/рейтингу
+@Serializable
 data class EstimatedElo(
-    val whiteEst: Int?,
-    val blackEst: Int?
+    val whiteEst: Int? = null,
+    val blackEst: Int? = null
 )
 
-/** Полный отчёт для экрана. */
+// Полный отчёт, который отдаёт сервер и который рисует ReportScreen
+@Serializable
 data class FullReport(
     val header: GameHeader,
     val positions: List<PositionEval>,

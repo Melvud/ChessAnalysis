@@ -1,151 +1,273 @@
 package com.example.chessanalysis
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.delay
-import kotlinx.serialization.json.*
+import android.util.Log
+import kotlinx.coroutines.*
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.net.URLEncoder
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.logging.HttpLoggingInterceptor
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-/**
- * Клиент движка: ТОЛЬКО Stockfish Online v2.
- * Эндпоинт: https://stockfish.online/api/s/v2.php
- * Ожидаемые поля ответа: success / evaluation / mate / bestmove / continuation
- * (возможен вариант, когда эти поля лежат внутри корня или внутри data{}).
- */
-object EngineClient {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+// ----- БАЗОВЫЙ URL: эмулятор -> хост -----
+private const val BASE = "http://10.0.2.2:8080"
+
+// ----- Логирование HTTP -----
+private const val TAG = "EngineClient"
+private val httpLogger = HttpLoggingInterceptor { msg -> Log.d("HTTP", msg) }
+    .apply { level = HttpLoggingInterceptor.Level.BODY }
+
+// ----- OkHttp с длинными таймаутами -----
+private val client = OkHttpClient.Builder()
+    .addInterceptor(httpLogger)
+    .connectTimeout(10, TimeUnit.SECONDS)
+    .writeTimeout(5, TimeUnit.MINUTES)
+    .readTimeout(5, TimeUnit.MINUTES)
+    .callTimeout(0, TimeUnit.SECONDS)
+    .retryOnConnectionFailure(true)
+    .build()
+
+// ----- JSON -----
+private val json = Json { ignoreUnknownKeys = true }
+private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
+private const val UA = "ChessAnalysis/1.5 (+android; local-server)"
+
+// ---------- DTO ----------
+@Serializable
+data class LineDTO(
+    val pv: List<String> = emptyList(),
+    val cp: Int? = null,
+    val mate: Int? = null,
+    val depth: Int? = null,
+    val multiPv: Int? = null
+)
+
+@Serializable
+data class PositionDTO(
+    val lines: List<LineDTO> = emptyList(),
+    val bestMove: String? = null
+)
+
+@Serializable
+data class StockfishResponse(
+    val success: Boolean,
+    val evaluation: Double? = null,
+    val mate: Int? = null,
+    val bestmove: String? = null,
+    val continuation: String? = null,
+    val error: String? = null
+)
+
+@Serializable
+data class GameFullRequest(
+    val pgn: String,
+    val depth: Int = 14,
+    val multiPv: Int = 1
+)
+
+@Serializable
+data class GameByFensRequest(
+    val fens: List<String>,
+    val uciMoves: List<String>?,
+    val depth: Int,
+    val multiPv: Int,
+    val header: GameHeader? = null
+)
+
+@Serializable
+data class ProgressSnapshot(
+    val id: String,
+    val total: Int,
+    val done: Int,
+    val percent: Double? = null,
+    val etaMs: Long? = null,
+    val stage: String? = null,     // queued | preparing | evaluating | postprocess | done
+    val startedAt: Long? = null,
+    val updatedAt: Long? = null
+)
+
+// ---------- Публичное API ----------
+
+/** Анализ одной позиции. */
+suspend fun analyzeFen(fen: String, depth: Int = 14): StockfishResponse =
+    withContext(Dispatchers.IO) { requestEvaluatePosition(fen, depth, 1) }
+
+/** Анализ партии по FEN/UCIs с реальным прогрессом (poll /progress/{id}). */
+suspend fun analyzeGameByFensWithProgress(
+    fens: List<String>,
+    uciMoves: List<String>?,
+    depth: Int = 14,
+    multiPv: Int = 1,
+    header: GameHeader? = null,
+    onProgress: (ProgressSnapshot) -> Unit
+): FullReport = coroutineScope {
+    pingOrThrow() // проверяем доступность сервера (IO внутри)
+
+    val progressId = UUID.randomUUID().toString()
+
+    // Поллер прогресса в фоновом IO-потоке
+    val poller = launch(Dispatchers.IO) {
+        pollProgress(progressId, onProgress)
+    }
+
+    try {
+        // САМ ЗАПРОС АНАЛИЗА — строго на IO
+        withContext(Dispatchers.IO) {
+            val url = "$BASE/api/v1/evaluate/game/by-fens?progressId=$progressId"
+            val payload = json.encodeToString(GameByFensRequest(fens, uciMoves, depth, multiPv, header))
+            val req = Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                .header("User-Agent", UA)
+                .post(payload.toRequestBody(JSON_MEDIA))
+                .build()
+            client.newCall(req).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) throw IllegalStateException("http_${resp.code}: ${body.take(300)}")
+                return@use json.decodeFromString<FullReport>(body)
+            }
+        }.also { report ->
+            return@coroutineScope report
+        }
+    } finally {
+        poller.cancel()
+        poller.join()
+    }
+}
+
+/** Анализ без прогресса (на IO). */
+suspend fun analyzeGameByFens(
+    fens: List<String>,
+    uciMoves: List<String>?,
+    depth: Int = 14,
+    multiPv: Int = 1,
+    header: GameHeader? = null
+): FullReport = withContext(Dispatchers.IO) {
+    pingOrThrow()
+    val url = "$BASE/api/v1/evaluate/game/by-fens"
+    val payload = json.encodeToString(GameByFensRequest(fens, uciMoves, depth, multiPv, header))
+    val req = Request.Builder()
+        .url(url)
+        .header("Accept", "application/json")
+        .header("User-Agent", UA)
+        .post(payload.toRequestBody(JSON_MEDIA))
+        .build()
+    client.newCall(req).execute().use { resp ->
+        val body = resp.body?.string().orEmpty()
+        if (!resp.isSuccessful) throw IllegalStateException("http_${resp.code}: ${body.take(300)}")
+        return@use json.decodeFromString<FullReport>(body)
+    }
+}
+
+// ---------- Внутрянка ----------
+
+/** Пинг одного адреса BASE. Выполняется на IO. */
+private suspend fun pingOrThrow() = withContext(Dispatchers.IO) {
+    // GET /ping
+    runCatching {
+        val getReq = Request.Builder()
+            .url("$BASE/ping")
+            .header("User-Agent", UA)
+            .get()
+            .build()
+        client.newCall(getReq).execute().use { resp ->
+            if (resp.isSuccessful) {
+                Log.d(TAG, "Ping OK (GET) $BASE")
+                return@withContext
+            } else {
+                Log.w(TAG, "Ping GET failed $BASE: ${resp.code}")
+            }
+        }
+    }.onFailure { e -> Log.w(TAG, "Ping GET error $BASE: ${e.message}") }
+
+    // POST /ping
+    runCatching {
+        val postReq = Request.Builder()
+            .url("$BASE/ping")
+            .header("User-Agent", UA)
+            .post("{\"ping\":true}".toRequestBody(JSON_MEDIA))
+            .build()
+        client.newCall(postReq).execute().use { resp ->
+            if (resp.isSuccessful) {
+                Log.d(TAG, "Ping OK (POST) $BASE")
+                return@withContext
+            } else {
+                Log.w(TAG, "Ping POST failed $BASE: ${resp.code}")
+            }
+        }
+    }.onFailure { e -> Log.w(TAG, "Ping POST error $BASE: ${e.message}") }
+
+    throw IllegalStateException("Server not reachable on: $BASE")
+}
+
+private fun requestEvaluatePosition(
+    fen: String,
+    depth: Int,
+    multiPv: Int
+): StockfishResponse {
+    val url = "$BASE/api/v1/evaluate/position"
+    val bodyStr = json.encodeToString(mapOf("fen" to fen, "depth" to depth, "multiPv" to multiPv))
+    val req = Request.Builder()
+        .url(url)
+        .header("Accept", "application/json")
+        .header("User-Agent", UA)
+        .post(bodyStr.toRequestBody(JSON_MEDIA))
         .build()
 
-    private val json = Json { ignoreUnknownKeys = true }
-
-    private const val UA = "ChessAnalysis/1.2 (+android; app@example.com)"
-
-    private fun String?.normBest(): String? {
-        if (this.isNullOrBlank()) return null
-        val t = this.trim()
-        // иногда приходит "bestmove e2e4 ponder e7e5"
-        return if (t.startsWith("bestmove")) t.split(" ").getOrNull(1) else t
-    }
-
-    private data class Parsed(
-        val success: Boolean,
-        val evaluation: Double? = null,   // пешки (1.36 и т.п.)
-        val mate: Int? = null,            // +N/-N со стороны белых
-        val bestmove: String? = null,     // UCI
-        val continuation: String? = null, // pv строкой
-        val error: String? = null
-    )
-
-    /** Извлечь известные поля как с корня, так и из data{...}. */
-    private fun extract(obj: JsonObject): Parsed {
-        fun pick(o: JsonObject): Parsed {
-            val success = o["success"]?.jsonPrimitive?.booleanOrNull
-            val eval = o["evaluation"]?.jsonPrimitive?.doubleOrNull
-                ?: o["eval"]?.jsonPrimitive?.doubleOrNull
-            val mate = o["mate"]?.jsonPrimitive?.intOrNull
-            val bestmove = o["bestmove"]?.jsonPrimitive?.contentOrNull
-                ?: o["best"]?.jsonPrimitive?.contentOrNull
-            val cont = o["continuation"]?.jsonPrimitive?.contentOrNull
-                ?: o["pv"]?.jsonPrimitive?.contentOrNull
-            val err = o["error"]?.jsonPrimitive?.contentOrNull
-                ?: o["message"]?.jsonPrimitive?.contentOrNull
-
-            return if (success == false) {
-                Parsed(false, error = err ?: "engine_error")
-            } else {
-                val ok = (success == true) || (eval != null || mate != null || !bestmove.isNullOrBlank() || !cont.isNullOrBlank())
-                Parsed(
-                    success = ok,
-                    evaluation = eval,
-                    mate = mate,
-                    bestmove = bestmove,
-                    continuation = cont,
-                    error = if (ok) null else err
-                )
-            }
+    client.newCall(req).execute().use { resp ->
+        val text = resp.body?.string().orEmpty()
+        if (!resp.isSuccessful || text.isBlank()) {
+            return StockfishResponse(false, error = "http_${resp.code}: ${text.take(200)}")
         }
-
-        // сначала пробуем корень; если нет — заглянем в data{...}
-        val rootParsed = pick(obj)
-        if (rootParsed.success || rootParsed.evaluation != null || rootParsed.mate != null || rootParsed.bestmove != null || rootParsed.continuation != null) {
-            return rootParsed
-        }
-        val data = obj["data"]?.jsonObject
-        return if (data != null) pick(data) else rootParsed
-    }
-
-    /** Разбор произвольного тела ответа v2. */
-    private fun parseV2(body: String): Parsed {
-        return runCatching {
-            val element = json.parseToJsonElement(body)
-            when (element) {
-                is JsonObject -> extract(element)
-                else -> Parsed(false, error = "non_json_root")
-            }
-        }.getOrElse { Parsed(false, error = "json_parse_failed: ${it.message}") }
-    }
-
-    /** Вызов stockfish.online v2: https://stockfish.online/api/s/v2.php */
-    private fun requestStockfishV2(fen: String, depth: Int): StockfishResponse {
-        val d = depth.coerceAtMost(15) // безопасный максимум
-        val url = "https://stockfish.online/api/s/v2.php" +
-                "?fen=${URLEncoder.encode(fen, "UTF-8")}" +
-                "&depth=$d"
-        val req = Request.Builder()
-            .url(url)
-            .header("Accept", "application/json")
-            .header("User-Agent", UA)
-            .build()
-
-        client.newCall(req).execute().use { resp ->
-            val body = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful || body.isBlank()) {
-                val tail = body.take(160).replace("\n", " ")
-                return StockfishResponse(false, error = "http_${resp.code}: $tail")
-            }
-            val p = parseV2(body)
-            return if (p.success) {
-                StockfishResponse(
-                    success = true,
-                    evaluation = p.evaluation,
-                    mate = p.mate,
-                    bestmove = p.bestmove.normBest(),
-                    continuation = p.continuation
-                )
-            } else {
-                val tail = body.take(200).replace("\n", " ")
-                StockfishResponse(false, error = p.error ?: "engine_error: $tail")
-            }
-        }
-    }
-
-    // -------------------- Публичное API --------------------
-
-    suspend fun analyzeFen(fen: String, depth: Int = 14): StockfishResponse = withContext(Dispatchers.IO) {
-        analyzeFenStrict(fen, depth)
-    }
-
-    /** Ретраи с бэкоффом и понижением depth, без изменения логики остального кода. */
-    private suspend fun analyzeFenStrict(fen: String, depth: Int, retries: Int = 3): StockfishResponse {
-        var d = depth
-        var delayMs = 300L
-        repeat(retries) {
-            val r = runCatching { requestStockfishV2(fen, d) }.getOrElse {
-                StockfishResponse(false, error = "request_failed: ${it.message}")
-            }
-            if (r.success && (r.evaluation != null || r.mate != null || !r.bestmove.isNullOrBlank() || !r.continuation.isNullOrBlank())) return r
-            if (d > 10) d -= 2
-            delay(delayMs)
-            delayMs = (delayMs * 2).coerceAtMost(2000L)
-        }
-        return runCatching { requestStockfishV2(fen, d) }.getOrElse {
-            StockfishResponse(false, error = "request_failed_final: ${it.message}")
+        return try {
+            val dto = json.decodeFromString<PositionDTO>(text)
+            val top = dto.lines.firstOrNull()
+            val evaluationPawns: Double? = top?.cp?.let { it / 100.0 }
+            StockfishResponse(
+                success = true,
+                evaluation = evaluationPawns,
+                mate = top?.mate,
+                bestmove = dto.bestMove,
+                continuation = top?.pv?.joinToString(" "),
+                error = null
+            )
+        } catch (e: Exception) {
+            StockfishResponse(false, error = "json_parse_failed: ${e.message}")
         }
     }
 }
 
+/** Поллинг прогресса: /api/v1/progress/{id} (запускать на IO, см. вызов выше). */
+private suspend fun pollProgress(
+    progressId: String,
+    onUpdate: (ProgressSnapshot) -> Unit
+) {
+    while (currentCoroutineContext().isActive) {
+        try {
+            val req = Request.Builder()
+                .url("$BASE/api/v1/progress/$progressId")
+                .header("Accept", "application/json")
+                .header("User-Agent", UA)
+                .get()
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string().orEmpty()
+                    if (body.isNotBlank()) {
+                        val snap = json.decodeFromString<ProgressSnapshot>(body)
+                        onUpdate(snap)
+                        if (snap.stage == "done" || (snap.total > 0 && snap.done >= snap.total)) return
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+            // игнорируем и пробуем снова
+        }
+        delay(400)
+    }
+}

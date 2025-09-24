@@ -15,8 +15,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.chessanalysis.*
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.max
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,12 +34,22 @@ fun GamesListScreen(
     var items by remember { mutableStateOf(games) }
     var isLoading by remember { mutableStateOf(false) }
 
-    // прогресс анализа
+    // --- прогресс анализа ---
     var showAnalysis by remember { mutableStateOf(false) }
-    var progress by remember { mutableStateOf(0f) }      // 0f..1f
-    var progressText by remember { mutableStateOf("Анализ...") }
+    var progress by remember { mutableStateOf(0f) }             // 0..1
+    var stage by remember { mutableStateOf("Подготовка…") }
+    var done by remember { mutableStateOf(0) }
+    var total by remember { mutableStateOf(0) }
+    var etaMs by remember { mutableStateOf<Long?>(null) }
 
-    // Подгрузка списка партий при входе на экран
+    fun formatEta(ms: Long?): String {
+        if (ms == null) return "—"
+        val sec = max(0, (ms / 1000).toInt())
+        val mm = sec / 60
+        val ss = sec % 60
+        return "%d:%02d".format(mm, ss)
+    }
+
     LaunchedEffect(provider, username) {
         if (items.isNotEmpty()) return@LaunchedEffect
         isLoading = true
@@ -52,39 +62,6 @@ fun GamesListScreen(
             emptyList()
         }
         isLoading = false
-    }
-
-    // Автоинкремент прогресса, пока showAnalysis = true.
-    // Держим прогресс в коридоре [0.05 .. 0.92], чтобы оставлять «пространство» для завершения (1.0).
-    LaunchedEffect(showAnalysis) {
-        if (showAnalysis) {
-            // “раскачка”, чтобы избежать залипания на 0
-            if (progress < 0.05f) progress = 0.05f
-            var tick = 0
-            while (showAnalysis) {
-                delay(120)
-                tick++
-
-                // Плавный рост; чуть замедляем по мере приближения к верхней границе
-                val cap = 0.92f
-                val step = when {
-                    progress < 0.25f -> 0.015f
-                    progress < 0.5f  -> 0.010f
-                    progress < 0.75f -> 0.006f
-                    else             -> 0.003f
-                }
-                progress = (progress + step).coerceAtMost(cap)
-
-                // Подсказки статуса для UX
-                progressText = when {
-                    progress < 0.15f -> "Подготовка…"
-                    progress < 0.35f -> "Анализ позиций…"
-                    progress < 0.6f  -> "Классификация ходов…"
-                    progress < 0.8f  -> "Расчёт точности и ACPL…"
-                    else             -> "Формирование отчёта…"
-                }
-            }
-        }
     }
 
     Scaffold(
@@ -101,22 +78,12 @@ fun GamesListScreen(
     ) { padding ->
         when {
             isLoading -> {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .padding(padding),
-                    contentAlignment = Alignment.Center
-                ) {
+                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
             }
             items.isEmpty() -> {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .padding(padding),
-                    contentAlignment = Alignment.Center
-                ) {
+                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                     Text("Партий не найдено")
                 }
             }
@@ -125,47 +92,61 @@ fun GamesListScreen(
                     LazyColumn(Modifier.fillMaxSize()) {
                         itemsIndexed(items) { _, g ->
                             ListItem(
-                                headlineContent = {
-                                    Text(g.opening ?: (g.eco ?: "—"), fontWeight = FontWeight.SemiBold)
-                                },
-                                overlineContent = {
-                                    Text("${g.white ?: "White"} vs ${g.black ?: "Black"} • ${g.result ?: ""}")
-                                },
+                                headlineContent = { Text(g.opening ?: (g.eco ?: "—"), fontWeight = FontWeight.SemiBold) },
+                                overlineContent = { Text("${g.white ?: "White"} vs ${g.black ?: "Black"} • ${g.result ?: ""}") },
                                 supportingContent = { Text(g.date ?: "") },
                                 modifier = Modifier.clickable {
                                     scope.launch {
-                                        val pgn = g.pgn
-                                        if (pgn.isNullOrBlank()) {
-                                            Toast.makeText(context, "PGN не найден", Toast.LENGTH_SHORT).show()
-                                            return@launch
-                                        }
-
-                                        // Показать оверлей прогресса
-                                        showAnalysis = true
-                                        progress = 0.0f
-                                        progressText = "Подготовка…"
-
                                         try {
-                                            // Небольшой стартовый апдейт,
-                                            // дальше LaunchedEffect(showAnalysis) начнёт плавный автораст
-                                            progress = 0.08f
-                                            progressText = "Анализ позиций…"
+                                            val pgn = g.pgn
+                                            if (pgn.isNullOrBlank()) {
+                                                Toast.makeText(context, "PGN не найден", Toast.LENGTH_SHORT).show()
+                                                return@launch
+                                            }
 
-                                            // Полный анализ партии -> формирование отчёта
-                                            // ВАЖНО: передаём именно текущий заголовок g
-                                            val report = buildReportFromPgn(
-                                                header = g,
-                                                openingFens = openingFens,
+                                            // Разбор PGN на устройстве (FEN/UCIs)
+                                            showAnalysis = true
+                                            stage = "Разбор PGN…"
+                                            progress = 0.02f
+                                            val built = PgnToFens.fromPgn(pgn)
+                                            if (built.fens.isEmpty() || built.uciMoves.isEmpty()) {
+                                                showAnalysis = false
+                                                Toast.makeText(context, "Не удалось распарсить PGN", Toast.LENGTH_SHORT).show()
+                                                return@launch
+                                            }
+
+                                            // Старт «реального» анализа с прогрессом
+                                            stage = "Ожидание сервера…"
+                                            progress = 0.05f
+                                            done = 0
+                                            total = built.fens.size
+                                            etaMs = null
+
+                                            val report = analyzeGameByFensWithProgress(
+                                                fens = built.fens,
+                                                uciMoves = built.uciMoves,
                                                 depth = 14,
-                                                throttleMs = 40L
-                                            )
+                                                multiPv = 1,
+                                                header = built.header
+                                            ) { snap ->
+                                                // Апдейты прогресса приходят с сервера
+                                                total = snap.total
+                                                done = snap.done
+                                                stage = when (snap.stage) {
+                                                    "queued"      -> "В очереди…"
+                                                    "preparing"   -> "Подготовка…"
+                                                    "evaluating"  -> "Анализ позиций…"
+                                                    "postprocess" -> "Постобработка…"
+                                                    "done"        -> "Готово"
+                                                    else          -> "Анализ…"
+                                                }
+                                                progress = if (snap.total > 0)
+                                                    snap.done.toFloat() / snap.total.toFloat()
+                                                else progress
+                                                etaMs = snap.etaMs
+                                            }
 
-                                            // Завершение: добиваем до 100% и закрываем оверлей
-                                            progressText = "Готово"
-                                            progress = 1f
-                                            delay(120) // короткая задержка, чтобы пользователь увидел 100%
                                             showAnalysis = false
-
                                             onOpenReport(report)
                                         } catch (t: Throwable) {
                                             showAnalysis = false
@@ -183,30 +164,29 @@ fun GamesListScreen(
                     }
 
                     if (showAnalysis) {
-                        Box(
-                            Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Surface(
-                                tonalElevation = 6.dp,
-                                shape = MaterialTheme.shapes.medium
-                            ) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Surface(tonalElevation = 6.dp, shape = MaterialTheme.shapes.medium) {
                                 Column(
-                                    Modifier
-                                        .widthIn(min = 280.dp)
-                                        .padding(20.dp),
+                                    Modifier.widthIn(min = 300.dp).padding(20.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
                                     Text("Анализ партии", style = MaterialTheme.typography.titleMedium)
                                     Spacer(Modifier.height(12.dp))
                                     LinearProgressIndicator(
-                                        progress = { progress },
+                                        progress = { progress.coerceIn(0f, 1f) },
                                         modifier = Modifier.fillMaxWidth()
                                     )
                                     Spacer(Modifier.height(8.dp))
-                                    Text(progressText)
-                                    Spacer(Modifier.height(6.dp))
-                                    Text("${(progress * 100).toInt()}%")
+                                    Text(
+                                        text = buildString {
+                                            append(stage)
+                                            if (total > 0) {
+                                                append("  •  ")
+                                                append("$done/$total позиций")
+                                            }
+                                            append("  •  ETA: ${formatEta(etaMs)}")
+                                        }
+                                    )
                                 }
                             }
                         }
