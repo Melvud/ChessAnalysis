@@ -71,6 +71,15 @@ export const getMovesClassification = (
 
     const prevPosition = rawPositions[index - 1];
 
+    // Проверяем наличие линий в предыдущей позиции
+    if (!prevPosition.lines || prevPosition.lines.length === 0) {
+      return {
+        ...rawPosition,
+        opening: currentOpening,
+        moveClassification: MoveClassification.Okay,
+      };
+    }
+
     // Если у предыдущей позиции только одна линия, ход форсированный
     if (prevPosition.lines.length === 1) {
       return {
@@ -88,13 +97,22 @@ export const getMovesClassification = (
       ? getLineWinPercentage(lastPositionAlternativeLine)
       : undefined;
 
+    // Проверяем наличие линий в текущей позиции
+    if (!rawPosition.lines || rawPosition.lines.length === 0) {
+      return {
+        ...rawPosition,
+        opening: currentOpening,
+        moveClassification: MoveClassification.Okay,
+      };
+    }
+
     // Лучший вариант для текущей позиции (пв первой линии)
     const bestLinePvToPlay = rawPosition.lines[0].pv;
 
     const lastPositionWinPercentage = positionsWinPercentage[index - 1];
     const positionWinPercentage = positionsWinPercentage[index];
     // index = позиция после хода; index % 2 === 1 означает ход белых
-    const isWhiteMove = index % 2 === 1;
+    const isWhiteMove = index % 2 === 0;
 
     // Проверка на Splendid (жертва фигуры с компенсацией)
     if (
@@ -347,11 +365,15 @@ const isSimplePieceRecapture = (
   fen: string,
   uciMoves: [string, string]
 ): boolean => {
-  const game = new Chess(fen);
-  const moves = uciMoves.map((uciMove) => uciMoveParams(uciMove));
-  if (moves[0].to !== moves[1].to) return false;
-  const piece = game.get(moves[0].to as any);
-  return !!piece;
+  try {
+    const game = new Chess(fen);
+    const moves = uciMoves.map((uciMove) => uciMoveParams(uciMove));
+    if (moves[0].to !== moves[1].to) return false;
+    const piece = game.get(moves[0].to as any);
+    return !!piece;
+  } catch {
+    return false;
+  }
 };
 
 /**
@@ -359,13 +381,17 @@ const isSimplePieceRecapture = (
  * преимущество). Используется в getIsPieceSacrifice.
  */
 const getMaterialDifference = (fen: string): number => {
-  const game = new Chess(fen);
-  const board = game.board().flat();
-  return board.reduce((acc, square: any) => {
-    if (!square) return acc;
-    const value = getPieceValue(square.type as PieceSymbol);
-    return square.color === "w" ? acc + value : acc - value;
-  }, 0);
+  try {
+    const game = new Chess(fen);
+    const board = game.board().flat();
+    return board.reduce((acc, square: any) => {
+      if (!square) return acc;
+      const value = getPieceValue(square.type as PieceSymbol);
+      return square.color === "w" ? acc + value : acc - value;
+    }, 0);
+  } catch {
+    return 0;
+  }
 };
 
 // Оценка стоимости фигуры по типу
@@ -393,47 +419,51 @@ const getIsPieceSacrifice = (
   playedMove: string,
   bestLinePvToPlay: string[]
 ): boolean => {
-  if (!bestLinePvToPlay.length) return false;
-  const game = new Chess(fen);
-  const whiteToPlay = game.turn() === "w";
-  const startingMaterialDifference = getMaterialDifference(fen);
-  let moves: string[] = [playedMove, ...bestLinePvToPlay];
-  if (moves.length % 2 === 1) {
-    moves = moves.slice(0, -1);
-  }
-  let nonCapturingMovesTemp = 1;
-  const capturedPieces: { w: PieceSymbol[]; b: PieceSymbol[] } = { w: [], b: [] };
-  for (const move of moves) {
-    try {
-      const fullMove = game.move(uciMoveParams(move) as any);
-      if (fullMove && fullMove.captured) {
-        capturedPieces[fullMove.color as "w" | "b"].push(fullMove.captured as PieceSymbol);
-        nonCapturingMovesTemp = 1;
-      } else {
-        nonCapturingMovesTemp--;
-        if (nonCapturingMovesTemp < 0) break;
+  try {
+    if (!bestLinePvToPlay.length) return false;
+    const game = new Chess(fen);
+    const whiteToPlay = game.turn() === "w";
+    const startingMaterialDifference = getMaterialDifference(fen);
+    let moves: string[] = [playedMove, ...bestLinePvToPlay];
+    if (moves.length % 2 === 1) {
+      moves = moves.slice(0, -1);
+    }
+    let nonCapturingMovesTemp = 1;
+    const capturedPieces: { w: PieceSymbol[]; b: PieceSymbol[] } = { w: [], b: [] };
+    for (const move of moves) {
+      try {
+        const fullMove = game.move(uciMoveParams(move) as any);
+        if (fullMove && fullMove.captured) {
+          capturedPieces[fullMove.color as "w" | "b"].push(fullMove.captured as PieceSymbol);
+          nonCapturingMovesTemp = 1;
+        } else {
+          nonCapturingMovesTemp--;
+          if (nonCapturingMovesTemp < 0) break;
+        }
+      } catch {
+        return false;
       }
-    } catch {
+    }
+    // Удаляем взаимные размены
+    for (const p of capturedPieces["w"].slice()) {
+      const idx = capturedPieces["b"].indexOf(p);
+      if (idx >= 0) {
+        capturedPieces["b"].splice(idx, 1);
+        capturedPieces["w"].splice(capturedPieces["w"].indexOf(p), 1);
+      }
+    }
+    // Если разница захваченных фигур не более 1 и все они пешки, не считаем жертвой
+    if (
+      Math.abs(capturedPieces["w"].length - capturedPieces["b"].length) <= 1 &&
+      capturedPieces["w"].concat(capturedPieces["b"]).every((p) => p === "p")
+    ) {
       return false;
     }
-  }
-  // Удаляем взаимные размены
-  for (const p of capturedPieces["w"].slice()) {
-    const idx = capturedPieces["b"].indexOf(p);
-    if (idx >= 0) {
-      capturedPieces["b"].splice(idx, 1);
-      capturedPieces["w"].splice(capturedPieces["w"].indexOf(p), 1);
-    }
-  }
-  // Если разница захваченных фигур не более 1 и все они пешки, не считаем жертвой
-  if (
-    Math.abs(capturedPieces["w"].length - capturedPieces["b"].length) <= 1 &&
-    capturedPieces["w"].concat(capturedPieces["b"]).every((p) => p === "p")
-  ) {
+    const endingMaterialDifference = getMaterialDifference(game.fen());
+    const materialDiff = endingMaterialDifference - startingMaterialDifference;
+    const materialDiffPlayerRelative = whiteToPlay ? materialDiff : -materialDiff;
+    return materialDiffPlayerRelative < 0;
+  } catch {
     return false;
   }
-  const endingMaterialDifference = getMaterialDifference(game.fen());
-  const materialDiff = endingMaterialDifference - startingMaterialDifference;
-  const materialDiffPlayerRelative = whiteToPlay ? materialDiff : -materialDiff;
-  return materialDiffPlayerRelative < 0;
 };

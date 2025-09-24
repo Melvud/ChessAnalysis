@@ -12,7 +12,17 @@ import { getPositionWinPercentage } from "./winPercentage";
  * Для каждого хода определяется потеря win% и преобразуется в 0–100.
  */
 export const computeAccuracy = (positions: PositionEval[]): Accuracy => {
-  const positionsWinPercentage = positions.map(getPositionWinPercentage);
+  // Фильтруем позиции с валидными линиями
+  const validPositions = positions.filter(p => p.lines && p.lines.length > 0);
+  
+  if (validPositions.length < 2) {
+    return {
+      white: 0,
+      black: 0,
+    };
+  }
+
+  const positionsWinPercentage = validPositions.map(getPositionWinPercentage);
 
   const weights = getAccuracyWeights(positionsWinPercentage);
   const movesAccuracy = getMovesAccuracy(positionsWinPercentage);
@@ -40,6 +50,10 @@ const getPlayerAccuracy = (
     (_, index) => index % 2 === remainder
   );
   const playerWeights = weights.filter((_, index) => index % 2 === remainder);
+
+  if (playerAccuracies.length === 0) {
+    return 0;
+  }
 
   const weightedMean = getWeightedMean(playerAccuracies, playerWeights);
   const harmonicMean = getHarmonicMean(playerAccuracies);

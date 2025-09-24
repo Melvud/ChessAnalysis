@@ -14,26 +14,32 @@ export const computeEstimatedElo = (
     return undefined;
   }
 
-  const { whiteCpl, blackCpl } = getPlayersAverageCpl(positions);
+  try {
+    const { whiteCpl, blackCpl } = getPlayersAverageCpl(positions);
 
-  const whiteEstimatedElo = getEloFromRatingAndCpl(
-    whiteCpl,
-    whiteElo ?? blackElo
-  );
-  const blackEstimatedElo = getEloFromRatingAndCpl(
-    blackCpl,
-    blackElo ?? whiteElo
-  );
+    const whiteEstimatedElo = getEloFromRatingAndCpl(
+      whiteCpl,
+      whiteElo ?? blackElo
+    );
+    const blackEstimatedElo = getEloFromRatingAndCpl(
+      blackCpl,
+      blackElo ?? whiteElo
+    );
 
-  return { white: whiteEstimatedElo, black: blackEstimatedElo };
+    return { white: whiteEstimatedElo, black: blackEstimatedElo };
+  } catch (error) {
+    // Если не удалось вычислить CPL, возвращаем undefined
+    console.warn("Failed to compute estimated ELO:", error);
+    return undefined;
+  }
 };
 
-// Получаем оценку позиции в центимату по логике Chesskit
-const getPositionCp = (position: PositionEval): number => {
+// Получаем оценку позиции в центипешках по логике Chesskit
+const getPositionCp = (position: PositionEval): number | null => {
   const line0 = position?.lines?.[0];
   if (!line0) {
-    // Явно сигнализируем, что движок не вернул линию для позиции
-    throw new Error("missing_primary_line");
+    // Возвращаем null вместо выброса исключения
+    return null;
   }
 
   if (line0.cp !== undefined) {
@@ -45,32 +51,46 @@ const getPositionCp = (position: PositionEval): number => {
     return ceilsNumber(line0.mate * Infinity, -1000, 1000);
   }
 
-  throw new Error("missing_cp_and_mate");
+  return null;
 };
 
 
 /**
  * Для каждой стороны суммирует потери (cpl) и делит на фиксированное количество ходов.
- * Не пропускает ходы — все позиции должны иметь cp или mate.
+ * Пропускает позиции без оценок.
  */
 const getPlayersAverageCpl = (
   positions: PositionEval[]
 ): { whiteCpl: number; blackCpl: number } => {
   // Начинаем со значения cp первой позиции
-  let previousCp = getPositionCp(positions[0]);
+  const firstCp = getPositionCp(positions[0]);
+  if (firstCp === null) {
+    // Если первая позиция не имеет оценки, возвращаем нулевые потери
+    return { whiteCpl: 0, blackCpl: 0 };
+  }
+  
+  let previousCp = firstCp;
+  let whiteCount = 0;
+  let blackCount = 0;
 
-  // Суммируем потери cp для каждой стороны. Не пропускаем ходы,
-  // даже если оценок нет, поскольку getPositionCp бросит исключение
+  // Суммируем потери cp для каждой стороны, пропуская позиции без оценок
   const { whiteCpl, blackCpl } = positions.slice(1).reduce(
     (acc, position, index) => {
       const cp = getPositionCp(position);
+      
+      // Пропускаем позицию если нет оценки
+      if (cp === null) {
+        return acc;
+      }
 
       if (index % 2 === 0) {
         // белые ходили
         acc.whiteCpl += cp > previousCp ? 0 : Math.min(previousCp - cp, 1000);
+        whiteCount++;
       } else {
         // чёрные ходили
         acc.blackCpl += cp < previousCp ? 0 : Math.min(cp - previousCp, 1000);
+        blackCount++;
       }
 
       previousCp = cp;
@@ -79,10 +99,10 @@ const getPlayersAverageCpl = (
     { whiteCpl: 0, blackCpl: 0 }
   );
 
-  // Делим на фиксированное количество ходов для каждой стороны
+  // Делим на количество учтенных ходов для каждой стороны
   return {
-    whiteCpl: whiteCpl / Math.ceil((positions.length - 1) / 2),
-    blackCpl: blackCpl / Math.floor((positions.length - 1) / 2),
+    whiteCpl: whiteCount > 0 ? whiteCpl / whiteCount : 0,
+    blackCpl: blackCount > 0 ? blackCpl / blackCount : 0,
   };
 };
 

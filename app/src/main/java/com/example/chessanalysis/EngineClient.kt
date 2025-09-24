@@ -1,5 +1,6 @@
 package com.example.chessanalysis
 
+import android.annotation.SuppressLint
 import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.serialization.Serializable
@@ -45,6 +46,7 @@ private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 private const val UA = "ChessAnalysis/1.5 (+android; local-server)"
 
 // ---------- DTO ----------
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class LineDTO(
     val pv: List<String> = emptyList(),
@@ -54,12 +56,14 @@ data class LineDTO(
     val multiPv: Int? = null
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class PositionDTO(
     val lines: List<LineDTO> = emptyList(),
     val bestMove: String? = null
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class StockfishResponse(
     val success: Boolean,
@@ -70,6 +74,7 @@ data class StockfishResponse(
     val error: String? = null
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class GameFullRequest(
     val pgn: String,
@@ -77,6 +82,7 @@ data class GameFullRequest(
     val multiPv: Int = 3
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class GameByFensRequest(
     val fens: List<String>,
@@ -86,6 +92,7 @@ data class GameByFensRequest(
     val header: GameHeader? = null
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class ProgressSnapshot(
     val id: String,

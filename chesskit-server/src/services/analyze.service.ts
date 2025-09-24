@@ -33,6 +33,7 @@ export type EvaluateOptions = {
 export type EvaluateFensInput = {
   fens: string[];
   uciMoves?: string[];
+  header?: GameHeader;
 };
 
 export type EvaluateGameInput = {
@@ -41,13 +42,12 @@ export type EvaluateGameInput = {
   depth?: number;
   multiPv?: number;
   playersRatings?: { white?: number; black?: number };
+  header?: GameHeader;
 };
 
 function now() {
   return Date.now();
 }
-
-// Классификация ходов определяется функцией getMovesClassification из algorithms/moveClassification
 
 export class AnalyzeService {
   constructor(private readonly pool: EnginePool) {}
@@ -75,32 +75,6 @@ export class AnalyzeService {
       }
 
       const parsed = parseEvaluationResults(result.lines, fen, multiPv);
-
-      // Диагностика одиночной позиции: где пропадает primary line
-      try {
-        const primary = (parsed?.lines ?? [])[0] as any;
-        const needWarn =
-          !primary ||
-          (typeof primary?.cp !== "number" && typeof primary?.mate !== "number");
-        if (needWarn || (Array.isArray((result as any)?.lines) && (result as any).lines.length < (multiPv ?? 3))) {
-          const safe = (v: any) => {
-            try {
-              const s = JSON.stringify(v);
-              return s.length > 800 ? s.slice(0, 800) + "…" : s;
-            } catch {
-              return String(v);
-            }
-          };
-          console.warn("[analyze] engine lines anomaly", {
-            fen,
-            wantMulti: multiPv ?? 3,
-            got: Array.isArray((result as any)?.lines) ? (result as any).lines.length : "n/a",
-            firstRaw: (result as any)?.lines?.[0],
-            firstParsed: primary,
-          });
-        }
-      } catch {}
-
       return parsed;
     } finally {
       this.pool.release(engine);
@@ -109,7 +83,7 @@ export class AnalyzeService {
 
   // Анализ игры по всем FEN'ам и UCI-ходам
   async evaluateGame(input: EvaluateGameInput): Promise<FullReport> {
-    const { fens, uciMoves, depth = 14, multiPv = 3, playersRatings } = input;
+    const { fens, uciMoves, depth = 14, multiPv = 3, playersRatings, header } = input;
     
     const positions: PositionEval[] = [];
     const analysisLog: string[] = [];
@@ -130,30 +104,6 @@ export class AnalyzeService {
         });
         
         const parsed = parseEvaluationResults(result.lines, fen, multiPv);
-
-        // Диагностический лог: где пропадает primary line / меньше линий, чем multiPv
-        try {
-          const primary = (parsed?.lines ?? [])[0] as any;
-          const needWarn =
-            !primary ||
-            (typeof primary?.cp !== "number" && typeof primary?.mate !== "number");
-          if (needWarn || (Array.isArray((result as any)?.lines) && (result as any).lines.length < (multiPv ?? 3))) {
-            const safe = (v: any) => {
-              try {
-                const s = JSON.stringify(v);
-                return s.length > 800 ? s.slice(0, 800) + "…" : s;
-              } catch {
-                return String(v);
-              }
-            };
-            analysisLog.push(
-              `WARN engine lines anomaly at idx=${i} wantMulti=${multiPv ?? 3} ` +
-              `got=${Array.isArray((result as any)?.lines) ? (result as any).lines.length : "n/a"}; ` +
-              `firstRaw=${safe((result as any)?.lines?.[0])}; firstParsed=${safe(primary)}; fen=${fen}`
-            );
-          }
-        } catch {}
-
         positions.push(parsed);
         
         analysisLog.push(`Position ${i}/${fens.length} analyzed`);
@@ -175,11 +125,12 @@ export class AnalyzeService {
       const winBefore = this.getWinPercentage(beforePos);
       const winAfter = this.getWinPercentage(afterPos);
       
-      // Определяем, кто ходил (четный индекс = белые, нечетный = чёрные)
+      // Определяем, кто ходил (i четный = белые, i нечетный = чёрные)
       const isWhiteMove = i % 2 === 0;
       
-      // Классификация из getMovesClassification. Берём следующую позицию (после хода)
-      const classification = (classifiedPositions[i + 1] as any).moveClassification as MoveClass;
+      // Берём классификацию из classifiedPositions
+      const classifiedPos = classifiedPositions[i + 1];
+      const classification = (classifiedPos as any)?.moveClassification;
       
       // Конвертируем UCI в SAN
       const chess = new Chess();
@@ -220,8 +171,8 @@ export class AnalyzeService {
     const acpl = computeAcpl(positions);
     const estimatedElo = computeEstimatedElo(
       positions, 
-      playersRatings?.white, 
-      playersRatings?.black
+      playersRatings?.white || (header as any)?.whiteElo, 
+      playersRatings?.black || (header as any)?.blackElo
     );
     
     // Формируем финальную точность  
@@ -241,7 +192,7 @@ export class AnalyzeService {
     const clientPositions: ClientPositionEval[] = positions.map((p, idx) => ({
       fen: fens[idx],
       idx,
-      lines: p.lines.map(l => ({
+      lines: (p.lines || []).map(l => ({
         pv: l.pv,
         cp: l.cp,
         mate: l.mate,
@@ -250,7 +201,7 @@ export class AnalyzeService {
     }));
     
     const report: FullReport = {
-      header: {} as GameHeader,
+      header: header || ({} as GameHeader),
       positions: clientPositions,
       moves,
       accuracy: accuracySummary,
@@ -273,6 +224,7 @@ export class AnalyzeService {
   ): Promise<FullReport> {
     const fens = payload?.fens ?? [];
     const uciMoves = payload?.uciMoves ?? [];
+    const header = payload?.header;
     
     if (!Array.isArray(fens) || fens.length === 0) {
       throw new Error("fens is required and must be a non-empty array");
@@ -294,7 +246,7 @@ export class AnalyzeService {
 
     // Запускаем анализ в фоне
     setImmediate(() => {
-      this.runEvaluation(progressId, fens, uciMoves, { depth, movetime, multiPv })
+      this.runEvaluation(progressId, fens, uciMoves, { depth, movetime, multiPv }, header)
         .catch((err) => {
           progressStore.fail(progressId, "analyze_failed", err?.message || String(err));
         });
@@ -316,7 +268,8 @@ export class AnalyzeService {
     progressId: string,
     fens: string[],
     uciMoves: string[],
-    cfg: { depth?: number; movetime?: number; multiPv?: number }
+    cfg: { depth?: number; movetime?: number; multiPv?: number },
+    header?: GameHeader
   ) {
     const positions: PositionEval[] = [];
     const engine = await this.pool.acquire();
@@ -338,7 +291,6 @@ export class AnalyzeService {
         });
 
         const parsed = parseEvaluationResults(result.lines, fens[i], cfg.multiPv ?? 3);
-        // (на этапе прогресса не добавляем в analysisLog, он формируется в evaluateGame)
         positions.push(parsed);
 
         progressStore.update(progressId, {
@@ -351,17 +303,111 @@ export class AnalyzeService {
       this.pool.release(engine);
     }
 
-    // Создаём полный отчёт с правильными данными
-    const report = await this.evaluateGame({
-      fens,
-      uciMoves,
-      depth: cfg.depth,
-      multiPv: cfg.multiPv ?? 3,
-      playersRatings: {}
-    });
-    
-    progressStore.setResult(progressId, report);
-    progressStore.complete(progressId);
+    // НЕ вызываем evaluateGame снова! Используем уже проанализированные позиции
+    try {
+      // Создаем классифицированные позиции
+      const classifiedPositions = getMovesClassification(positions, uciMoves, fens);
+
+      // Создание отчётов по ходам
+      const moves: MoveReport[] = [];
+      for (let i = 0; i < uciMoves.length; i++) {
+        const beforePos = positions[i];
+        const afterPos = positions[i + 1];
+        if (!afterPos) break;
+        
+        const winBefore = this.getWinPercentage(beforePos);
+        const winAfter = this.getWinPercentage(afterPos);
+        
+        const isWhiteMove = i % 2 === 0;
+        
+        const classifiedPos = classifiedPositions[i + 1];
+        const classification = (classifiedPos as any)?.moveClassification;
+        
+        const chess = new Chess();
+        chess.load(fens[i]);
+        const fromSquare = uciMoves[i].slice(0, 2);
+        const toSquare = uciMoves[i].slice(2, 4);
+        const promotion = uciMoves[i][4];
+        
+        let san = uciMoves[i];
+        try {
+          const move = chess.move({
+            from: fromSquare,
+            to: toSquare,
+            promotion: promotion as any,
+          });
+          if (move) san = move.san;
+        } catch {
+          // оставляем UCI
+        }
+        
+        const moveReport: MoveReport = {
+          san,
+          uci: uciMoves[i],
+          beforeFen: fens[i],
+          afterFen: fens[i + 1],
+          winBefore,
+          winAfter,
+          accuracy: this.getMoveAccuracy(winBefore, winAfter, isWhiteMove),
+          classification,
+          tags: [],
+        };
+        
+        moves.push(moveReport);
+      }
+      
+      // Вычисление метрик
+      const accuracy = computeAccuracy(positions);
+      const acpl = computeAcpl(positions);
+      const estimatedElo = computeEstimatedElo(
+        positions, 
+        (header as any)?.whiteElo, 
+        (header as any)?.blackElo
+      );
+      
+      const accuracySummary: AccuracySummary = {
+        whiteMovesAcc: {
+          itera: accuracy.white,
+          harmonic: accuracy.white,
+          weighted: accuracy.white
+        },
+        blackMovesAcc: {
+          itera: accuracy.black,
+          harmonic: accuracy.black, 
+          weighted: accuracy.black
+        }
+      };
+      
+      const clientPositions: ClientPositionEval[] = positions.map((p, idx) => ({
+        fen: fens[idx],
+        idx,
+        lines: (p.lines || []).map(l => ({
+          pv: l.pv,
+          cp: l.cp,
+          mate: l.mate,
+          best: p.bestMove
+        } as ClientLineEval))
+      }));
+      
+      const report: FullReport = {
+        header: header || ({} as GameHeader),
+        positions: clientPositions,
+        moves,
+        accuracy: accuracySummary,
+        acpl,
+        estimatedElo: {
+          whiteEst: estimatedElo?.white ? Math.round(estimatedElo.white) : undefined,
+          blackEst: estimatedElo?.black ? Math.round(estimatedElo.black) : undefined
+        },
+        analysisLog: [`Analysis completed with ${positions.length} positions`]
+      };
+      
+      progressStore.setResult(progressId, report);
+      progressStore.complete(progressId);
+    } catch (error) {
+      console.error("Error creating report:", error);
+      progressStore.fail(progressId, "report_failed", String(error));
+    }
   }
 
   // Ожидаем завершения фонового анализа
@@ -391,9 +437,9 @@ export class AnalyzeService {
     }
   }
 
-  // Преобразует оценку позиции (cp/mate) в вероятность выигрыша текущей стороны
+  // Преобразует оценку позиции (cp/mate) в вероятность выигрыша с точки зрения БЕЛЫХ
   private getWinPercentage(position: PositionEval): number {
-    const line = position.lines?.[0];
+    const line = position?.lines?.[0];
     if (!line) return 50;
     
     if (line.cp !== undefined) {
