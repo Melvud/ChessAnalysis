@@ -76,8 +76,10 @@ fun ReportScreen(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // График оценок
             EvalSparkline(report)
 
+            // Карточка с точностью игроков
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -101,9 +103,10 @@ fun ReportScreen(
                 )
             }
 
+            // Таблица классификаций ходов
             ClassificationTable(report)
 
-            // Карточка с перформансом обоих игроков
+            // Карточка с оценкой перформанса (Elo)
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2A27)),
                 shape = RoundedCornerShape(12.dp),
@@ -160,23 +163,27 @@ fun ReportScreen(
 @Composable
 private fun PlayerColumn(name: String, acc: AccByColor, acpl: Int, inverted: Boolean) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        // Аватар игрока
         Image(
             painter = painterResource(R.drawable.opening),
             contentDescription = null,
             modifier = Modifier.size(48.dp)
         )
         Spacer(Modifier.height(8.dp))
+
+        // Имя игрока
         Text(name, color = Color.LightGray)
         Spacer(Modifier.height(8.dp))
 
-        // Финальная точность = (weighted + harmonic) / 2
-        val finalAcc = (acc.weighted + acc.harmonic) / 2.0
+        // Главная точность - используем готовое значение itera с сервера
         StatBox(
-            value = String.format("%.1f%%", finalAcc),
+            value = String.format("%.1f%%", acc.itera),
             dark = inverted
         )
 
         Spacer(Modifier.height(6.dp))
+
+        // Дополнительная информация
         Text(
             text = String.format("harm=%.1f%%  ACPL=%d", acc.harmonic, acpl),
             color = Color(0xFFBDBDBD),
@@ -220,11 +227,13 @@ private fun ClassificationTable(report: FullReport) {
         Triple("Зевок", R.drawable.blunder, MoveClass.BLUNDER)
     )
 
-    val w = mutableMapOf<MoveClass, Int>().withDefault { 0 }
-    val b = mutableMapOf<MoveClass, Int>().withDefault { 0 }
-    report.moves.forEachIndexed { i, m ->
-        val map = if (i % 2 == 0) w else b
-        map[m.classification] = map.getValue(m.classification) + 1
+    // Подсчет ходов по классификациям для каждого цвета
+    val whiteMovesMap = mutableMapOf<MoveClass, Int>().withDefault { 0 }
+    val blackMovesMap = mutableMapOf<MoveClass, Int>().withDefault { 0 }
+
+    report.moves.forEachIndexed { index, move ->
+        val targetMap = if (index % 2 == 0) whiteMovesMap else blackMovesMap
+        targetMap[move.classification] = targetMap.getValue(move.classification) + 1
     }
 
     Card(
@@ -233,6 +242,7 @@ private fun ClassificationTable(report: FullReport) {
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.fillMaxWidth()) {
+            // Заголовок таблицы
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -248,7 +258,8 @@ private fun ClassificationTable(report: FullReport) {
             }
             Divider(color = Color(0xFF3A3936))
 
-            rows.forEach { (label, icon, cls) ->
+            // Строки таблицы
+            rows.forEach { (label, icon, moveClass) ->
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -265,7 +276,7 @@ private fun ClassificationTable(report: FullReport) {
                         Text(label, color = Color.White)
                     }
                     Text(
-                        w.getValue(cls).toString(),
+                        whiteMovesMap.getValue(moveClass).toString(),
                         color = Color(0xFF59C156),
                         textAlign = TextAlign.End,
                         fontFamily = FontFamily.Monospace,
@@ -273,7 +284,7 @@ private fun ClassificationTable(report: FullReport) {
                     )
                     Spacer(Modifier.width(24.dp))
                     Text(
-                        b.getValue(cls).toString(),
+                        blackMovesMap.getValue(moveClass).toString(),
                         color = Color(0xFF59C156),
                         textAlign = TextAlign.End,
                         fontFamily = FontFamily.Monospace,
@@ -288,11 +299,19 @@ private fun ClassificationTable(report: FullReport) {
 
 @Composable
 private fun EvalSparkline(report: FullReport) {
-    val values = report.positions.mapNotNull { it.lines.firstOrNull()?.cp?.toFloat() }
-    if (values.isEmpty()) return
+    // Извлекаем оценки из позиций
+    val evaluations = report.positions.mapNotNull { position ->
+        position.lines.firstOrNull()?.cp?.toFloat()
+    }
+
+    if (evaluations.isEmpty()) return
+
+    // Ограничиваем значения для визуализации
     val minCp = -800f
     val maxCp = 800f
-    val norm = values.map { v -> max(min(v, maxCp), minCp) }
+    val normalizedValues = evaluations.map { value ->
+        max(min(value, maxCp), minCp)
+    }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2A27)),
@@ -301,16 +320,28 @@ private fun EvalSparkline(report: FullReport) {
             .fillMaxWidth()
             .height(84.dp)
     ) {
-        Canvas(Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 16.dp)) {
-            val w = size.width
-            val h = size.height
+        Canvas(
+            Modifier
+                .fillMaxSize()
+                .padding(horizontal = 8.dp, vertical = 16.dp)
+        ) {
+            val width = size.width
+            val height = size.height
             val path = Path()
-            val stepX = if (norm.size <= 1) 0f else w / (norm.size - 1)
-            norm.forEachIndexed { i, v ->
-                val y = h * (1f - (v - minCp) / (maxCp - minCp))
-                val x = i * stepX
-                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+
+            val stepX = if (normalizedValues.size <= 1) 0f else width / (normalizedValues.size - 1)
+
+            normalizedValues.forEachIndexed { index, value ->
+                val y = height * (1f - (value - minCp) / (maxCp - minCp))
+                val x = index * stepX
+
+                if (index == 0) {
+                    path.moveTo(x, y)
+                } else {
+                    path.lineTo(x, y)
+                }
             }
+
             drawPath(path, color = Color(0xFFBDBDBD))
         }
     }

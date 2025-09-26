@@ -1,5 +1,6 @@
 package com.example.chessanalysis
 
+import android.annotation.SuppressLint
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 
@@ -26,6 +27,7 @@ enum class MoveClass {
 }
 
 // Заголовок партии
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class GameHeader(
     val site: Provider? = null,
@@ -41,6 +43,7 @@ data class GameHeader(
 )
 
 // Линия оценки
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class LineEval(
     val pv: List<String> = emptyList(),
@@ -50,6 +53,7 @@ data class LineEval(
 )
 
 // Оценка позиции
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class PositionEval(
     val fen: String,
@@ -58,6 +62,7 @@ data class PositionEval(
 )
 
 // Отчёт по одному ходу
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class MoveReport(
     val san: String,
@@ -72,6 +77,7 @@ data class MoveReport(
 )
 
 // Точность по цветам
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class AccByColor(
     val itera: Double,
@@ -80,6 +86,7 @@ data class AccByColor(
 )
 
 // Сводка точности
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class AccuracySummary(
     val whiteMovesAcc: AccByColor,
@@ -87,6 +94,7 @@ data class AccuracySummary(
 )
 
 // ACPL
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class Acpl(
     val white: Int,
@@ -94,6 +102,7 @@ data class Acpl(
 )
 
 // Оценка перфоманса по ACPL/рейтингу
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class EstimatedElo(
     val whiteEst: Int? = null,
@@ -101,6 +110,7 @@ data class EstimatedElo(
 )
 
 // Полный отчёт, который отдаёт сервер и который рисует ReportScreen
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class FullReport(
     val header: GameHeader,

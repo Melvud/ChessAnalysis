@@ -106,37 +106,27 @@ fun GamesListScreen(
                                                 return@launch
                                             }
 
-                                            // Разбор PGN на устройстве (FEN/UCIs)
+                                            // Запускаем анализ PGN прямо на сервере
                                             showAnalysis = true
-                                            stage = "Разбор PGN…"
-                                            progress = 0.02f
-
-                                            Log.d("GamesListScreen", "Parsing PGN...")
-                                            val built = PgnToFens.fromPgn(pgn)
-
-                                            if (built.fens.isEmpty() || built.uciMoves.isEmpty()) {
-                                                showAnalysis = false
-                                                Toast.makeText(context, "Не удалось распарсить PGN", Toast.LENGTH_SHORT).show()
-                                                return@launch
-                                            }
-
-                                            Log.d("GamesListScreen", "FENs: ${built.fens.size}, UCIs: ${built.uciMoves.size}")
-
-                                            // Старт «реального» анализа с прогрессом
                                             stage = "Ожидание сервера…"
                                             progress = 0.05f
                                             done = 0
-                                            total = built.fens.size
+                                            total = 0
                                             etaMs = null
+
+                                            val header = try {
+                                                PgnChess.headerFromPgn(pgn)
+                                            } catch (_: Throwable) {
+                                                null
+                                            }
 
                                             Log.d("GamesListScreen", "Starting server analysis...")
                                             val report = try {
-                                                analyzeGameByFensWithProgress(
-                                                    fens = built.fens,
-                                                    uciMoves = built.uciMoves,
+                                                analyzeGameByPgnWithProgress(
+                                                    pgn = pgn,
                                                     depth = 15,
                                                     multiPv = 3,
-                                                    header = built.header
+                                                    header = header
                                                 ) { snap ->
                                                     // Апдейты прогресса приходят с сервера
                                                     total = snap.total
@@ -166,7 +156,7 @@ fun GamesListScreen(
 
                                             showAnalysis = false
 
-                                            // Открываем отчет
+                                            // Открываем отчёт
                                             Log.d("GamesListScreen", "Opening report screen...")
                                             onOpenReport(report)
 

@@ -94,6 +94,15 @@ data class GameByFensRequest(
 
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
+data class GamePgnRequest(
+    val pgn: String,
+    val depth: Int,
+    val multiPv: Int,
+    val header: GameHeader? = null
+)
+
+@SuppressLint("UnsafeOptInUsageError")
+@Serializable
 data class ProgressSnapshot(
     val id: String,
     val total: Int,
@@ -172,7 +181,6 @@ suspend fun analyzeGameByFensWithProgress(
                     if (arr != null) {
                         Log.d("EngineDiagnostics", "---- analysisLog (${arr.size}) [raw] ----")
                         arr.forEachIndexed { i, el ->
-                            // el — JsonElement, печатаем как строку без кавычек по краям
                             val line = el.toString().trim('"')
                             Log.d("EngineDiagnostics", "#$i $line")
                         }
@@ -202,7 +210,7 @@ suspend fun analyzeGameByFensWithProgress(
     }
 }
 
-/** Анализ без прогресса (на IO). */
+/** Анализ без прогресса (на IO) для FEN/UCIs. */
 suspend fun analyzeGameByFens(
     fens: List<String>,
     uciMoves: List<String>?,
@@ -249,6 +257,126 @@ suspend fun analyzeGameByFens(
             Log.d("EngineDiagnostics", "analysisLog size (decoded) = $size")
         } catch (_: Throwable) { /* игнор */ }
 
+        return@use report
+    }
+}
+
+/** Анализ партии по PGN с реальным прогрессом. */
+suspend fun analyzeGameByPgnWithProgress(
+    pgn: String,
+    depth: Int = 14,
+    multiPv: Int = 3,
+    header: GameHeader? = null,
+    onProgress: (ProgressSnapshot) -> Unit
+): FullReport = coroutineScope {
+    pingOrThrow()
+
+    val progressId = UUID.randomUUID().toString()
+
+    // запускаем опрос прогресса
+    val poller = launch(Dispatchers.IO) {
+        pollProgress(progressId, onProgress)
+    }
+
+    try {
+        withContext(Dispatchers.IO) {
+            val url = "$BASE/api/v1/evaluate/game?" +
+                    "progressId=$progressId" +
+                    "&depth=$depth" +
+                    "&multiPv=$multiPv"
+            val requestBody = buildJsonObject {
+                put("pgn", pgn)
+                header?.let { h ->
+                    put("header", json.encodeToJsonElement(h))
+                }
+            }
+            val payload = requestBody.toString()
+            val req = Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                .header("User-Agent", UA)
+                .header("Content-Type", "application/json")
+                .post(payload.toRequestBody(JSON_MEDIA))
+                .build()
+
+            client.newCall(req).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    throw IllegalStateException("HTTP ${resp.code}: ${body.take(300)}")
+                }
+                try {
+                    val root = Json.parseToJsonElement(body)
+                    val arr = root.jsonObject["analysisLog"]?.jsonArray
+                    if (arr != null) {
+                        Log.d("EngineDiagnostics", "---- analysisLog (${arr.size}) [raw] ----")
+                        arr.forEachIndexed { i, el ->
+                            val line = el.toString().trim('"')
+                            Log.d("EngineDiagnostics", "#$i $line")
+                        }
+                        Log.d("EngineDiagnostics", "---- end analysisLog [raw] ----")
+                    } else {
+                        Log.d("EngineDiagnostics", "analysisLog field not present in raw JSON")
+                    }
+                } catch (t: Throwable) {
+                    Log.w("EngineDiagnostics", "Failed to read analysisLog from raw body", t)
+                }
+                val report = json.decodeFromString<FullReport>(body)
+                try {
+                    val size = report.analysisLog?.size ?: 0
+                    Log.d("EngineDiagnostics", "analysisLog size (decoded) = $size")
+                } catch (_: Throwable) { }
+
+                return@withContext report
+            }
+        }
+    } finally {
+        poller.cancel()
+        poller.join()
+    }
+}
+
+/** Анализ партии по PGN без прогресса. */
+suspend fun analyzeGameByPgn(
+    pgn: String,
+    depth: Int = 14,
+    multiPv: Int = 3,
+    header: GameHeader? = null
+): FullReport = withContext(Dispatchers.IO) {
+    pingOrThrow()
+    val url = "$BASE/api/v1/evaluate/game"
+    val payload = json.encodeToString(GamePgnRequest(pgn, depth, multiPv, header))
+    val req = Request.Builder()
+        .url(url)
+        .header("Accept", "application/json")
+        .header("User-Agent", UA)
+        .post(payload.toRequestBody(JSON_MEDIA))
+        .build()
+    client.newCall(req).execute().use { resp ->
+        val body = resp.body?.string().orEmpty()
+        if (!resp.isSuccessful) {
+            throw IllegalStateException("http_${resp.code}: ${body.take(300)}")
+        }
+        try {
+            val root = Json.parseToJsonElement(body)
+            val arr = root.jsonObject["analysisLog"]?.jsonArray
+            if (arr != null) {
+                Log.d("EngineDiagnostics", "---- analysisLog (${arr.size}) [raw] ----")
+                arr.forEachIndexed { i, el ->
+                    val line = el.toString().trim('"')
+                    Log.d("EngineDiagnostics", "#$i $line")
+                }
+                Log.d("EngineDiagnostics", "---- end analysisLog [raw] ----")
+            } else {
+                Log.d("EngineDiagnostics", "analysisLog field not present in raw JSON")
+            }
+        } catch (t: Throwable) {
+            Log.w("EngineDiagnostics", "Failed to read analysisLog from raw body", t)
+        }
+        val report = json.decodeFromString<FullReport>(body)
+        try {
+            val size = report.analysisLog?.size ?: 0
+            Log.d("EngineDiagnostics", "analysisLog size (decoded) = $size")
+        } catch (_: Throwable) { }
         return@use report
     }
 }
