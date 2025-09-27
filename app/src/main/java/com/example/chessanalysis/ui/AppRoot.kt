@@ -27,7 +27,7 @@ fun AppRoot() {
     var provider by rememberSaveable { mutableStateOf<Provider?>(null) }
     var username by rememberSaveable { mutableStateOf("") }
 
-    // Предзагруженные данные/кэши (по желанию можно убрать)
+    // Предзагруженные данные/кэши
     var games by remember { mutableStateOf<List<GameHeader>>(emptyList()) }
     var openingFens by remember { mutableStateOf<Set<String>>(emptySet()) }
 
@@ -68,7 +68,7 @@ fun AppRoot() {
                 openingFens = openingFens,
                 onBack = { nav.popBackStack() },
                 onOpenReport = { report ->
-                    // сериализуем полный отчёт в query-параметр
+                    // сериализуем полный отчёт в query‑параметр
                     val encoded = URLEncoder.encode(json.encodeToString(report), "UTF-8")
                     nav.navigate("reportSummary?report=$encoded")
                 }
@@ -86,7 +86,11 @@ fun AppRoot() {
                 }
             ),
             deepLinks = listOf(
-                navDeepLink { uriPattern = "app://report?report={report}" }
+                // deep‑link для внешней навигации (предыдущий формат)
+                navDeepLink { uriPattern = "app://report?report={report}" },
+                // deep‑link, который генерирует NavController.navigate("reportSummary?report=..."),
+                // чтобы избежать ошибки "destination cannot be found"
+                navDeepLink { uriPattern = "android-app://androidx.navigation/reportSummary?report={report}" }
             )
         ) { backStackEntry ->
             val raw = backStackEntry.arguments?.getString("report")
@@ -115,7 +119,10 @@ fun AppRoot() {
                 }
             ),
             deepLinks = listOf(
-                navDeepLink { uriPattern = "app://game_report?report={report}" }
+                // deep‑link для внешней навигации (предыдущий формат)
+                navDeepLink { uriPattern = "app://game_report?report={report}" },
+                // deep‑link, который генерирует NavController.navigate("reportBoard?report=...")
+                navDeepLink { uriPattern = "android-app://androidx.navigation/reportBoard?report={report}" }
             )
         ) { backStackEntry ->
             val raw = backStackEntry.arguments?.getString("report")
@@ -133,7 +140,7 @@ fun AppRoot() {
 
 /**
  * Запасной «пустой» отчёт на случай отсутствия/повреждения данных.
- * Подобран под твою модель FullReport.
+ * Подобран под модель FullReport.
  */
 private fun FullReport.Companion.empty(): FullReport =
     FullReport(
