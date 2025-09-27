@@ -68,6 +68,7 @@ fun GameReportScreen(
     var variationBestUci by remember { mutableStateOf<String?>(null) }
     var variationLastMove by remember { mutableStateOf<Pair<String, String>?>(null) }
     var selectedSquare by remember { mutableStateOf<String?>(null) }
+    var isAnalyzing by remember { mutableStateOf(false) } // Новое состояние для индикатора загрузки
 
     val bgColor = Color(0xFF161512)
     val surfaceColor = Color(0xFF262522)
@@ -118,6 +119,7 @@ fun GameReportScreen(
     fun seekTo(index: Int) {
         variationActive = false
         selectedSquare = null
+        isAnalyzing = false
         val clamped = index.coerceIn(0, report.positions.lastIndex)
         currentPlyIndex = clamped
 
@@ -130,12 +132,14 @@ fun GameReportScreen(
     }
 
     fun goNext() {
+        if (isAnalyzing) return
         if (currentPlyIndex < report.positions.lastIndex) {
             seekTo(currentPlyIndex + 1)
         }
     }
 
     fun goPrev() {
+        if (isAnalyzing) return
         if (currentPlyIndex > 0) {
             seekTo(currentPlyIndex - 1)
         }
@@ -143,6 +147,9 @@ fun GameReportScreen(
 
     // Обработка кликов по клеткам для интерактивных вариантов
     fun handleSquareClick(square: String) {
+        // Блокируем клики во время анализа
+        if (isAnalyzing) return
+
         val currentPosition = report.positions.getOrNull(currentPlyIndex) ?: return
 
         // Инициализация доски для варианта, если еще не активен
@@ -195,29 +202,40 @@ fun GameReportScreen(
         variationActive = true
         isAutoPlaying = false
 
+        // Устанавливаем флаг анализа
+        isAnalyzing = true
+
         // Анализируем позицию на сервере
         scope.launch {
-            val fen = variationFen ?: return@launch
-            val resp = analyzeFen(fen, 14)
+            try {
+                val fen = variationFen ?: return@launch
+                val resp = analyzeFen(fen, 14)
 
-            // Обновляем оценку
-            val newEval: Float = resp.mate?.let {
-                if (it > 0) 30f else -30f
-            } ?: (resp.evaluation?.toFloat() ?: 0f)
-            variationEval = newEval
+                // Обновляем оценку
+                val newEval: Float = resp.mate?.let {
+                    if (it > 0) 30f else -30f
+                } ?: (resp.evaluation?.toFloat() ?: 0f)
+                variationEval = newEval
 
-            // Получаем лучший ход из ответа сервера
-            val bestMoveUci = resp.bestmove ?: resp.continuation?.split(" ")?.firstOrNull()
-            variationBestUci = bestMoveUci
+                // Получаем лучший ход из ответа сервера
+                val bestMoveUci = resp.bestmove ?: resp.continuation?.split(" ")?.firstOrNull()
+                variationBestUci = bestMoveUci
 
-            // Определяем класс хода на основе изменения оценки
-            val wasWhiteToMove = board.sideToMove == com.github.bhlangonijr.chesslib.Side.BLACK
-            val delta = (newEval - evalBefore) * (if (wasWhiteToMove) 1f else -1f)
-            val isBest = bestMoveUci?.equals((from + to), ignoreCase = true) ?: false
-            variationMoveClass = classifyDelta(delta, isBest)
+                // Определяем класс хода на основе изменения оценки
+                val wasWhiteToMove = board.sideToMove == com.github.bhlangonijr.chesslib.Side.BLACK
+                val delta = (newEval - evalBefore) * (if (wasWhiteToMove) 1f else -1f)
+                val isBest = bestMoveUci?.equals((from + to), ignoreCase = true) ?: false
+                variationMoveClass = classifyDelta(delta, isBest)
 
-            // Воспроизводим соответствующий звук
-            playMoveSound(variationMoveClass, isCapture)
+                // Воспроизводим соответствующий звук
+                playMoveSound(variationMoveClass, isCapture)
+            } catch (e: Exception) {
+                // В случае ошибки просто логируем её
+                e.printStackTrace()
+            } finally {
+                // Снимаем флаг анализа
+                isAnalyzing = false
+            }
         }
     }
 
@@ -232,8 +250,15 @@ fun GameReportScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { isWhiteBottom = !isWhiteBottom }) {
-                        Icon(Icons.Default.ScreenRotation, contentDescription = "Flip board", tint = Color.White)
+                    IconButton(
+                        onClick = { if (!isAnalyzing) isWhiteBottom = !isWhiteBottom },
+                        enabled = !isAnalyzing
+                    ) {
+                        Icon(
+                            Icons.Default.ScreenRotation,
+                            contentDescription = "Flip board",
+                            tint = if (isAnalyzing) Color.Gray else Color.White
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -355,6 +380,22 @@ fun GameReportScreen(
                             modifier = Modifier.fillMaxSize()
                         )
                     }
+
+                    // Индикатор загрузки при анализе хода
+                    if (isAnalyzing) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.3f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(48.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                strokeWidth = 3.dp
+                            )
+                        }
+                    }
                 }
             }
 
@@ -389,9 +430,9 @@ fun GameReportScreen(
             MovesCarousel(
                 report = report,
                 currentPlyIndex = if (variationActive) currentPlyIndex else currentPlyIndex,
-                onSeekTo = { seekTo(it) },
-                onPrev = { goPrev() },
-                onNext = { goNext() },
+                onSeekTo = { if (!isAnalyzing) seekTo(it) },
+                onPrev = { if (!isAnalyzing) goPrev() },
+                onNext = { if (!isAnalyzing) goNext() },
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -404,21 +445,42 @@ fun GameReportScreen(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { seekTo(0) }) {
-                    Icon(Icons.Default.SkipPrevious, contentDescription = "Start", tint = Color.White)
+                IconButton(
+                    onClick = { if (!isAnalyzing) seekTo(0) },
+                    enabled = !isAnalyzing
+                ) {
+                    Icon(
+                        Icons.Default.SkipPrevious,
+                        contentDescription = "Start",
+                        tint = if (isAnalyzing) Color.Gray else Color.White
+                    )
                 }
-                IconButton(onClick = { goPrev() }) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Previous", tint = Color.White)
+                IconButton(
+                    onClick = { goPrev() },
+                    enabled = !isAnalyzing
+                ) {
+                    Icon(
+                        Icons.Default.ArrowBack,
+                        contentDescription = "Previous",
+                        tint = if (isAnalyzing) Color.Gray else Color.White
+                    )
                 }
                 IconButton(
                     onClick = {
-                        isAutoPlaying = !isAutoPlaying
-                        variationActive = false
-                        selectedSquare = null
+                        if (!isAnalyzing) {
+                            isAutoPlaying = !isAutoPlaying
+                            variationActive = false
+                            selectedSquare = null
+                            isAnalyzing = false
+                        }
                     },
+                    enabled = !isAnalyzing,
                     modifier = Modifier
                         .size(56.dp)
-                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                        .background(
+                            if (isAnalyzing) Color.Gray else MaterialTheme.colorScheme.primary,
+                            CircleShape
+                        )
                 ) {
                     Icon(
                         if (isAutoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
@@ -426,17 +488,31 @@ fun GameReportScreen(
                         tint = Color.White
                     )
                 }
-                IconButton(onClick = { goNext() }) {
-                    Icon(Icons.Default.ArrowForward, contentDescription = "Next", tint = Color.White)
+                IconButton(
+                    onClick = { goNext() },
+                    enabled = !isAnalyzing
+                ) {
+                    Icon(
+                        Icons.Default.ArrowForward,
+                        contentDescription = "Next",
+                        tint = if (isAnalyzing) Color.Gray else Color.White
+                    )
                 }
-                IconButton(onClick = { seekTo(report.positions.lastIndex) }) {
-                    Icon(Icons.Default.SkipNext, contentDescription = "End", tint = Color.White)
+                IconButton(
+                    onClick = { if (!isAnalyzing) seekTo(report.positions.lastIndex) },
+                    enabled = !isAnalyzing
+                ) {
+                    Icon(
+                        Icons.Default.SkipNext,
+                        contentDescription = "End",
+                        tint = if (isAnalyzing) Color.Gray else Color.White
+                    )
                 }
             }
 
             // Автоматическое воспроизведение
-            LaunchedEffect(isAutoPlaying, currentPlyIndex) {
-                if (isAutoPlaying) {
+            LaunchedEffect(isAutoPlaying, currentPlyIndex, isAnalyzing) {
+                if (isAutoPlaying && !isAnalyzing) {
                     kotlinx.coroutines.delay(1500)
                     if (currentPlyIndex < report.positions.lastIndex) {
                         goNext()
