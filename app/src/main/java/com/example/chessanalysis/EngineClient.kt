@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit
 // ----- КОНФИГУРАЦИЯ СЕРВЕРА -----
 object ServerConfig {
     private const val EMULATOR_URL = "http://10.0.2.2:8080"
-    private const val PRODUCTION_URL = "https://your-chess-backend.com" // ЗАМЕНИТЕ НА ВАШ РЕАЛЬНЫЙ URL
+    private const val PRODUCTION_URL = "https://your-chess-backend.com"
     private const val IS_PRODUCTION = false
 
     val BASE_URL: String
@@ -41,7 +41,6 @@ private val client = OkHttpClient.Builder()
     .build()
 
 // ----- JSON -----
-// КЛЮЧЕВОЕ: explicitNulls=false — не отправляем поля со значением null вообще
 private val json = Json {
     ignoreUnknownKeys = true
     explicitNulls = false
@@ -104,22 +103,19 @@ data class ProgressSnapshot(
 // ---------- УТИЛИТЫ ----------
 
 /**
- * Нормализация PGN без разрушения структуры:
- *  - убираем BOM;
- *  - CRLF/CR -> LF;
- *  - заменяем «нулевые» рокировки и разные тире/½;
- *  - удаляем часы {[%clk ...]} и NAG ($...);
- *  - ЖЁСТКО гарантируем: теги строго с начала файла и ровно одна пустая строка между тегами и ходами;
- *  - удаляем паразитные управляющие символы (кроме \n, \t);
- *  - завершаем одним '\n'.
+ * Нормализация PGN:
+ *  - убираем BOM, CRLF/CR → LF, заменяем «0-0/0-0-0» → «O-O/O-O-O» и разные тире/½;
+ *  - удаляем часы {[%clk …]} и NAG ($…);
+ *  - теги оставляем строго сверху, между тегами и ходами ровно одна пустая строка;
+ *  - чистим управляющие символы; всегда заканчиваем одним '\n'.
  */
 private fun normalizePgn(src: String): String {
     var s = src
-        .replace("\uFEFF", "")      // BOM
+        .replace("\uFEFF", "")
         .replace("\r\n", "\n")
         .replace("\r", "\n")
 
-    // Рокировки/результат
+    // Рокировки/результаты/½
     s = s.replace("0-0-0", "O-O-O").replace("0-0", "O-O")
     s = s.replace("1–0", "1-0").replace("0–1", "0-1")
         .replace("½–½", "1/2-1/2").replace("½-½", "1/2-1/2")
@@ -135,7 +131,7 @@ private fun normalizePgn(src: String): String {
         }
     }
 
-    // Теги только с самого начала (\A) — без MULTILINE
+    // Теги — только с самого начала
     val tagBlockRegex = Regex("""\A(?:\[[^\]\n]+\]\s*\n)+""")
     val tagMatch = tagBlockRegex.find(s)
 
@@ -155,13 +151,9 @@ private fun normalizePgn(src: String): String {
 
 // ---------- Публичное API ----------
 
-/** Анализ одной позиции. */
 suspend fun analyzeFen(fen: String, depth: Int = 14): StockfishResponse =
     withContext(Dispatchers.IO) { requestEvaluatePosition(fen, depth, 3) }
 
-/**
- * Анализ партии по PGN с прогрессом (v1).
- */
 suspend fun analyzeGameByPgnWithProgress(
     pgn: String,
     depth: Int = 16,
@@ -171,29 +163,17 @@ suspend fun analyzeGameByPgnWithProgress(
     onProgress: (ProgressSnapshot) -> Unit
 ): FullReport = coroutineScope {
     val progressId = UUID.randomUUID().toString()
-
-    Log.d(TAG, "Starting PGN analysis with progressId: $progressId")
-    Log.d(TAG, "Server URL: ${ServerConfig.BASE_URL}")
-
-    val poller = launch(Dispatchers.IO) {
-        pollProgress(progressId, onProgress)
-    }
+    val poller = launch(Dispatchers.IO) { pollProgress(progressId, onProgress) }
 
     try {
         withContext(Dispatchers.IO) {
             pingOrThrow()
 
             val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game?progressId=$progressId"
-
             val normalized = normalizePgn(pgn)
-
-            // Локальная проверка нормализованного PGN (удобнее упасть здесь, чем на сервере)
             runCatching { PgnChess.validatePgn(normalized) }
-                .onFailure { e ->
-                    throw IllegalArgumentException("Проблема с PGN: ${e.message}", e)
-                }
+                .onFailure { e -> throw IllegalArgumentException("Проблема с PGN: ${e.message}", e) }
 
-            // ВАЖНО: не включать null-поля внутрь header (explicitNulls=false уже помогает)
             val headerSanitized = header?.copy(pgn = null)
 
             val payload = json.encodeToString(
@@ -206,9 +186,6 @@ suspend fun analyzeGameByPgnWithProgress(
                 )
             )
 
-            Log.d(TAG, "Sending PGN analysis request to: $url")
-            Log.d(TAG, "PGN length: ${normalized.length} chars")
-
             val req = Request.Builder()
                 .url(url)
                 .header("Accept", "application/json")
@@ -218,27 +195,16 @@ suspend fun analyzeGameByPgnWithProgress(
 
             client.newCall(req).execute().use { resp ->
                 val body = resp.body?.string().orEmpty()
-                if (!resp.isSuccessful) {
-                    Log.e(TAG, "Server error: HTTP ${resp.code}")
-                    Log.e(TAG, "Response body: ${body.take(500)}")
-                    throw IllegalStateException("HTTP ${resp.code}: ${body.take(300)}")
-                }
-                val report = json.decodeFromString<FullReport>(body)
-                Log.d(TAG, "Analysis complete! Positions: ${report.positions.size}, Moves: ${report.moves.size}")
-                Log.d(TAG, "Accuracy: white=${report.accuracy.whiteMovesAcc.weighted}, black=${report.accuracy.blackMovesAcc.weighted}")
-                return@withContext report
+                if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}: ${body.take(300)}")
+                return@withContext json.decodeFromString<FullReport>(body)
             }
         }
-    } catch (e: Exception) {
-        Log.e(TAG, "Analysis failed", e)
-        throw e
     } finally {
         poller.cancel()
         poller.join()
     }
 }
 
-/** Анализ партии по PGN без прогресса (v1). */
 suspend fun analyzeGameByPgn(
     pgn: String,
     depth: Int = 16,
@@ -255,7 +221,7 @@ suspend fun analyzeGameByPgn(
 
     val headerSanitized = header?.copy(pgn = null)
 
-    val payload = json.encodeToString(GamePgnRequest(normalized, depth, multiPv, workersNb,headerSanitized))
+    val payload = json.encodeToString(GamePgnRequest(normalized, depth, multiPv, workersNb, headerSanitized))
     val req = Request.Builder()
         .url(url)
         .header("Accept", "application/json")
@@ -265,34 +231,21 @@ suspend fun analyzeGameByPgn(
 
     client.newCall(req).execute().use { resp ->
         val body = resp.body?.string().orEmpty()
-        if (!resp.isSuccessful) {
-            throw IllegalStateException("http_${resp.code}: ${body.take(300)}")
-        }
+        if (!resp.isSuccessful) throw IllegalStateException("http_${resp.code}: ${body.take(300)}")
         return@use json.decodeFromString<FullReport>(body)
     }
 }
 
-// ---------- Внутренние функции ----------
-
+// --- внутренние помощники (ping/poll/position) ---
 private suspend fun pingOrThrow() = withContext(Dispatchers.IO) {
     val url = "${ServerConfig.BASE_URL}/ping"
-    Log.d(TAG, "Pinging server at: $url")
     try {
-        val getReq = Request.Builder()
-            .url(url)
-            .header("User-Agent", UA)
-            .get()
-            .build()
+        val getReq = Request.Builder().url(url).header("User-Agent", UA).get().build()
         client.newCall(getReq).execute().use { resp ->
             if (resp.isSuccessful) return@withContext
-            Log.w(TAG, "Ping failed with code: ${resp.code}")
         }
     } catch (e: Exception) {
-        Log.e(TAG, "Network error: ${e.message}")
-        throw IllegalStateException(
-            "Cannot reach server at ${ServerConfig.BASE_URL}. Check your network connection and server URL.",
-            e
-        )
+        throw IllegalStateException("Cannot reach server at ${ServerConfig.BASE_URL}", e)
     }
     throw IllegalStateException("Server not responding at: ${ServerConfig.BASE_URL}")
 }
@@ -356,9 +309,7 @@ private suspend fun pollProgress(
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Progress polling error: ${e.message}")
-        }
+        } catch (_: Exception) { }
         delay(400)
     }
 }

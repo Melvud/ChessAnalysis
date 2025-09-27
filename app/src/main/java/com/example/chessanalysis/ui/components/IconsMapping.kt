@@ -4,10 +4,7 @@ import androidx.compose.ui.graphics.Color
 import com.example.chessanalysis.MoveClass
 import com.example.chessanalysis.R
 
-/**
- * Ресурсы значков и базовые цвета контейнеров под разные классы хода.
- * Здесь же можно централизованно подкручивать оттенки.
- */
+/** Ресурсы значков и базовые цвета контейнеров под разные классы хода. */
 data class MoveBadgeRes(
     val iconRes: Int,
     val container: Color

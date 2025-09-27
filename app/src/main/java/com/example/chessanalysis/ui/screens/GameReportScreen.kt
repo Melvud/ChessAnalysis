@@ -14,14 +14,12 @@ import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.ArrowForward
-import androidx.compose.material.icons.filled.ArrowBack as ArrowPrev
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -29,7 +27,6 @@ import androidx.compose.ui.unit.sp
 import com.example.chessanalysis.FullReport
 import com.example.chessanalysis.MoveClass
 import com.example.chessanalysis.Provider
-import com.example.chessanalysis.R
 import com.example.chessanalysis.ui.components.BoardCanvas
 import com.example.chessanalysis.ui.components.EvalBar
 import com.example.chessanalysis.ui.components.MovesCarousel
@@ -40,7 +37,6 @@ import kotlinx.serialization.Serializable
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
-import kotlin.math.max
 
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
@@ -54,11 +50,11 @@ data class ClockData(
 fun GameReportScreen(
     report: FullReport,
     onBack: () -> Unit,
-    onNextKeyMoment: (() -> Unit)? = null // сохранён для совместимости, но не используется (звёздочка убрана)
+    onNextKeyMoment: (() -> Unit)? = null // для совместимости
 ) {
     val scope = rememberCoroutineScope()
 
-    val userWasWhite = remember(report.header) { true } // как и было
+    val userWasWhite = remember(report.header) { true }
 
     var currentPlyIndex by remember { mutableStateOf(0) }
     var isWhiteBottom by remember { mutableStateOf(userWasWhite) }
@@ -69,19 +65,20 @@ fun GameReportScreen(
     val surfaceColor = Color(0xFF262522)
     val cardColor = Color(0xFF1E1C1A)
 
-    // загрузка часов при открытии
+    // Загружаем часы: сперва парсим локально из PGN, если нет — тянем с сайта
     LaunchedEffect(report) {
-        scope.launch { clockData = fetchClockData(report) }
+        scope.launch {
+            val local = report.header.pgn?.let {
+                runCatching { parseClockData(it) }.getOrNull()
+            }
+            clockData = local ?: fetchClockData(report)
+        }
     }
 
-    fun playMoveSound(ctx: Context, moveClass: MoveClass) { /* звуки оставлены как TODO */ }
+    fun playMoveSound(@Suppress("UNUSED_PARAMETER") ctx: Context, @Suppress("UNUSED_PARAMETER") moveClass: MoveClass) { /* TODO */ }
 
     fun seekTo(index: Int) {
         val clampedIndex = index.coerceIn(0, report.positions.lastIndex)
-        if (clampedIndex != currentPlyIndex && clampedIndex > 0) {
-            val move = report.moves.getOrNull(clampedIndex - 1)
-            move?.let { /* playMoveSound */ }
-        }
         currentPlyIndex = clampedIndex
     }
 
@@ -92,18 +89,16 @@ fun GameReportScreen(
         containerColor = bgColor,
         topBar = {
             TopAppBar(
-                title = { /* пусто — карточка игрока должна быть «наверху экрана», не в AppBar */ },
+                title = {},
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
                     }
                 },
                 actions = {
-                    // иконка переворота заменена
                     IconButton(onClick = { isWhiteBottom = !isWhiteBottom }) {
                         Icon(Icons.Default.ScreenRotation, contentDescription = "Flip board", tint = Color.White)
                     }
-                    // звёздочку удалил
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = surfaceColor,
@@ -130,14 +125,14 @@ fun GameReportScreen(
                 rating = topElo,
                 clock = topClock,
                 isActive = topActive,
-                inverted = !topIsWhite, // цветная точка слева
+                inverted = !topIsWhite,
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(cardColor)
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             )
 
-            // ===== Доска + эвал-бар (меняются местами при flip) =====
+            // ===== Доска + эвал-бар =====
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -145,7 +140,6 @@ fun GameReportScreen(
                 horizontalArrangement = Arrangement.Start
             ) {
                 if (isWhiteBottom) {
-                    // эвал-бар слева
                     EvalBar(
                         positions = report.positions,
                         currentPlyIndex = currentPlyIndex,
@@ -156,7 +150,7 @@ fun GameReportScreen(
                     )
                 }
 
-                // доска
+                // Доска
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
@@ -169,19 +163,32 @@ fun GameReportScreen(
                     } else null
                     val lastMoveClass = report.moves.getOrNull(currentPlyIndex - 1)?.classification
 
+                    // Лучший ход из предыдущей позиции (для стрелки при ошибках)
+                    val bestUci: String? = report.positions
+                        .getOrNull(maxOf(0, currentPlyIndex - 1))
+                        ?.lines
+                        ?.firstOrNull()
+                        ?.pv
+                        ?.firstOrNull()
+
+                    val shouldShowBestArrow = when (lastMoveClass) {
+                        MoveClass.INACCURACY, MoveClass.MISTAKE, MoveClass.BLUNDER -> true
+                        else -> false
+                    }
+
                     currentPosition?.let { pos ->
                         BoardCanvas(
                             fen = if (isWhiteBottom) pos.fen else flipFen(pos.fen),
                             lastMove = lastMovePair,
-                            showArrows = false,
-                            moveClass = lastMoveClass, // ← передаём класс хода для цвета/иконки
+                            moveClass = lastMoveClass,
+                            bestMoveUci = bestUci,
+                            showBestArrow = shouldShowBestArrow,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
                 }
 
                 if (!isWhiteBottom) {
-                    // эвал-бар справа
                     EvalBar(
                         positions = report.positions,
                         currentPlyIndex = currentPlyIndex,
@@ -212,7 +219,7 @@ fun GameReportScreen(
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             )
 
-            // ===== Список ходов (оставил «как сейчас») — в самом низу =====
+            // ===== Карусель ходов =====
             MovesCarousel(
                 report = report,
                 currentPlyIndex = currentPlyIndex,
@@ -222,7 +229,7 @@ fun GameReportScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            // ===== Кнопки навигации/автоплей (сохранил, не мешают карточке ходов) =====
+            // ===== Кнопки навигации/автоплей =====
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -278,7 +285,7 @@ private fun PlayerCard(
     rating: Int?,
     clock: Int?, // centiseconds
     isActive: Boolean,
-    inverted: Boolean, // для цветной точки
+    inverted: Boolean,
     modifier: Modifier = Modifier
 ) {
     val animatedColor by animateColorAsState(
@@ -325,7 +332,7 @@ private fun formatClock(centiseconds: Int): String {
     return "%d:%02d".format(minutes, secs)
 }
 
-// прежняя реализация (переворот FEN по вертикали, как и было)
+// переворот FEN по вертикали
 private fun flipFen(fen: String): String {
     val parts = fen.split(" ")
     if (parts.isEmpty()) return fen
@@ -341,15 +348,16 @@ private fun flipFen(fen: String): String {
     }
 }
 
-// загрузка часов
+// --- ЧАСЫ ---
+
+// Вытягиваем id партии и запрашиваем у провайдера (fallback)
 private suspend fun fetchClockData(report: FullReport): ClockData? = withContext(Dispatchers.IO) {
     try {
         val site = report.header.site ?: return@withContext null
         val gameId = extractGameId(report.header.pgn) ?: return@withContext null
-
         when (site) {
             Provider.LICHESS -> fetchLichessClocks(gameId)
-            Provider.CHESSCOM -> fetchChesscomClocks(gameId) // пока null
+            Provider.CHESSCOM -> fetchChesscomClocks(gameId)
         }
     } catch (_: Exception) { null }
 }
@@ -386,10 +394,10 @@ private suspend fun fetchLichessClocks(gameId: String): ClockData? {
 }
 
 private suspend fun fetchChesscomClocks(@Suppress("UNUSED_PARAMETER") gameId: String): ClockData? {
-    // пока оставляем пустым (как и было)
     return null
 }
 
+/** Парсим часы вида `[%clk H:MM:SS]` из PGN. */
 private fun parseClockData(pgn: String): ClockData {
     val clockPattern = Regex("""\[%clk\s+(\d+):(\d+):(\d+)\]""")
     val whiteTimes = mutableListOf<Int>()
