@@ -93,84 +93,92 @@ fun GamesListScreen(
                     LazyColumn(Modifier.fillMaxSize()) {
                         itemsIndexed(items) { _, g ->
                             ListItem(
-                                headlineContent = { Text(g.opening ?: (g.eco ?: "—"), fontWeight = FontWeight.SemiBold) },
-                                overlineContent = { Text("${g.white ?: "White"} vs ${g.black ?: "Black"} • ${g.result ?: ""}") },
+                                headlineContent = {
+                                    Text(g.opening ?: (g.eco ?: "—"), fontWeight = FontWeight.SemiBold)
+                                },
+                                overlineContent = {
+                                    Text("${g.white ?: "White"} vs ${g.black ?: "Black"} • ${g.result ?: ""}")
+                                },
                                 supportingContent = { Text(g.date ?: "") },
-                                modifier = Modifier.clickable {
-                                    scope.launch {
-                                        Log.d("GamesListScreen", "Starting analysis...")
-                                        try {
-                                            val pgn = g.pgn
-                                            if (pgn.isNullOrBlank()) {
-                                                Toast.makeText(context, "PGN не найден", Toast.LENGTH_SHORT).show()
-                                                return@launch
-                                            }
-
-                                            // Запускаем анализ PGN прямо на сервере
-                                            showAnalysis = true
-                                            stage = "Ожидание сервера…"
-                                            progress = 0.05f
-                                            done = 0
-                                            total = 0
-                                            etaMs = null
-
-                                            val header = try {
-                                                PgnChess.headerFromPgn(pgn)
-                                            } catch (_: Throwable) {
-                                                null
-                                            }
-
-                                            Log.d("GamesListScreen", "Starting server analysis...")
-                                            val report = try {
-                                                analyzeGameByPgnWithProgress(
-                                                    pgn = pgn,
-                                                    depth = 15,
-                                                    multiPv = 3,
-                                                    header = header
-                                                ) { snap ->
-                                                    // Апдейты прогресса приходят с сервера
-                                                    total = snap.total
-                                                    done = snap.done
-                                                    stage = when (snap.stage) {
-                                                        "queued"      -> "В очереди…"
-                                                        "preparing"   -> "Подготовка…"
-                                                        "evaluating"  -> "Анализ позиций…"
-                                                        "postprocess" -> "Постобработка…"
-                                                        "done"        -> "Готово"
-                                                        else          -> "Анализ…"
-                                                    }
-                                                    progress = if (snap.total > 0)
-                                                        snap.done.toFloat() / snap.total.toFloat()
-                                                    else progress
-                                                    etaMs = snap.etaMs
-
-                                                    Log.d("GamesListScreen", "Progress: $done/$total - $stage")
+                                modifier = Modifier
+                                    .clickable(enabled = !showAnalysis) {
+                                        // Предотвращаем повторные запуски анализа
+                                        if (showAnalysis) return@clickable
+                                        scope.launch {
+                                            Log.d("GamesListScreen", "Starting analysis...")
+                                            try {
+                                                // 1) Гарантируем ПОЛНЫЙ PGN (если в header.pgn были только теги)
+                                                val fullPgn = GameLoaders.ensureFullPgn(g)
+                                                if (fullPgn.isBlank()) {
+                                                    Toast.makeText(context, "PGN не найден", Toast.LENGTH_SHORT).show()
+                                                    return@launch
                                                 }
-                                            } catch (e: Exception) {
-                                                Log.e("GamesListScreen", "Analysis error", e)
-                                                throw e
+
+                                                // Сброс и показ прогресса
+                                                showAnalysis = true
+                                                stage = "Ожидание сервера…"
+                                                progress = 0.05f
+                                                done = 0
+                                                total = 0
+                                                etaMs = null
+
+                                                // 2) header — из уже финального PGN
+                                                val header = runCatching { PgnChess.headerFromPgn(fullPgn) }.getOrNull()
+
+                                                Log.d("GamesListScreen", "Starting server analysis...")
+                                                val report = try {
+                                                    analyzeGameByPgnWithProgress(
+                                                        pgn = fullPgn,
+                                                        depth = 15,
+                                                        multiPv = 3,
+                                                        header = header
+                                                    ) { snap ->
+                                                        total = snap.total
+                                                        done = snap.done
+                                                        stage = when (snap.stage) {
+                                                            "queued"      -> "В очереди…"
+                                                            "preparing"   -> "Подготовка…"
+                                                            "evaluating"  -> "Анализ позиций…"
+                                                            "postprocess" -> "Постобработка…"
+                                                            "done"        -> "Готово"
+                                                            else          -> "Анализ…"
+                                                        }
+                                                        if (snap.total > 0) {
+                                                            progress = (snap.done.toFloat() / snap.total.toFloat())
+                                                                .coerceIn(0f, 1f)
+                                                        }
+                                                        etaMs = snap.etaMs
+
+                                                        Log.d("GamesListScreen", "Progress: $done/$total - $stage")
+                                                    }
+                                                } catch (e: Exception) {
+                                                    Log.e("GamesListScreen", "Analysis error", e)
+                                                    throw e
+                                                }
+
+                                                Log.d(
+                                                    "GamesListScreen",
+                                                    "Analysis complete! Report positions: ${report.positions.size}, moves: ${report.moves.size}"
+                                                )
+                                                Log.d(
+                                                    "GamesListScreen",
+                                                    "Accuracy: white=${report.accuracy.whiteMovesAcc.weighted}, black=${report.accuracy.blackMovesAcc.weighted}"
+                                                )
+
+                                                showAnalysis = false
+                                                onOpenReport(report)
+
+                                            } catch (t: Throwable) {
+                                                Log.e("GamesListScreen", "Error during analysis", t)
+                                                showAnalysis = false
+                                                Toast.makeText(
+                                                    context,
+                                                    "Ошибка анализа: ${t.message ?: "неизвестно"}",
+                                                    Toast.LENGTH_LONG
+                                                ).show()
                                             }
-
-                                            Log.d("GamesListScreen", "Analysis complete! Report positions: ${report.positions.size}, moves: ${report.moves.size}")
-                                            Log.d("GamesListScreen", "Accuracy: white=${report.accuracy.whiteMovesAcc.weighted}, black=${report.accuracy.blackMovesAcc.weighted}")
-
-                                            showAnalysis = false
-
-                                            // Открываем отчёт
-                                            Log.d("GamesListScreen", "Opening report screen...")
-                                            onOpenReport(report)
-
-                                        } catch (t: Throwable) {
-                                            Log.e("GamesListScreen", "Error during analysis", t)
-                                            showAnalysis = false
-                                            Toast.makeText(
-                                                context,
-                                                "Ошибка анализа: ${t.message ?: "неизвестно"}",
-                                                Toast.LENGTH_LONG
-                                            ).show()
                                         }
                                     }
-                                }
                             )
                             Divider()
                         }

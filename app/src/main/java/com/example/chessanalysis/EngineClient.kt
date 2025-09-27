@@ -7,13 +7,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.putJsonArray
-import kotlinx.serialization.json.add
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.encodeToJsonElement
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -22,18 +15,25 @@ import okhttp3.logging.HttpLoggingInterceptor
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-// ----- БАЗОВЫЙ URL: эмулятор -> хост -----
-private const val BASE = "http://10.0.2.2:8080"
+// ----- КОНФИГУРАЦИЯ СЕРВЕРА -----
+object ServerConfig {
+    private const val EMULATOR_URL = "http://10.0.2.2:8080"
+    private const val PRODUCTION_URL = "https://your-chess-backend.com" // ЗАМЕНИТЕ НА ВАШ РЕАЛЬНЫЙ URL
+    private const val IS_PRODUCTION = false
+
+    val BASE_URL: String
+        get() = if (IS_PRODUCTION) PRODUCTION_URL else EMULATOR_URL
+}
 
 // ----- Логирование HTTP -----
 private const val TAG = "EngineClient"
 private val httpLogger = HttpLoggingInterceptor { msg -> Log.d("HTTP", msg) }
     .apply { level = HttpLoggingInterceptor.Level.BODY }
 
-// ----- OkHttp с длинными таймаутами -----
+// ----- OkHttp с длинными таймаутами для анализа -----
 private val client = OkHttpClient.Builder()
     .addInterceptor(httpLogger)
-    .connectTimeout(10, TimeUnit.SECONDS)
+    .connectTimeout(30, TimeUnit.SECONDS)
     .writeTimeout(5, TimeUnit.MINUTES)
     .readTimeout(5, TimeUnit.MINUTES)
     .callTimeout(0, TimeUnit.SECONDS)
@@ -41,7 +41,11 @@ private val client = OkHttpClient.Builder()
     .build()
 
 // ----- JSON -----
-private val json = Json { ignoreUnknownKeys = true }
+// КЛЮЧЕВОЕ: explicitNulls=false — не отправляем поля со значением null вообще
+private val json = Json {
+    ignoreUnknownKeys = true
+    explicitNulls = false
+}
 private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 private const val UA = "ChessAnalysis/1.5 (+android; local-server)"
 
@@ -76,28 +80,11 @@ data class StockfishResponse(
 
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
-data class GameFullRequest(
-    val pgn: String,
-    val depth: Int = 14,
-    val multiPv: Int = 3
-)
-
-@SuppressLint("UnsafeOptInUsageError")
-@Serializable
-data class GameByFensRequest(
-    val fens: List<String>,
-    val uciMoves: List<String>?,
-    val depth: Int,
-    val multiPv: Int,
-    val header: GameHeader? = null
-)
-
-@SuppressLint("UnsafeOptInUsageError")
-@Serializable
 data class GamePgnRequest(
     val pgn: String,
     val depth: Int,
     val multiPv: Int,
+    val workersNb: Int,
     val header: GameHeader? = null
 )
 
@@ -109,10 +96,62 @@ data class ProgressSnapshot(
     val done: Int,
     val percent: Double? = null,
     val etaMs: Long? = null,
-    val stage: String? = null,     // queued | preparing | evaluating | postprocess | done
+    val stage: String? = null,
     val startedAt: Long? = null,
     val updatedAt: Long? = null
 )
+
+// ---------- УТИЛИТЫ ----------
+
+/**
+ * Нормализация PGN без разрушения структуры:
+ *  - убираем BOM;
+ *  - CRLF/CR -> LF;
+ *  - заменяем «нулевые» рокировки и разные тире/½;
+ *  - удаляем часы {[%clk ...]} и NAG ($...);
+ *  - ЖЁСТКО гарантируем: теги строго с начала файла и ровно одна пустая строка между тегами и ходами;
+ *  - удаляем паразитные управляющие символы (кроме \n, \t);
+ *  - завершаем одним '\n'.
+ */
+private fun normalizePgn(src: String): String {
+    var s = src
+        .replace("\uFEFF", "")      // BOM
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+
+    // Рокировки/результат
+    s = s.replace("0-0-0", "O-O-O").replace("0-0", "O-O")
+    s = s.replace("1–0", "1-0").replace("0–1", "0-1")
+        .replace("½–½", "1/2-1/2").replace("½-½", "1/2-1/2")
+
+    // Удаляем часы и NAG
+    s = s.replace(Regex("""\{\[%clk [^}]+\]\}"""), "")
+    s = s.replace(Regex("""\s\$\d+"""), "")
+
+    // Счистить странные управляющие (кроме таба/перевода строки)
+    s = buildString(s.length) {
+        for (ch in s) {
+            if (ch == '\n' || ch == '\t' || ch.code >= 32) append(ch)
+        }
+    }
+
+    // Теги только с самого начала (\A) — без MULTILINE
+    val tagBlockRegex = Regex("""\A(?:\[[^\]\n]+\]\s*\n)+""")
+    val tagMatch = tagBlockRegex.find(s)
+
+    val rebuilt = if (tagMatch != null) {
+        val tagBlock = tagMatch.value.trimEnd('\n')
+        val rest = s.substring(tagMatch.range.last + 1)
+        val movetext = rest.trimStart('\n', ' ', '\t')
+        tagBlock + "\n\n" + movetext
+    } else {
+        s.trimStart('\n', ' ', '\t')
+    }
+
+    var out = rebuilt.trimEnd()
+    if (!out.endsWith("\n")) out += "\n"
+    return out
+}
 
 // ---------- Публичное API ----------
 
@@ -120,306 +159,142 @@ data class ProgressSnapshot(
 suspend fun analyzeFen(fen: String, depth: Int = 14): StockfishResponse =
     withContext(Dispatchers.IO) { requestEvaluatePosition(fen, depth, 3) }
 
-/** Анализ партии по FEN/UCIs с реальным прогрессом. */
-suspend fun analyzeGameByFensWithProgress(
-    fens: List<String>,
-    uciMoves: List<String>?,
-    depth: Int = 14,
-    multiPv: Int = 3,
-    header: GameHeader? = null,
-    onProgress: (ProgressSnapshot) -> Unit
-): FullReport = coroutineScope {
-    pingOrThrow()
-
-    val progressId = UUID.randomUUID().toString()
-
-    // Поллер прогресса
-    val poller = launch(Dispatchers.IO) {
-        pollProgress(progressId, onProgress)
-    }
-
-    try {
-        withContext(Dispatchers.IO) {
-            val url = "$BASE/api/v1/evaluate/game/by-fens?" +
-                    "progressId=$progressId" +
-                    "&depth=$depth" +
-                    "&multiPv=$multiPv"
-
-            val requestBody = buildJsonObject {
-                putJsonArray("fens") {
-                    fens.forEach { add(it) }
-                }
-                uciMoves?.let {
-                    putJsonArray("uciMoves") {
-                        it.forEach { uciMove -> add(uciMove) }
-                    }
-                }
-                header?.let { h ->
-                    put("header", json.encodeToJsonElement(h))
-                }
-            }
-
-            val payload = requestBody.toString()
-            val req = Request.Builder()
-                .url(url)
-                .header("Accept", "application/json")
-                .header("User-Agent", UA)
-                .header("Content-Type", "application/json")
-                .post(payload.toRequestBody(JSON_MEDIA))
-                .build()
-
-            client.newCall(req).execute().use { resp ->
-                val body = resp.body?.string().orEmpty()
-                if (!resp.isSuccessful) {
-                    throw IllegalStateException("HTTP ${resp.code}: ${body.take(300)}")
-                }
-
-                // ----- RAW LOG FALLBACK: читаем analysisLog прямо из текста, даже если модель его не знает -----
-                try {
-                    val root = Json.parseToJsonElement(body)
-                    val arr = root.jsonObject["analysisLog"]?.jsonArray
-                    if (arr != null) {
-                        Log.d("EngineDiagnostics", "---- analysisLog (${arr.size}) [raw] ----")
-                        arr.forEachIndexed { i, el ->
-                            val line = el.toString().trim('"')
-                            Log.d("EngineDiagnostics", "#$i $line")
-                        }
-                        Log.d("EngineDiagnostics", "---- end analysisLog [raw] ----")
-                    } else {
-                        Log.d("EngineDiagnostics", "analysisLog field not present in raw JSON")
-                    }
-                } catch (t: Throwable) {
-                    Log.w("EngineDiagnostics", "Failed to read analysisLog from raw body", t)
-                }
-
-                // Теперь обычная десериализация отчёта
-                val report = json.decodeFromString<FullReport>(body)
-
-                // Дополнительный безопасный лог размера массива (если поле присутствует в модели)
-                try {
-                    val size = report.analysisLog?.size ?: 0
-                    Log.d("EngineDiagnostics", "analysisLog size (decoded) = $size")
-                } catch (_: Throwable) { /* игнор */ }
-
-                return@withContext report
-            }
-        }
-    } finally {
-        poller.cancel()
-        poller.join()
-    }
-}
-
-/** Анализ без прогресса (на IO) для FEN/UCIs. */
-suspend fun analyzeGameByFens(
-    fens: List<String>,
-    uciMoves: List<String>?,
-    depth: Int = 14,
-    multiPv: Int = 3,
-    header: GameHeader? = null
-): FullReport = withContext(Dispatchers.IO) {
-    pingOrThrow()
-    val url = "$BASE/api/v1/evaluate/game/by-fens"
-    val payload = json.encodeToString(GameByFensRequest(fens, uciMoves, depth, multiPv, header))
-    val req = Request.Builder()
-        .url(url)
-        .header("Accept", "application/json")
-        .header("User-Agent", UA)
-        .post(payload.toRequestBody(JSON_MEDIA))
-        .build()
-    client.newCall(req).execute().use { resp ->
-        val body = resp.body?.string().orEmpty()
-        if (!resp.isSuccessful) throw IllegalStateException("http_${resp.code}: ${body.take(300)}")
-
-        // RAW LOG FALLBACK и тут, для режима без прогресса
-        try {
-            val root = Json.parseToJsonElement(body)
-            val arr = root.jsonObject["analysisLog"]?.jsonArray
-            if (arr != null) {
-                Log.d("EngineDiagnostics", "---- analysisLog (${arr.size}) [raw] ----")
-                arr.forEachIndexed { i, el ->
-                    val line = el.toString().trim('"')
-                    Log.d("EngineDiagnostics", "#$i $line")
-                }
-                Log.d("EngineDiagnostics", "---- end analysisLog [raw] ----")
-            } else {
-                Log.d("EngineDiagnostics", "analysisLog field not present in raw JSON")
-            }
-        } catch (t: Throwable) {
-            Log.w("EngineDiagnostics", "Failed to read analysisLog from raw body", t)
-        }
-
-        val report = json.decodeFromString<FullReport>(body)
-
-        // Дополнительный безопасный лог размера массива (если поле присутствует в модели)
-        try {
-            val size = report.analysisLog?.size ?: 0
-            Log.d("EngineDiagnostics", "analysisLog size (decoded) = $size")
-        } catch (_: Throwable) { /* игнор */ }
-
-        return@use report
-    }
-}
-
-/** Анализ партии по PGN с реальным прогрессом. */
+/**
+ * Анализ партии по PGN с прогрессом (v1).
+ */
 suspend fun analyzeGameByPgnWithProgress(
     pgn: String,
-    depth: Int = 14,
+    depth: Int = 16,
     multiPv: Int = 3,
+    workersNb: Int = 4,
     header: GameHeader? = null,
     onProgress: (ProgressSnapshot) -> Unit
 ): FullReport = coroutineScope {
-    pingOrThrow()
-
     val progressId = UUID.randomUUID().toString()
 
-    // запускаем опрос прогресса
+    Log.d(TAG, "Starting PGN analysis with progressId: $progressId")
+    Log.d(TAG, "Server URL: ${ServerConfig.BASE_URL}")
+
     val poller = launch(Dispatchers.IO) {
         pollProgress(progressId, onProgress)
     }
 
     try {
         withContext(Dispatchers.IO) {
-            val url = "$BASE/api/v1/evaluate/game?" +
-                    "progressId=$progressId" +
-                    "&depth=$depth" +
-                    "&multiPv=$multiPv"
-            val requestBody = buildJsonObject {
-                put("pgn", pgn)
-                header?.let { h ->
-                    put("header", json.encodeToJsonElement(h))
+            pingOrThrow()
+
+            val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game?progressId=$progressId"
+
+            val normalized = normalizePgn(pgn)
+
+            // Локальная проверка нормализованного PGN (удобнее упасть здесь, чем на сервере)
+            runCatching { PgnChess.validatePgn(normalized) }
+                .onFailure { e ->
+                    throw IllegalArgumentException("Проблема с PGN: ${e.message}", e)
                 }
-            }
-            val payload = requestBody.toString()
+
+            // ВАЖНО: не включать null-поля внутрь header (explicitNulls=false уже помогает)
+            val headerSanitized = header?.copy(pgn = null)
+
+            val payload = json.encodeToString(
+                GamePgnRequest(
+                    pgn = normalized,
+                    depth = depth,
+                    multiPv = multiPv,
+                    workersNb = workersNb,
+                    header = headerSanitized
+                )
+            )
+
+            Log.d(TAG, "Sending PGN analysis request to: $url")
+            Log.d(TAG, "PGN length: ${normalized.length} chars")
+
             val req = Request.Builder()
                 .url(url)
                 .header("Accept", "application/json")
                 .header("User-Agent", UA)
-                .header("Content-Type", "application/json")
                 .post(payload.toRequestBody(JSON_MEDIA))
                 .build()
 
             client.newCall(req).execute().use { resp ->
                 val body = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
+                    Log.e(TAG, "Server error: HTTP ${resp.code}")
+                    Log.e(TAG, "Response body: ${body.take(500)}")
                     throw IllegalStateException("HTTP ${resp.code}: ${body.take(300)}")
                 }
-                try {
-                    val root = Json.parseToJsonElement(body)
-                    val arr = root.jsonObject["analysisLog"]?.jsonArray
-                    if (arr != null) {
-                        Log.d("EngineDiagnostics", "---- analysisLog (${arr.size}) [raw] ----")
-                        arr.forEachIndexed { i, el ->
-                            val line = el.toString().trim('"')
-                            Log.d("EngineDiagnostics", "#$i $line")
-                        }
-                        Log.d("EngineDiagnostics", "---- end analysisLog [raw] ----")
-                    } else {
-                        Log.d("EngineDiagnostics", "analysisLog field not present in raw JSON")
-                    }
-                } catch (t: Throwable) {
-                    Log.w("EngineDiagnostics", "Failed to read analysisLog from raw body", t)
-                }
                 val report = json.decodeFromString<FullReport>(body)
-                try {
-                    val size = report.analysisLog?.size ?: 0
-                    Log.d("EngineDiagnostics", "analysisLog size (decoded) = $size")
-                } catch (_: Throwable) { }
-
+                Log.d(TAG, "Analysis complete! Positions: ${report.positions.size}, Moves: ${report.moves.size}")
+                Log.d(TAG, "Accuracy: white=${report.accuracy.whiteMovesAcc.weighted}, black=${report.accuracy.blackMovesAcc.weighted}")
                 return@withContext report
             }
         }
+    } catch (e: Exception) {
+        Log.e(TAG, "Analysis failed", e)
+        throw e
     } finally {
         poller.cancel()
         poller.join()
     }
 }
 
-/** Анализ партии по PGN без прогресса. */
+/** Анализ партии по PGN без прогресса (v1). */
 suspend fun analyzeGameByPgn(
     pgn: String,
-    depth: Int = 14,
+    depth: Int = 16,
     multiPv: Int = 3,
+    workersNb: Int = 4,
     header: GameHeader? = null
 ): FullReport = withContext(Dispatchers.IO) {
     pingOrThrow()
-    val url = "$BASE/api/v1/evaluate/game"
-    val payload = json.encodeToString(GamePgnRequest(pgn, depth, multiPv, header))
+    val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game"
+
+    val normalized = normalizePgn(pgn)
+    runCatching { PgnChess.validatePgn(normalized) }
+        .onFailure { e -> throw IllegalArgumentException("Проблема с PGN: ${e.message}", e) }
+
+    val headerSanitized = header?.copy(pgn = null)
+
+    val payload = json.encodeToString(GamePgnRequest(normalized, depth, multiPv, workersNb,headerSanitized))
     val req = Request.Builder()
         .url(url)
         .header("Accept", "application/json")
         .header("User-Agent", UA)
         .post(payload.toRequestBody(JSON_MEDIA))
         .build()
+
     client.newCall(req).execute().use { resp ->
         val body = resp.body?.string().orEmpty()
         if (!resp.isSuccessful) {
             throw IllegalStateException("http_${resp.code}: ${body.take(300)}")
         }
-        try {
-            val root = Json.parseToJsonElement(body)
-            val arr = root.jsonObject["analysisLog"]?.jsonArray
-            if (arr != null) {
-                Log.d("EngineDiagnostics", "---- analysisLog (${arr.size}) [raw] ----")
-                arr.forEachIndexed { i, el ->
-                    val line = el.toString().trim('"')
-                    Log.d("EngineDiagnostics", "#$i $line")
-                }
-                Log.d("EngineDiagnostics", "---- end analysisLog [raw] ----")
-            } else {
-                Log.d("EngineDiagnostics", "analysisLog field not present in raw JSON")
-            }
-        } catch (t: Throwable) {
-            Log.w("EngineDiagnostics", "Failed to read analysisLog from raw body", t)
-        }
-        val report = json.decodeFromString<FullReport>(body)
-        try {
-            val size = report.analysisLog?.size ?: 0
-            Log.d("EngineDiagnostics", "analysisLog size (decoded) = $size")
-        } catch (_: Throwable) { }
-        return@use report
+        return@use json.decodeFromString<FullReport>(body)
     }
 }
 
-// ---------- Внутрянка ----------
+// ---------- Внутренние функции ----------
 
-/** Пинг одного адреса BASE. Выполняется на IO. */
 private suspend fun pingOrThrow() = withContext(Dispatchers.IO) {
-    // GET /ping
-    runCatching {
+    val url = "${ServerConfig.BASE_URL}/ping"
+    Log.d(TAG, "Pinging server at: $url")
+    try {
         val getReq = Request.Builder()
-            .url("$BASE/ping")
+            .url(url)
             .header("User-Agent", UA)
             .get()
             .build()
         client.newCall(getReq).execute().use { resp ->
-            if (resp.isSuccessful) {
-                Log.d(TAG, "Ping OK (GET) $BASE")
-                return@withContext
-            } else {
-                Log.w(TAG, "Ping GET failed $BASE: ${resp.code}")
-            }
+            if (resp.isSuccessful) return@withContext
+            Log.w(TAG, "Ping failed with code: ${resp.code}")
         }
-    }.onFailure { e -> Log.w(TAG, "Ping GET error $BASE: ${e.message}") }
-
-    // POST /ping
-    runCatching {
-        val postReq = Request.Builder()
-            .url("$BASE/ping")
-            .header("User-Agent", UA)
-            .post("{\"ping\":true}".toRequestBody(JSON_MEDIA))
-            .build()
-        client.newCall(postReq).execute().use { resp ->
-            if (resp.isSuccessful) {
-                Log.d(TAG, "Ping OK (POST) $BASE")
-                return@withContext
-            } else {
-                Log.w(TAG, "Ping POST failed $BASE: ${resp.code}")
-            }
-        }
-    }.onFailure { e -> Log.w(TAG, "Ping POST error $BASE: ${e.message}") }
-
-    throw IllegalStateException("Server not reachable on: $BASE")
+    } catch (e: Exception) {
+        Log.e(TAG, "Network error: ${e.message}")
+        throw IllegalStateException(
+            "Cannot reach server at ${ServerConfig.BASE_URL}. Check your network connection and server URL.",
+            e
+        )
+    }
+    throw IllegalStateException("Server not responding at: ${ServerConfig.BASE_URL}")
 }
 
 private fun requestEvaluatePosition(
@@ -427,7 +302,7 @@ private fun requestEvaluatePosition(
     depth: Int,
     multiPv: Int
 ): StockfishResponse {
-    val url = "$BASE/api/v1/evaluate/position"
+    val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
     val bodyStr = json.encodeToString(mapOf("fen" to fen, "depth" to depth, "multiPv" to multiPv))
     val req = Request.Builder()
         .url(url)
@@ -459,7 +334,6 @@ private fun requestEvaluatePosition(
     }
 }
 
-/** Поллинг прогресса: /api/v1/progress/{id} (запускать на IO, см. вызов выше). */
 private suspend fun pollProgress(
     progressId: String,
     onUpdate: (ProgressSnapshot) -> Unit
@@ -467,7 +341,7 @@ private suspend fun pollProgress(
     while (currentCoroutineContext().isActive) {
         try {
             val req = Request.Builder()
-                .url("$BASE/api/v1/progress/$progressId")
+                .url("${ServerConfig.BASE_URL}/api/v1/progress/$progressId")
                 .header("Accept", "application/json")
                 .header("User-Agent", UA)
                 .get()
@@ -482,8 +356,8 @@ private suspend fun pollProgress(
                     }
                 }
             }
-        } catch (_: Throwable) {
-            // игнорируем и пробуем снова
+        } catch (e: Exception) {
+            Log.w(TAG, "Progress polling error: ${e.message}")
         }
         delay(400)
     }

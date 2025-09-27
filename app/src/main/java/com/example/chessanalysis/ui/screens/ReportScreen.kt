@@ -215,15 +215,15 @@ private fun StatBox(value: String, dark: Boolean = false) {
 @Composable
 private fun ClassificationTable(report: FullReport) {
     val rows = listOf(
-        Triple("Блестящий ход", R.drawable.splendid, MoveClass.SPLENDID),
-        Triple("Замечательный", R.drawable.perfect, MoveClass.PERFECT),
-        Triple("Лучшие", R.drawable.best, MoveClass.BEST),
-        Triple("Отлично", R.drawable.excellent, MoveClass.EXCELLENT),
-        Triple("Хорошо", R.drawable.okay, MoveClass.OKAY),
-        Triple("Теоретический ход", R.drawable.opening, MoveClass.OPENING),
+        Triple("Блестящий ход!!", R.drawable.splendid, MoveClass.SPLENDID),
+        Triple("Замечательный!", R.drawable.perfect, MoveClass.PERFECT),
+        Triple("Лучший", R.drawable.best, MoveClass.BEST),
+        Triple("Отличный", R.drawable.excellent, MoveClass.EXCELLENT),
+        Triple("Хороший", R.drawable.okay, MoveClass.OKAY),
+        Triple("Теория", R.drawable.opening, MoveClass.OPENING),
         Triple("Неточность", R.drawable.inaccuracy, MoveClass.INACCURACY),
         Triple("Ошибка", R.drawable.mistake, MoveClass.MISTAKE),
-        Triple("Упущенная возмож.", R.drawable.forced, MoveClass.FORCED),
+        Triple("Единственный", R.drawable.forced, MoveClass.FORCED),
         Triple("Зевок", R.drawable.blunder, MoveClass.BLUNDER)
     )
 
@@ -299,50 +299,104 @@ private fun ClassificationTable(report: FullReport) {
 
 @Composable
 private fun EvalSparkline(report: FullReport) {
-    // Извлекаем оценки из позиций
-    val evaluations = report.positions.mapNotNull { position ->
-        position.lines.firstOrNull()?.cp?.toFloat()
+    // 1) вытаскиваем числовые оценки
+    val raw = report.positions.mapNotNull { pos ->
+        val l = pos.lines.firstOrNull()
+        when {
+            l?.cp != null -> l.cp.toFloat()
+            l?.mate != null -> if (l.mate!! > 0) 3000f else -3000f
+            else -> null
+        }
+    }
+    if (raw.isEmpty()) return
+
+    // 2) ограничиваем пики и слегка сглаживаем, чтобы линия была плавной
+    val cap = 800f
+    val clamped = raw.map { it.coerceIn(-cap, cap) }
+    val smooth = if (clamped.size < 4) clamped else buildList {
+        val w = floatArrayOf(0.2f, 0.6f, 0.2f)
+        add(clamped.first())
+        for (i in 1 until clamped.lastIndex) {
+            add(clamped[i - 1] * w[0] + clamped[i] * w[1] + clamped[i + 1] * w[2])
+        }
+        add(clamped.last())
     }
 
-    if (evaluations.isEmpty()) return
-
-    // Ограничиваем значения для визуализации
-    val minCp = -800f
-    val maxCp = 800f
-    val normalizedValues = evaluations.map { value ->
-        max(min(value, maxCp), minCp)
-    }
-
+    // 3) рисуем
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2A27)),
         shape = RoundedCornerShape(12.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .height(84.dp)
+            .height(120.dp)
     ) {
         Canvas(
             Modifier
                 .fillMaxSize()
-                .padding(horizontal = 8.dp, vertical = 16.dp)
+                .padding(horizontal = 10.dp, vertical = 12.dp)
         ) {
-            val width = size.width
-            val height = size.height
-            val path = Path()
+            val w = size.width
+            val h = size.height
+            val midY = h * 0.5f
 
-            val stepX = if (normalizedValues.size <= 1) 0f else width / (normalizedValues.size - 1)
+            // ось 0.0 по центру (как на примере)
+            drawLine(
+                color = Color(0xFF5E5E5E),
+                start = androidx.compose.ui.geometry.Offset(0f, midY),
+                end = androidx.compose.ui.geometry.Offset(w, midY),
+                strokeWidth = 1f
+            )
 
-            normalizedValues.forEachIndexed { index, value ->
-                val y = height * (1f - (value - minCp) / (maxCp - minCp))
-                val x = index * stepX
+            // преобразуем cp -> [0..1] -> y
+            fun to01(cp: Float) = (cp + cap) / (2f * cap)
 
-                if (index == 0) {
-                    path.moveTo(x, y)
-                } else {
-                    path.lineTo(x, y)
-                }
+            val stepX = if (smooth.size <= 1) 0f else w / (smooth.size - 1)
+            val pts = smooth.mapIndexed { i, v ->
+                val x = i * stepX
+                val y = h * (1f - to01(v))
+                androidx.compose.ui.geometry.Offset(x, y)
+            }
+            if (pts.isEmpty()) return@Canvas
+
+            // вспомогательная: строим одновременно ПУТЬ ЛИНИИ и ПУТЬ ЗАЛИВКИ ДО НИЗА
+            val strokeWidth = 1.7.dp.toPx()
+            val linePath = Path()
+            val fillPath = Path()
+
+            // fill: снизу-влево -> по кривой -> снизу-вправо -> закрыть
+            fillPath.moveTo(0f, h)
+            fillPath.lineTo(pts.first().x, pts.first().y)
+
+            // Catmull–Rom -> кубические Безье (плавность как у вторй картинки)
+            linePath.moveTo(pts.first().x, pts.first().y)
+            for (i in 1 until pts.size) {
+                val p0 = pts[(i - 1).coerceAtLeast(0)]
+                val p1 = pts[i]
+                val p_1 = pts[(i - 2).coerceAtLeast(0)]
+                val p2 = pts[(i + 1).coerceAtMost(pts.lastIndex)]
+                val t = 0.2f
+                val c1x = p0.x + (p1.x - p_1.x) * t
+                val c1y = p0.y + (p1.y - p_1.y) * t
+                val c2x = p1.x - (p2.x - p0.x) * t
+                val c2y = p1.y - (p2.y - p0.y) * t
+
+                linePath.cubicTo(c1x, c1y, c2x, c2y, p1.x, p1.y)
+                fillPath.cubicTo(c1x, c1y, c2x, c2y, p1.x, p1.y)
             }
 
-            drawPath(path, color = Color(0xFFBDBDBD))
+            // замыкаем заливку к низу
+            fillPath.lineTo(pts.last().x, h)
+            fillPath.close()
+
+            // Белая область — ВСЕГДА от линии до низа (точно как на второй картинке)
+            drawPath(fillPath, color = Color.White)
+
+            // Тонкая обводка самой кривой поверх (делает границу читаемой на тёмном фоне)
+            drawPath(
+                path = linePath,
+                color = Color(0xFFBDBDBD),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = strokeWidth)
+            )
         }
     }
 }

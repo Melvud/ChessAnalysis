@@ -24,8 +24,16 @@ object PgnChess {
 
     fun headerFromPgn(pgn: String): GameHeader {
         val tags = parseTags(pgn)
+        val siteTag = (tags["Site"] ?: "").lowercase()
+
+        val provider = when {
+            "lichess.org" in siteTag -> Provider.LICHESS
+            "chess.com" in siteTag   -> Provider.CHESSCOM
+            else                     -> null
+        }
+
         return GameHeader(
-            site = Provider.LICHESS,
+            site = provider,
             white = tags["White"],
             black = tags["Black"],
             result = tags["Result"],
@@ -39,8 +47,10 @@ object PgnChess {
     }
 
     fun movesWithFens(pgn: String): List<MoveItem> {
+        // Нормализуем прежде чем отдавать в PgnHolder
+        val norm = runCatching { normalizeInternal(pgn) }.getOrElse { pgn }
         val tmp = File.createTempFile("single_", ".pgn")
-        tmp.writeText(pgn)
+        tmp.writeText(norm)
 
         val holder = PgnHolder(tmp.absolutePath)
         holder.loadPgn()
@@ -48,7 +58,7 @@ object PgnChess {
         game.loadMoveText()
         val ml: MoveList = game.halfMoves
 
-        val tags = parseTags(pgn)
+        val tags = parseTags(norm)
         val board = Board()
         if (tags["SetUp"] == "1" && !tags["FEN"].isNullOrBlank()) {
             board.loadFromFen(tags["FEN"])
@@ -80,5 +90,53 @@ object PgnChess {
         val prevTo = prevUci.substring(2, 4)
         val curTo = curUci.substring(2, 4)
         return curTo.equals(prevTo, ignoreCase = true)
+    }
+
+    fun validatePgn(pgn: String) {
+        val norm = runCatching { normalizeInternal(pgn) }.getOrElse { pgn }
+        val tmp = File.createTempFile("chk", ".pgn")
+        tmp.writeText(norm)
+        try {
+            val holder = PgnHolder(tmp.absolutePath)
+            holder.loadPgn()
+            val games = holder.games
+            require(games.isNotEmpty()) { "PGN содержит 0 партий" }
+            val b = Board()
+            val legal0 = MoveGenerator.generateLegalMoves(b).size
+            require(legal0 > 0) { "Не удалось инициализировать позицию FEN" }
+        } catch (e: Exception) {
+            throw IllegalArgumentException("Некорректный PGN: ${e.message}", e)
+        } finally {
+            tmp.delete()
+        }
+    }
+
+    // Локальная упрощённая нормализация (идентичная по сути клиентской)
+    private fun normalizeInternal(src: String): String {
+        var s = src
+            .replace("\uFEFF", "")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+        s = s.replace("0-0-0", "O-O-O").replace("0-0", "O-O")
+        s = s.replace("1–0", "1-0").replace("0–1", "0-1")
+            .replace("½–½", "1/2-1/2").replace("½-½", "1/2-1/2")
+        s = s.replace(Regex("""\{\[%clk [^}]+\]\}"""), "")
+        s = s.replace(Regex("""\s\$\d+"""), "")
+        s = buildString(s.length) {
+            for (ch in s) {
+                if (ch == '\n' || ch == '\t' || ch.code >= 32) append(ch)
+            }
+        }
+        val tagBlockRegex = Regex("""\A(?:\[[^\]\n]+\]\s*\n)+""")
+        val tagMatch = tagBlockRegex.find(s)
+        val rebuilt = if (tagMatch != null) {
+            val tagBlock = tagMatch.value.trimEnd('\n')
+            val rest = s.substring(tagMatch.range.last + 1)
+            val movetext = rest.trimStart('\n', ' ', '\t')
+            tagBlock + "\n\n" + movetext
+        } else s.trimStart('\n', ' ', '\t')
+        var out = rebuilt.trimEnd()
+        if (!out.endsWith("\n")) out += "\n"
+        return out
     }
 }
