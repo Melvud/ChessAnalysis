@@ -48,6 +48,9 @@ fun BoardCanvas(
     val board = fen.substringBefore(' ')
     val ranks = board.split('/')
 
+    // Правильный переворот доски
+    val displayRanks = if (isWhiteBottom) ranks else ranks.reversed()
+
     var boardPx by remember { mutableStateOf(androidx.compose.ui.geometry.Size.Zero) }
 
     Box(
@@ -76,19 +79,20 @@ fun BoardCanvas(
                     )
                 }
             }
+
             // подсветка from/to
             lastMove?.let { (from, to) ->
                 val fromSquare = squareFromNotation(from)
                 val toSquare = squareFromNotation(to)
                 if (fromSquare != null && toSquare != null) {
-                    val (ff, fr) =
-                        if (isWhiteBottom) fromSquare else Pair(7 - fromSquare.first, 7 - fromSquare.second)
-                    val (tf, tr) =
-                        if (isWhiteBottom) toSquare else Pair(7 - toSquare.first, 7 - toSquare.second)
+                    val (ff, fr) = if (isWhiteBottom) fromSquare else Pair(fromSquare.first, 7 - fromSquare.second)
+                    val (tf, tr) = if (isWhiteBottom) toSquare else Pair(toSquare.first, 7 - toSquare.second)
+
                     val fromX = ff * squareSize
                     val fromY = fr * squareSize
                     val toX = tf * squareSize
                     val toY = tr * squareSize
+
                     drawRect(
                         color = classColor.copy(alpha = 0.30f),
                         topLeft = Offset(fromX, fromY),
@@ -103,9 +107,9 @@ fun BoardCanvas(
             }
         }
 
-        // 2) фигуры
+        // 2) фигуры с увеличенным размером (уменьшаем padding)
         Column(modifier = Modifier.fillMaxSize()) {
-            ranks.forEach { rank ->
+            displayRanks.forEach { rank ->
                 Row(Modifier.weight(1f)) {
                     var file = 0
                     for (ch in rank) {
@@ -137,7 +141,7 @@ fun BoardCanvas(
                                         contentDescription = null,
                                         modifier = Modifier
                                             .fillMaxSize()
-                                            .padding(6.dp),
+                                            .padding(2.dp), // Уменьшен padding с 6.dp до 2.dp
                                         contentScale = ContentScale.Fit
                                     )
                                 }
@@ -155,7 +159,7 @@ fun BoardCanvas(
             val to = squareFromNotation(lastMove.second)
             if (to != null) {
                 val sq = boardPx.minDimension / 8f
-                val (tf, tr) = if (isWhiteBottom) to else Pair(7 - to.first, 7 - to.second)
+                val (tf, tr) = if (isWhiteBottom) to else Pair(to.first, 7 - to.second)
                 val x = (tf * sq + sq * 0.62f).toInt()
                 val y = (tr * sq + sq * 0.08f).toInt()
                 Image(
@@ -177,10 +181,8 @@ fun BoardCanvas(
                     val from = squareFromNotation(bestMoveUci.substring(0, 2))
                     val to = squareFromNotation(bestMoveUci.substring(2, 4))
                     if (from != null && to != null) {
-                        val (ff, fr) =
-                            if (isWhiteBottom) from else Pair(7 - from.first, 7 - from.second)
-                        val (tf, tr) =
-                            if (isWhiteBottom) to else Pair(7 - to.first, 7 - to.second)
+                        val (ff, fr) = if (isWhiteBottom) from else Pair(from.first, 7 - from.second)
+                        val (tf, tr) = if (isWhiteBottom) to else Pair(to.first, 7 - to.second)
                         val fromX = ff * squareSize + squareSize / 2
                         val fromY = fr * squareSize + squareSize / 2
                         val toX = tf * squareSize + squareSize / 2
@@ -207,14 +209,18 @@ fun BoardCanvas(
                             val size = sizeSnapshot
                             if (size.width <= 0f) return@detectTapGestures
                             val sq = size.minDimension / 8f
-                            var file = (pos.x / sq).toInt().coerceIn(0, 7)
-                            var rank = (pos.y / sq).toInt().coerceIn(0, 7)
-                            if (!isWhiteBottom) {
-                                file = 7 - file
-                                rank = 7 - rank
+                            val file = (pos.x / sq).toInt().coerceIn(0, 7)
+                            val rank = (pos.y / sq).toInt().coerceIn(0, 7)
+
+                            // Преобразование координат с учетом ориентации доски
+                            val (realFile, realRank) = if (isWhiteBottom) {
+                                Pair(file, 7 - rank)
+                            } else {
+                                Pair(file, rank)
                             }
-                            val nf = ('a'.code + file).toChar()
-                            val nr = ('8'.code - rank).toChar()
+
+                            val nf = ('a'.code + realFile).toChar()
+                            val nr = ('1'.code + realRank).toChar()
                             onSquareClick("$nf$nr")
                         }
                     }

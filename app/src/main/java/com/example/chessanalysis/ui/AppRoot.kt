@@ -2,36 +2,35 @@ package com.example.chessanalysis.ui
 
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import androidx.navigation.navArgument
-import androidx.navigation.navDeepLink
 import com.example.chessanalysis.*
 import com.example.chessanalysis.ui.screens.GameReportScreen
 import com.example.chessanalysis.ui.screens.GamesListScreen
 import com.example.chessanalysis.ui.screens.LoginScreen
 import com.example.chessanalysis.ui.screens.ReportScreen
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
-import java.net.URLDecoder
-import java.net.URLEncoder
 
+/**
+ * Корневой навигационный граф приложения.
+ * Отчёт хранится в SavedStateHandle как JSON-строка, чтобы избежать ошибок сериализации.
+ */
 @Composable
 fun AppRoot() {
-    val nav = rememberNavController()
+    val navController = rememberNavController()
 
-    // Простое состояние приложения
+    // выбранный провайдер и имя пользователя
     var provider by rememberSaveable { mutableStateOf<Provider?>(null) }
     var username by rememberSaveable { mutableStateOf("") }
 
-    // Предзагруженные данные/кэши
+    // загруженные партии и FEN-ы (опционально)
     var games by remember { mutableStateOf<List<GameHeader>>(emptyList()) }
     var openingFens by remember { mutableStateOf<Set<String>>(emptySet()) }
 
-    // Единая настройка сериализации
+    // общий JSON-конвертер
     val json = remember {
         Json {
             ignoreUnknownKeys = true
@@ -39,24 +38,20 @@ fun AppRoot() {
         }
     }
 
-    NavHost(navController = nav, startDestination = "login") {
-
-        // ---------- LOGIN ----------
+    NavHost(navController = navController, startDestination = "login") {
         composable("login") {
             LoginScreen(
                 isLoading = false,
                 onSubmit = { p, user ->
                     provider = p
                     username = user
-                    // после логина идём на список игр
-                    nav.navigate("gamesList") {
+                    navController.navigate("gamesList") {
                         popUpTo("login") { inclusive = true }
                     }
                 }
             )
         }
 
-        // ---------- GAMES LIST ----------
         composable("gamesList") {
             val currentProvider = provider ?: Provider.LICHESS
             val currentUser = username
@@ -66,81 +61,63 @@ fun AppRoot() {
                 username = currentUser,
                 games = games,
                 openingFens = openingFens,
-                onBack = { nav.popBackStack() },
+                onBack = { navController.popBackStack() },
                 onOpenReport = { report ->
-                    // сериализуем полный отчёт в query‑параметр
-                    val encoded = URLEncoder.encode(json.encodeToString(report), "UTF-8")
-                    nav.navigate("reportSummary?report=$encoded")
+                    // сериализуем отчёт в JSON и кладём в savedState
+                    val reportJson = json.encodeToString(report)
+                    navController.currentBackStackEntry
+                        ?.savedStateHandle
+                        ?.set("reportJson", reportJson)
+                    navController.navigate("reportSummary")
                 }
             )
         }
 
-        // ---------- REPORT (сводка) ----------
-        composable(
-            route = "reportSummary?report={report}",
-            arguments = listOf(
-                navArgument("report") {
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                }
-            ),
-            deepLinks = listOf(
-                // deep‑link для внешней навигации (предыдущий формат)
-                navDeepLink { uriPattern = "app://report?report={report}" },
-                // deep‑link, который генерирует NavController.navigate("reportSummary?report=..."),
-                // чтобы избежать ошибки "destination cannot be found"
-                navDeepLink { uriPattern = "android-app://androidx.navigation/reportSummary?report={report}" }
-            )
-        ) { backStackEntry ->
-            val raw = backStackEntry.arguments?.getString("report")
-            val decoded = raw?.let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrElse { it } }
-            val report = decoded?.let { runCatching { json.decodeFromString<FullReport>(it as String) }.getOrNull() }
-                ?: FullReport.empty()
+        composable("reportSummary") {
+            val reportJson =
+                navController.previousBackStackEntry
+                    ?.savedStateHandle
+                    ?.get<String>("reportJson")
+            val report: FullReport? = reportJson?.let { runCatching { json.decodeFromString<FullReport>(it) }.getOrNull() }
 
-            ReportScreen(
-                report = report,
-                onBack = { nav.popBackStack() },
-                onOpenBoard = {
-                    val encoded = URLEncoder.encode(json.encodeToString(report), "UTF-8")
-                    nav.navigate("reportBoard?report=$encoded")
-                }
-            )
+            if (report == null) {
+                navController.popBackStack()
+            } else {
+                ReportScreen(
+                    report = report,
+                    onBack = { navController.popBackStack() },
+                    onOpenBoard = {
+                        // кладём JSON в текущую запись стека, переходим на доску
+                        navController.currentBackStackEntry
+                            ?.savedStateHandle
+                            ?.set("reportJson", reportJson)
+                        navController.navigate("reportBoard")
+                    }
+                )
+            }
         }
 
-        // ---------- GAME REPORT (доска/плейер) ----------
-        composable(
-            route = "reportBoard?report={report}",
-            arguments = listOf(
-                navArgument("report") {
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                }
-            ),
-            deepLinks = listOf(
-                // deep‑link для внешней навигации (предыдущий формат)
-                navDeepLink { uriPattern = "app://game_report?report={report}" },
-                // deep‑link, который генерирует NavController.navigate("reportBoard?report=...")
-                navDeepLink { uriPattern = "android-app://androidx.navigation/reportBoard?report={report}" }
-            )
-        ) { backStackEntry ->
-            val raw = backStackEntry.arguments?.getString("report")
-            val decoded = raw?.let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrElse { it } }
-            val report = decoded?.let { runCatching { json.decodeFromString<FullReport>(it as String) }.getOrNull() }
-                ?: FullReport.empty()
+        composable("reportBoard") {
+            val reportJson =
+                navController.previousBackStackEntry
+                    ?.savedStateHandle
+                    ?.get<String>("reportJson")
+            val report: FullReport? = reportJson?.let { runCatching { json.decodeFromString<FullReport>(it) }.getOrNull() }
 
-            GameReportScreen(
-                report = report,
-                onBack = { nav.popBackStack() }
-            )
+            if (report == null) {
+                navController.popBackStack()
+            } else {
+                GameReportScreen(
+                    report = report,
+                    onBack = { navController.popBackStack() }
+                )
+            }
         }
     }
 }
 
 /**
  * Запасной «пустой» отчёт на случай отсутствия/повреждения данных.
- * Подобран под модель FullReport.
  */
 private fun FullReport.Companion.empty(): FullReport =
     FullReport(
