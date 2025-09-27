@@ -38,6 +38,7 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+        freeCompilerArgs += listOf("-opt-in=kotlin.RequiresOptIn")
     }
 }
 
@@ -52,8 +53,8 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3:1.2.0")
     implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.navigation:navigation-compose:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.6.2")
     // Сеть
     implementation ("androidx.compose.material:material-icons-extended")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
@@ -87,4 +88,9 @@ dependencies {
 
     implementation("io.coil-kt:coil-compose:2.6.0")
     implementation("io.coil-kt:coil-svg:2.6.0")
+    
+    // Accompanist Snapper для center-snapping карусели
+    implementation("dev.chrisbanes.snapper:snapper:0.3.0")
+    implementation("androidx.compose.foundation:foundation") // тут есть HorizontalPager
+    implementation("androidx.navigation:navigation-compose:2.7.7")
 }

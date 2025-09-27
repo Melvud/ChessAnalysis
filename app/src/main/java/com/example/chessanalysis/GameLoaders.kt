@@ -59,6 +59,22 @@ object GameLoaders {
         return@withContext src
     }
 
+    /**
+     * Определяет, за какой цвет играл пользователь
+     */
+    private fun determineUserSide(pgn: String, username: String): Boolean? {
+        val tags = parseTags(pgn)
+        val white = tags["White"]?.lowercase()
+        val black = tags["Black"]?.lowercase()
+        val usernameLower = username.lowercase()
+
+        return when {
+            white?.contains(usernameLower) == true -> true  // User was white
+            black?.contains(usernameLower) == true -> false // User was black
+            else -> null // Cannot determine
+        }
+    }
+
     // Загрузчик Lichess ---------------------------------------------
 
     suspend fun loadLichess(username: String, max: Int = 20): List<GameHeader> =
@@ -84,7 +100,13 @@ object GameLoaders {
                                 val el = json.parseToJsonElement(line).jsonObject
                                 val pgn = el["pgn"]?.jsonPrimitive?.content
                                 if (!pgn.isNullOrBlank()) {
-                                    list += PgnChess.headerFromPgn(pgn).copy(site = Provider.LICHESS, pgn = pgn)
+                                    val header = PgnChess.headerFromPgn(pgn)
+                                    val sideToView = determineUserSide(pgn, username)
+                                    list += header.copy(
+                                        site = Provider.LICHESS,
+                                        pgn = pgn,
+                                        sideToView = sideToView
+                                    )
                                 }
                             }
                         }
@@ -111,7 +133,13 @@ object GameLoaders {
                 rx.findAll(body).forEach { m ->
                     val pgn = m.groupValues[1].trim()
                     if (pgn.isNotEmpty()) {
-                        out += PgnChess.headerFromPgn(pgn).copy(site = Provider.LICHESS, pgn = pgn)
+                        val header = PgnChess.headerFromPgn(pgn)
+                        val sideToView = determineUserSide(pgn, username)
+                        out += header.copy(
+                            site = Provider.LICHESS,
+                            pgn = pgn,
+                            sideToView = sideToView
+                        )
                     }
                 }
                 out
@@ -138,7 +166,13 @@ object GameLoaders {
                         .findAll(month).toList()
                     matches.takeLast(max).map {
                         val pgn = it.groupValues[1].replace("\\n", "\n").replace("\\\"", "\"")
-                        PgnChess.headerFromPgn(pgn).copy(site = Provider.CHESSCOM, pgn = pgn)
+                        val header = PgnChess.headerFromPgn(pgn)
+                        val sideToView = determineUserSide(pgn, username)
+                        header.copy(
+                            site = Provider.CHESSCOM,
+                            pgn = pgn,
+                            sideToView = sideToView
+                        )
                     }
                 }
             }

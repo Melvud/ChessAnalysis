@@ -39,7 +39,8 @@ data class GameHeader(
     val opening: String? = null,
     val pgn: String? = null,
     val whiteElo: Int? = null,
-    val blackElo: Int? = null
+    val blackElo: Int? = null,
+    val sideToView: Boolean? = null  // true = white bottom, false = black bottom, null = auto-detect
 )
 
 // Линия оценки
