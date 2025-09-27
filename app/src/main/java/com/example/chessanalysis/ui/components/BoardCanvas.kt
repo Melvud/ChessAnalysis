@@ -2,6 +2,7 @@ package com.example.chessanalysis.ui.components
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,6 +24,7 @@ import coil.compose.rememberAsyncImagePainter
 import coil.decode.SvgDecoder
 import coil.request.ImageRequest
 import com.example.chessanalysis.MoveClass
+import androidx.compose.ui.input.pointer.pointerInput
 
 @Composable
 fun BoardCanvas(
@@ -31,6 +33,8 @@ fun BoardCanvas(
     moveClass: MoveClass? = null,
     bestMoveUci: String? = null,
     showBestArrow: Boolean = false,
+    isWhiteBottom: Boolean = true,
+    onSquareClick: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -51,11 +55,11 @@ fun BoardCanvas(
             .aspectRatio(1f)
             .onSizeChanged { boardPx = it.toSize() }
     ) {
-        // 1) Клетки и подсветка последнего хода
+        // 1) клетки и подсветка
         Canvas(modifier = Modifier.fillMaxSize()) {
             val squareSize = size.minDimension / 8f
             val lightColor = Color(0xFFF0D9B5)
-            val darkColor = Color(0xFF8B6F4E) // чуть темнее для контраста
+            val darkColor = Color(0xFF8B6F4E)
             val defaultHl = Color(0xFFB58863)
             val classColor = moveClass?.let { mc -> moveClassBadgeRes(mc).container } ?: defaultHl
 
@@ -72,18 +76,19 @@ fun BoardCanvas(
                     )
                 }
             }
-
-            // подсветка from/to — более отчётливые
+            // подсветка from/to
             lastMove?.let { (from, to) ->
                 val fromSquare = squareFromNotation(from)
                 val toSquare = squareFromNotation(to)
-
                 if (fromSquare != null && toSquare != null) {
-                    val fromX = fromSquare.first * squareSize
-                    val fromY = fromSquare.second * squareSize
-                    val toX = toSquare.first * squareSize
-                    val toY = toSquare.second * squareSize
-
+                    val (ff, fr) =
+                        if (isWhiteBottom) fromSquare else Pair(7 - fromSquare.first, 7 - fromSquare.second)
+                    val (tf, tr) =
+                        if (isWhiteBottom) toSquare else Pair(7 - toSquare.first, 7 - toSquare.second)
+                    val fromX = ff * squareSize
+                    val fromY = fr * squareSize
+                    val toX = tf * squareSize
+                    val toY = tr * squareSize
                     drawRect(
                         color = classColor.copy(alpha = 0.30f),
                         topLeft = Offset(fromX, fromY),
@@ -98,7 +103,7 @@ fun BoardCanvas(
             }
         }
 
-        // 2) Фигуры
+        // 2) фигуры
         Column(modifier = Modifier.fillMaxSize()) {
             ranks.forEach { rank ->
                 Row(Modifier.weight(1f)) {
@@ -144,15 +149,15 @@ fun BoardCanvas(
             }
         }
 
-        // 3) Значок качества у клетки назначения (справа-сверху)
+        // 3) значок класса хода (правый верхний угол клетки назначения)
         if (lastMove != null && moveClass != null && boardPx.width > 0f) {
             val badge = moveClassBadgeRes(moveClass)
             val to = squareFromNotation(lastMove.second)
             if (to != null) {
                 val sq = boardPx.minDimension / 8f
-                // правый верхний угол клетки назначения:
-                val x = (to.first * sq + sq * 0.62f).toInt()
-                val y = (to.second * sq + sq * 0.08f).toInt()
+                val (tf, tr) = if (isWhiteBottom) to else Pair(7 - to.first, 7 - to.second)
+                val x = (tf * sq + sq * 0.62f).toInt()
+                val y = (tr * sq + sq * 0.08f).toInt()
                 Image(
                     painter = painterResource(badge.iconRes),
                     contentDescription = null,
@@ -164,7 +169,7 @@ fun BoardCanvas(
             }
         }
 
-        // 4) Стрелка лучшего хода (для ошибок/зевков)
+        // 4) стрелка лучшего хода
         if (showBestArrow && bestMoveUci != null) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val squareSize = size.minDimension / 8f
@@ -172,11 +177,14 @@ fun BoardCanvas(
                     val from = squareFromNotation(bestMoveUci.substring(0, 2))
                     val to = squareFromNotation(bestMoveUci.substring(2, 4))
                     if (from != null && to != null) {
-                        val fromX = from.first * squareSize + squareSize / 2
-                        val fromY = from.second * squareSize + squareSize / 2
-                        val toX = to.first * squareSize + squareSize / 2
-                        val toY = to.second * squareSize + squareSize / 2
-
+                        val (ff, fr) =
+                            if (isWhiteBottom) from else Pair(7 - from.first, 7 - from.second)
+                        val (tf, tr) =
+                            if (isWhiteBottom) to else Pair(7 - to.first, 7 - to.second)
+                        val fromX = ff * squareSize + squareSize / 2
+                        val fromY = fr * squareSize + squareSize / 2
+                        val toX = tf * squareSize + squareSize / 2
+                        val toY = tr * squareSize + squareSize / 2
                         drawArrow(
                             start = Offset(fromX, fromY),
                             end = Offset(toX, toY),
@@ -186,6 +194,31 @@ fun BoardCanvas(
                     }
                 }
             }
+        }
+
+        // 5) клики по клеткам (detectTapGestures)
+        if (onSquareClick != null) {
+            val sizeSnapshot = boardPx
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(isWhiteBottom, sizeSnapshot) {
+                        detectTapGestures { pos ->
+                            val size = sizeSnapshot
+                            if (size.width <= 0f) return@detectTapGestures
+                            val sq = size.minDimension / 8f
+                            var file = (pos.x / sq).toInt().coerceIn(0, 7)
+                            var rank = (pos.y / sq).toInt().coerceIn(0, 7)
+                            if (!isWhiteBottom) {
+                                file = 7 - file
+                                rank = 7 - rank
+                            }
+                            val nf = ('a'.code + file).toChar()
+                            val nr = ('8'.code - rank).toChar()
+                            onSquareClick("$nf$nr")
+                        }
+                    }
+            )
         }
     }
 }

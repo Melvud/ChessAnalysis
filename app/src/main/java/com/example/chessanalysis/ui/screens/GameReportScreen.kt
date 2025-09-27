@@ -1,7 +1,7 @@
 package com.example.chessanalysis.ui.screens
 
 import android.annotation.SuppressLint
-import android.content.Context
+import android.media.MediaPlayer
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -9,27 +9,23 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.ScreenRotation
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.ArrowForward
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.chessanalysis.FullReport
-import com.example.chessanalysis.MoveClass
-import com.example.chessanalysis.Provider
+import com.example.chessanalysis.*
 import com.example.chessanalysis.ui.components.BoardCanvas
 import com.example.chessanalysis.ui.components.EvalBar
 import com.example.chessanalysis.ui.components.MovesCarousel
+import com.example.chessanalysis.ui.components.moveClassBadgeRes
+import com.github.bhlangonijr.chesslib.Board
+import com.github.bhlangonijr.chesslib.move.MoveGenerator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -50,10 +46,10 @@ data class ClockData(
 fun GameReportScreen(
     report: FullReport,
     onBack: () -> Unit,
-    onNextKeyMoment: (() -> Unit)? = null // для совместимости
+    onNextKeyMoment: (() -> Unit)? = null
 ) {
     val scope = rememberCoroutineScope()
-
+    val androidContext = LocalContext.current
     val userWasWhite = remember(report.header) { true }
 
     var currentPlyIndex by remember { mutableStateOf(0) }
@@ -61,29 +57,120 @@ fun GameReportScreen(
     var clockData by remember { mutableStateOf<ClockData?>(null) }
     var isAutoPlaying by remember { mutableStateOf(false) }
 
+    // интерактивные варианты
+    var variationActive by remember { mutableStateOf(false) }
+    var variationBoard by remember { mutableStateOf<Board?>(null) }
+    var variationFen by remember { mutableStateOf<String?>(null) }
+    var variationEval by remember { mutableStateOf<Float?>(null) }
+    var variationMoveClass by remember { mutableStateOf<MoveClass?>(null) }
+    var variationBestUci by remember { mutableStateOf<String?>(null) }
+    var variationLastMove by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var selectedSquare by remember { mutableStateOf<String?>(null) }
+
     val bgColor = Color(0xFF161512)
     val surfaceColor = Color(0xFF262522)
     val cardColor = Color(0xFF1E1C1A)
 
-    // Загружаем часы: сперва парсим локально из PGN, если нет — тянем с сайта
+    // часы
     LaunchedEffect(report) {
         scope.launch {
-            val local = report.header.pgn?.let {
-                runCatching { parseClockData(it) }.getOrNull()
-            }
+            val local = report.header.pgn?.let { runCatching { parseClockData(it) }.getOrNull() }
             clockData = local ?: fetchClockData(report)
         }
     }
 
-    fun playMoveSound(@Suppress("UNUSED_PARAMETER") ctx: Context, @Suppress("UNUSED_PARAMETER") moveClass: MoveClass) { /* TODO */ }
+    // звуки ходов
+    fun playMoveSound(moveClass: MoveClass?, isCapture: Boolean) {
+        val resId = when {
+            moveClass == MoveClass.INACCURACY || moveClass == MoveClass.MISTAKE || moveClass == MoveClass.BLUNDER ->
+                com.example.chessanalysis.R.raw.error
+            isCapture -> com.example.chessanalysis.R.raw.capture
+            else -> com.example.chessanalysis.R.raw.move
+        }
+        val mp = MediaPlayer.create(androidContext, resId)
+        mp?.setOnCompletionListener { it.release() }
+        mp?.start()
+    }
+
+    // ∆ → класс (используем серверные eval/bestmove)
+    fun classifyDelta(delta: Float, isBest: Boolean): MoveClass =
+        when {
+            isBest -> MoveClass.BEST
+            delta <= -3f -> MoveClass.BLUNDER
+            delta <= -1.5f -> MoveClass.MISTAKE
+            delta <= -0.6f -> MoveClass.INACCURACY
+            delta <= -0.3f -> MoveClass.OKAY
+            else -> MoveClass.EXCELLENT
+        }
+
+    fun evalOfPosition(pos: PositionEval?): Float {
+        val line = pos?.lines?.firstOrNull() ?: return 0f
+        return when {
+            line.cp != null -> line.cp / 100.0f
+            line.mate != null -> if (line.mate > 0) 30f else -30f
+            else -> 0f
+        }
+    }
 
     fun seekTo(index: Int) {
-        val clampedIndex = index.coerceIn(0, report.positions.lastIndex)
-        currentPlyIndex = clampedIndex
+        variationActive = false
+        val clamped = index.coerceIn(0, report.positions.lastIndex)
+        currentPlyIndex = clamped
     }
 
     fun goNext() { if (currentPlyIndex < report.positions.lastIndex) seekTo(currentPlyIndex + 1) }
     fun goPrev() { if (currentPlyIndex > 0) seekTo(currentPlyIndex - 1) }
+
+    // обработка кликов
+    fun handleSquareClick(square: String) {
+        val currentPosition = report.positions.getOrNull(currentPlyIndex) ?: return
+        if (!variationActive) {
+            variationBoard = Board().apply { loadFromFen(currentPosition.fen) }
+            variationEval = evalOfPosition(currentPosition)
+        }
+        val board = variationBoard ?: return
+
+        if (selectedSquare == null) {
+            selectedSquare = square.lowercase()
+            return
+        }
+
+        val from = selectedSquare!!.lowercase()
+        val to = square.lowercase()
+        selectedSquare = null
+        if (from == to) return
+
+        val legalMoves = MoveGenerator.generateLegalMoves(board)
+        val move = legalMoves.find { it.from.toString().equals(from, true) && it.to.toString().equals(to, true) }
+            ?: legalMoves.find { it.toString().equals(from + to, true) }
+        if (move == null) return
+
+        val capturedPiece = board.getPiece(move.to)
+        val isCapture = capturedPiece != com.github.bhlangonijr.chesslib.Piece.NONE &&
+                capturedPiece.pieceSide != board.sideToMove
+
+        val evalBefore = variationEval ?: evalOfPosition(currentPosition)
+        board.doMove(move)
+        variationLastMove = from to to
+        variationFen = board.fen
+        variationActive = true
+        isAutoPlaying = false
+
+        // серверная оценка
+        scope.launch {
+            val fen = variationFen ?: return@launch
+            val resp = analyzeFen(fen)
+            val newEval: Float = resp.mate?.let { if (it > 0) 30f else -30f } ?: (resp.evaluation?.toFloat() ?: 0f)
+            variationEval = newEval
+            val bestMoveUci = resp.bestmove ?: resp.continuation?.split(" ")?.firstOrNull()
+            variationBestUci = bestMoveUci
+            val wasWhiteToMove = board.sideToMove == com.github.bhlangonijr.chesslib.Side.BLACK
+            val delta = (newEval - evalBefore) * (if (wasWhiteToMove) 1f else -1f)
+            val isBest = bestMoveUci?.equals((from + to), ignoreCase = true) ?: false
+            variationMoveClass = classifyDelta(delta, isBest)
+            playMoveSound(variationMoveClass, isCapture)
+        }
+    }
 
     Scaffold(
         containerColor = bgColor,
@@ -113,12 +200,15 @@ fun GameReportScreen(
                 .padding(padding)
                 .background(bgColor)
         ) {
-            // ===== Верхняя карточка игрока =====
+            // Верхняя карточка
             val topIsWhite = !isWhiteBottom
             val topName = if (topIsWhite) (report.header.white ?: "White") else (report.header.black ?: "Black")
             val topElo = if (topIsWhite) report.header.whiteElo else report.header.blackElo
-            val topClock = if (topIsWhite) clockData?.white?.getOrNull(currentPlyIndex / 2) else clockData?.black?.getOrNull(currentPlyIndex / 2)
-            val topActive = (currentPlyIndex % 2 == 0 && topIsWhite) || (currentPlyIndex % 2 == 1 && !topIsWhite)
+            val topClock = if (topIsWhite) clockData?.white?.getOrNull(currentPlyIndex / 2)
+            else clockData?.black?.getOrNull(currentPlyIndex / 2)
+            val topActive = if (!variationActive) {
+                (currentPlyIndex % 2 == 0 && topIsWhite) || (currentPlyIndex % 2 == 1 && !topIsWhite)
+            } else false
 
             PlayerCard(
                 name = topName,
@@ -132,80 +222,84 @@ fun GameReportScreen(
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             )
 
-            // ===== Доска + эвал-бар =====
+            // Доска + эвал-бар (ВСЕГДА слева)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(1f),
                 horizontalArrangement = Arrangement.Start
             ) {
-                if (isWhiteBottom) {
-                    EvalBar(
-                        positions = report.positions,
-                        currentPlyIndex = currentPlyIndex,
-                        isWhiteBottom = isWhiteBottom,
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .width(20.dp)
-                    )
+                val evalPositions: List<PositionEval>
+                val evalIndex: Int
+                if (variationActive && variationEval != null) {
+                    val evalCp = (variationEval!! * 100).toInt()
+                    val fakeLine = LineEval(pv = emptyList(), cp = evalCp, mate = null, best = null)
+                    val baseFen = variationFen ?: report.positions.getOrNull(currentPlyIndex)?.fen.orEmpty()
+                    val fakePos = PositionEval(fen = baseFen, idx = 0, lines = listOf(fakeLine))
+                    evalPositions = listOf(fakePos)
+                    evalIndex = 0
+                } else {
+                    evalPositions = report.positions
+                    evalIndex = currentPlyIndex
                 }
 
-                // Доска
+                EvalBar(
+                    positions = evalPositions,
+                    currentPlyIndex = evalIndex,
+                    isWhiteBottom = isWhiteBottom,
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(20.dp)
+                )
+
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
                         .weight(1f)
                 ) {
                     val currentPosition = report.positions.getOrNull(currentPlyIndex)
-                    val lastMovePair = if (currentPlyIndex > 0) {
+                    val lastMovePairActual = if (currentPlyIndex > 0) {
                         val uci = report.moves[currentPlyIndex - 1].uci
                         if (uci.length >= 4) uci.substring(0, 2) to uci.substring(2, 4) else null
                     } else null
-                    val lastMoveClass = report.moves.getOrNull(currentPlyIndex - 1)?.classification
+                    val lastMoveClassActual = report.moves.getOrNull(currentPlyIndex - 1)?.classification
+                    val bestUciActual: String? = report.positions
+                        .getOrNull(kotlin.math.max(0, currentPlyIndex - 1))
+                        ?.lines?.firstOrNull()
+                        ?.pv?.firstOrNull()
 
-                    // Лучший ход из предыдущей позиции (для стрелки при ошибках)
-                    val bestUci: String? = report.positions
-                        .getOrNull(maxOf(0, currentPlyIndex - 1))
-                        ?.lines
-                        ?.firstOrNull()
-                        ?.pv
-                        ?.firstOrNull()
-
-                    val shouldShowBestArrow = when (lastMoveClass) {
+                    val boardFen = if (variationActive) variationFen else currentPosition?.fen
+                    val lastMovePair = if (variationActive) variationLastMove else lastMovePairActual
+                    val moveClass = if (variationActive) variationMoveClass else lastMoveClassActual
+                    val bestUci = if (variationActive) variationBestUci else bestUciActual
+                    val showBestArrow = when (moveClass) {
                         MoveClass.INACCURACY, MoveClass.MISTAKE, MoveClass.BLUNDER -> true
                         else -> false
                     }
-
-                    currentPosition?.let { pos ->
+                    boardFen?.let { fen ->
                         BoardCanvas(
-                            fen = if (isWhiteBottom) pos.fen else flipFen(pos.fen),
+                            fen = if (isWhiteBottom) fen else flipFen(fen),
                             lastMove = lastMovePair,
-                            moveClass = lastMoveClass,
+                            moveClass = moveClass,
                             bestMoveUci = bestUci,
-                            showBestArrow = shouldShowBestArrow,
+                            showBestArrow = showBestArrow,
+                            isWhiteBottom = isWhiteBottom,
+                            onSquareClick = { handleSquareClick(it) },
                             modifier = Modifier.fillMaxSize()
                         )
                     }
                 }
-
-                if (!isWhiteBottom) {
-                    EvalBar(
-                        positions = report.positions,
-                        currentPlyIndex = currentPlyIndex,
-                        isWhiteBottom = isWhiteBottom,
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .width(20.dp)
-                    )
-                }
             }
 
-            // ===== Нижняя карточка игрока =====
+            // Нижняя карточка
             val bottomIsWhite = isWhiteBottom
             val bottomName = if (bottomIsWhite) (report.header.white ?: "White") else (report.header.black ?: "Black")
             val bottomElo = if (bottomIsWhite) report.header.whiteElo else report.header.blackElo
-            val bottomClock = if (bottomIsWhite) clockData?.white?.getOrNull(currentPlyIndex / 2) else clockData?.black?.getOrNull(currentPlyIndex / 2)
-            val bottomActive = (currentPlyIndex % 2 == 0 && bottomIsWhite) || (currentPlyIndex % 2 == 1 && !bottomIsWhite)
+            val bottomClock = if (bottomIsWhite) clockData?.white?.getOrNull(currentPlyIndex / 2)
+            else clockData?.black?.getOrNull(currentPlyIndex / 2)
+            val bottomActive = if (!variationActive) {
+                (currentPlyIndex % 2 == 0 && bottomIsWhite) || (currentPlyIndex % 2 == 1 && !bottomIsWhite)
+            } else false
 
             PlayerCard(
                 name = bottomName,
@@ -219,7 +313,7 @@ fun GameReportScreen(
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             )
 
-            // ===== Карусель ходов =====
+            // Карусель ходов
             MovesCarousel(
                 report = report,
                 currentPlyIndex = currentPlyIndex,
@@ -229,7 +323,7 @@ fun GameReportScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            // ===== Кнопки навигации/автоплей =====
+            // Кнопки
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -245,16 +339,16 @@ fun GameReportScreen(
                     Icon(Icons.Default.ArrowBack, contentDescription = "Previous", tint = Color.White)
                 }
                 IconButton(
-                    onClick = { isAutoPlaying = !isAutoPlaying },
+                    onClick = {
+                        isAutoPlaying = !isAutoPlaying
+                        variationActive = false
+                    },
                     modifier = Modifier
                         .size(56.dp)
                         .background(MaterialTheme.colorScheme.primary, CircleShape)
                 ) {
-                    Icon(
-                        if (isAutoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isAutoPlaying) "Pause" else "Play",
-                        tint = Color.White
-                    )
+                    Icon(if (isAutoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (isAutoPlaying) "Pause" else "Play", tint = Color.White)
                 }
                 IconButton(onClick = { goNext() }) {
                     Icon(Icons.Default.ArrowForward, contentDescription = "Next", tint = Color.White)
@@ -268,16 +362,14 @@ fun GameReportScreen(
             LaunchedEffect(isAutoPlaying, currentPlyIndex) {
                 if (isAutoPlaying) {
                     kotlinx.coroutines.delay(1500)
-                    if (currentPlyIndex < report.positions.lastIndex) {
-                        goNext()
-                    } else {
-                        isAutoPlaying = false
-                    }
+                    if (currentPlyIndex < report.positions.lastIndex) goNext() else isAutoPlaying = false
                 }
             }
         }
     }
 }
+
+// ===== ВСПОМОГАТЕЛЬНОЕ =====
 
 @Composable
 private fun PlayerCard(
@@ -324,7 +416,7 @@ private fun PlayerCard(
     }
 }
 
-// util
+// формат времени
 private fun formatClock(centiseconds: Int): String {
     val seconds = centiseconds / 100
     val minutes = seconds / 60
@@ -332,7 +424,7 @@ private fun formatClock(centiseconds: Int): String {
     return "%d:%02d".format(minutes, secs)
 }
 
-// переворот FEN по вертикали
+// переворот FEN
 private fun flipFen(fen: String): String {
     val parts = fen.split(" ")
     if (parts.isEmpty()) return fen
@@ -350,7 +442,6 @@ private fun flipFen(fen: String): String {
 
 // --- ЧАСЫ ---
 
-// Вытягиваем id партии и запрашиваем у провайдера (fallback)
 private suspend fun fetchClockData(report: FullReport): ClockData? = withContext(Dispatchers.IO) {
     try {
         val site = report.header.site ?: return@withContext null
@@ -376,13 +467,8 @@ private suspend fun fetchLichessClocks(gameId: String): ClockData? {
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .build()
-
     val url = "https://lichess.org/game/export/$gameId?clocks=true"
-    val request = Request.Builder()
-        .url(url)
-        .header("Accept", "application/json")
-        .build()
-
+    val request = Request.Builder().url(url).build()
     return try {
         client.newCall(request).execute().use { response ->
             if (response.isSuccessful) {
@@ -393,22 +479,20 @@ private suspend fun fetchLichessClocks(gameId: String): ClockData? {
     } catch (_: Exception) { null }
 }
 
-private suspend fun fetchChesscomClocks(@Suppress("UNUSED_PARAMETER") gameId: String): ClockData? {
-    return null
-}
+private suspend fun fetchChesscomClocks(@Suppress("UNUSED_PARAMETER") gameId: String): ClockData? = null
 
-/** Парсим часы вида `[%clk H:MM:SS]` из PGN. */
+/** Парсим часы вида `[%clk H:MM:SS]` или `[%clk M:SS]`. */
 private fun parseClockData(pgn: String): ClockData {
-    val clockPattern = Regex("""\[%clk\s+(\d+):(\d+):(\d+)\]""")
+    val clockPattern = Regex("""\[%clk\s+((\d+):)?(\d{1,2}):(\d{1,2})\]""")
     val whiteTimes = mutableListOf<Int>()
     val blackTimes = mutableListOf<Int>()
     var moveIndex = 0
-    clockPattern.findAll(pgn).forEach { match ->
-        val hours = match.groupValues[1].toIntOrNull() ?: 0
-        val minutes = match.groupValues[2].toIntOrNull() ?: 0
-        val seconds = match.groupValues[3].toIntOrNull() ?: 0
-        val centiseconds = (hours * 3600 + minutes * 60 + seconds) * 100
-        if (moveIndex % 2 == 0) whiteTimes.add(centiseconds) else blackTimes.add(centiseconds)
+    clockPattern.findAll(pgn).forEach { m ->
+        val hours = (m.groups[2]?.value ?: "0").toInt()
+        val minutes = (m.groups[3]?.value ?: "0").toInt()
+        val seconds = (m.groups[4]?.value ?: "0").toInt()
+        val cs = (hours * 3600 + minutes * 60 + seconds) * 100
+        if (moveIndex % 2 == 0) whiteTimes.add(cs) else blackTimes.add(cs)
         moveIndex++
     }
     return ClockData(white = whiteTimes, black = blackTimes)
