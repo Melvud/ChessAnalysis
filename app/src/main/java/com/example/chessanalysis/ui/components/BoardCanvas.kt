@@ -34,6 +34,9 @@ fun BoardCanvas(
     bestMoveUci: String? = null,
     showBestArrow: Boolean = false,
     isWhiteBottom: Boolean = true,
+    // Новое: подсветка выбранной клетки и возможных ходов
+    selectedSquare: String? = null,
+    legalMoves: Set<String> = emptySet(),
     onSquareClick: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -105,9 +108,24 @@ fun BoardCanvas(
                     )
                 }
             }
+
+            // подсветка выбранной клетки (тонкая рамка)
+            selectedSquare?.let { sel ->
+                squareFromNotation(sel)?.let { (sf, srBoard) ->
+                    val (f, r) = if (isWhiteBottom) Pair(sf, srBoard) else Pair(sf, 7 - srBoard)
+                    val x = f * squareSize
+                    val y = r * squareSize
+                    drawRect(
+                        color = Color(0xFF2B7FFF).copy(alpha = 0.65f),
+                        topLeft = Offset(x, y),
+                        size = androidx.compose.ui.geometry.Size(squareSize, squareSize),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx())
+                    )
+                }
+            }
         }
 
-        // 2) фигуры с увеличенным размером (уменьшаем padding)
+        // 2) фигуры (с минимальным отступом)
         Column(modifier = Modifier.fillMaxSize()) {
             displayRanks.forEach { rank ->
                 Row(Modifier.weight(1f)) {
@@ -141,7 +159,7 @@ fun BoardCanvas(
                                         contentDescription = null,
                                         modifier = Modifier
                                             .fillMaxSize()
-                                            .padding(2.dp), // Уменьшен padding с 6.dp до 2.dp
+                                            .padding(2.dp),
                                         contentScale = ContentScale.Fit
                                     )
                                 }
@@ -153,7 +171,29 @@ fun BoardCanvas(
             }
         }
 
-        // 3) значок класса хода (правый верхний угол клетки назначения)
+        // 3) кружки возможных ходов (после отрисовки фигур, чтобы были сверху)
+        if (legalMoves.isNotEmpty()) {
+            Canvas(modifier = Modifier.fillMaxSize().zIndex(1f)) {
+                val squareSize = size.minDimension / 8f
+                val radius = squareSize * 0.18f
+                val color = Color.Black.copy(alpha = 0.28f)
+
+                legalMoves.forEach { target ->
+                    squareFromNotation(target)?.let { (tfBoard, trBoard) ->
+                        val (tf, tr) = if (isWhiteBottom) Pair(tfBoard, trBoard) else Pair(tfBoard, 7 - trBoard)
+                        val cx = tf * squareSize + squareSize / 2
+                        val cy = tr * squareSize + squareSize / 2
+                        drawCircle(
+                            color = color,
+                            radius = radius,
+                            center = Offset(cx, cy)
+                        )
+                    }
+                }
+            }
+        }
+
+        // 4) значок класса хода (правый верхний угол клетки назначения)
         if (lastMove != null && moveClass != null && boardPx.width > 0f) {
             val badge = moveClassBadgeRes(moveClass)
             val to = squareFromNotation(lastMove.second)
@@ -173,7 +213,7 @@ fun BoardCanvas(
             }
         }
 
-        // 4) стрелка лучшего хода
+        // 5) стрелка лучшего хода
         if (showBestArrow && bestMoveUci != null) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val squareSize = size.minDimension / 8f
@@ -198,7 +238,7 @@ fun BoardCanvas(
             }
         }
 
-        // 5) клики по клеткам (detectTapGestures)
+        // 6) клики по клеткам (detectTapGestures)
         if (onSquareClick != null) {
             val sizeSnapshot = boardPx
             Box(

@@ -87,6 +87,19 @@ data class GamePgnRequest(
     val header: GameHeader? = null
 )
 
+/**
+ * Запрос для endpoint /api/v1/evaluate/game/by-fens. Содержит список FEN‑позиций (как правило, две: до и после хода)
+ * и список ходов в формате UCI. Поля depth и multiPv аналогичны другим функциям анализа.
+ */
+@SuppressLint("UnsafeOptInUsageError")
+@Serializable
+data class FensUciRequest(
+    val fens: List<String>,
+    val uciMoves: List<String>,
+    val depth: Int = 14,
+    val multiPv: Int = 3
+)
+
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class ProgressSnapshot(
@@ -151,9 +164,16 @@ private fun normalizePgn(src: String): String {
 
 // ---------- Публичное API ----------
 
+/**
+ * Оценка позиции по FEN с указанием глубины (по умолчанию 14).
+ */
 suspend fun analyzeFen(fen: String, depth: Int = 14): StockfishResponse =
     withContext(Dispatchers.IO) { requestEvaluatePosition(fen, depth, 3) }
 
+/**
+ * Анализ партии по PGN с отображением прогресса. В отличие от старой версии,
+ * не обнуляем поле pgn в заголовке: оно нужно для корректного отображения часов.
+ */
 suspend fun analyzeGameByPgnWithProgress(
     pgn: String,
     depth: Int = 16,
@@ -164,18 +184,16 @@ suspend fun analyzeGameByPgnWithProgress(
 ): FullReport = coroutineScope {
     val progressId = UUID.randomUUID().toString()
     val poller = launch(Dispatchers.IO) { pollProgress(progressId, onProgress) }
-
     try {
         withContext(Dispatchers.IO) {
             pingOrThrow()
-
             val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game?progressId=$progressId"
             val normalized = normalizePgn(pgn)
             runCatching { PgnChess.validatePgn(normalized) }
                 .onFailure { e -> throw IllegalArgumentException("Проблема с PGN: ${e.message}", e) }
 
-            val headerSanitized = header?.copy(pgn = null)
-
+            // Не удаляем pgn из header, чтобы вернуть PGN обратно в отчёте
+            val headerSanitized = header
             val payload = json.encodeToString(
                 GamePgnRequest(
                     pgn = normalized,
@@ -205,6 +223,9 @@ suspend fun analyzeGameByPgnWithProgress(
     }
 }
 
+/**
+ * Анализ партии по PGN без отображения прогресса. pgn в header остаётся нетронутым.
+ */
 suspend fun analyzeGameByPgn(
     pgn: String,
     depth: Int = 16,
@@ -219,7 +240,8 @@ suspend fun analyzeGameByPgn(
     runCatching { PgnChess.validatePgn(normalized) }
         .onFailure { e -> throw IllegalArgumentException("Проблема с PGN: ${e.message}", e) }
 
-    val headerSanitized = header?.copy(pgn = null)
+    // Не удаляем pgn из header
+    val headerSanitized = header
 
     val payload = json.encodeToString(GamePgnRequest(normalized, depth, multiPv, workersNb, headerSanitized))
     val req = Request.Builder()
@@ -233,6 +255,49 @@ suspend fun analyzeGameByPgn(
         val body = resp.body?.string().orEmpty()
         if (!resp.isSuccessful) throw IllegalStateException("http_${resp.code}: ${body.take(300)}")
         return@use json.decodeFromString<FullReport>(body)
+    }
+}
+
+/**
+ * Анализ одиночного хода. Принимает FEN до хода, FEN после хода и сам ход в UCI‑формате.
+ * Возвращает тройку: оценка новой позиции, классификация хода и лучший вариант из предыдущей позиции.
+ */
+suspend fun analyzeMoveByFens(
+    beforeFen: String,
+    afterFen: String,
+    uciMove: String,
+    depth: Int = 14,
+    multiPv: Int = 3
+): Triple<Float, MoveClass, String?> = withContext(Dispatchers.IO) {
+    pingOrThrow()
+    val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game/by-fens"
+    val payload = json.encodeToString(
+        FensUciRequest(
+            fens = listOf(beforeFen, afterFen),
+            uciMoves = listOf(uciMove),
+            depth = depth,
+            multiPv = multiPv
+        )
+    )
+    val req = Request.Builder()
+        .url(url)
+        .header("Accept", "application/json")
+        .header("User-Agent", UA)
+        .post(payload.toRequestBody(JSON_MEDIA))
+        .build()
+    client.newCall(req).execute().use { resp ->
+        val text = resp.body?.string().orEmpty()
+        if (!resp.isSuccessful) throw IllegalStateException("http_${resp.code}: ${text.take(300)}")
+        val report = json.decodeFromString<FullReport>(text)
+        // оценка новой позиции
+        val evalAfter = report.positions.getOrNull(1)?.lines?.firstOrNull()?.let { line ->
+            line.mate?.let { if (it > 0) 30f else -30f } ?: (line.cp?.toFloat()?.div(100f))
+        } ?: 0f
+        // классификация хода
+        val cls = report.moves.firstOrNull()?.classification ?: MoveClass.OKAY
+        // лучший ход из предыдущей позиции (если есть)
+        val best = report.positions.getOrNull(0)?.lines?.firstOrNull()?.pv?.firstOrNull()
+        return@use Triple(evalAfter, cls, best)
     }
 }
 
@@ -250,6 +315,9 @@ private suspend fun pingOrThrow() = withContext(Dispatchers.IO) {
     throw IllegalStateException("Server not responding at: ${ServerConfig.BASE_URL}")
 }
 
+/**
+ * Прямой вызов оценщика позиции. Служебная функция.
+ */
 private fun requestEvaluatePosition(
     fen: String,
     depth: Int,
