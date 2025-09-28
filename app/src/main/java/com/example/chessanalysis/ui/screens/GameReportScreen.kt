@@ -212,25 +212,31 @@ private fun EnginePvPanel(
 
 fun extractGameId(pgn: String?): String? {
     if (pgn.isNullOrBlank()) return null
+    // [Site "https://lichess.org/AbCdEfGh"] или [Site "https://.../123456"]
     val sitePattern = Regex("""\[Site\s+".*/([\w]+)"\]""")
     sitePattern.find(pgn)?.groupValues?.getOrNull(1)?.let { return it }
+    // запасной вариант — любое 8-символьное
     val lichessPattern = Regex("""([a-zA-Z0-9]{8})""")
     lichessPattern.find(pgn)?.groupValues?.getOrNull(1)?.let { return it }
     return null
 }
 
+/**
+ * Парсим все [%clk H:MM:SS] или [%clk MM:SS] из PGN и строим список оставшегося времени
+ * после КАЖДОГО полухода. Часы для белых — на чётных индексах, для чёрных — на нечётных.
+ */
 fun parseClockData(pgn: String): ClockData {
     val clockPattern = Regex("""\[%clk\s+((\d+):)?(\d{1,2}):(\d{1,2})\]""")
-    val whiteTimes = mutableListOf<Int>()
+    val whiteTimes = mutableListOf<Int>() // в сотых долях секунды
     val blackTimes = mutableListOf<Int>()
-    var moveIndex = 0
+    var plyIndex = 0
     clockPattern.findAll(pgn).forEach { m ->
         val hours = (m.groups[2]?.value?.toIntOrNull() ?: 0)
         val minutes = (m.groups[3]?.value?.toIntOrNull() ?: 0)
         val seconds = (m.groups[4]?.value?.toIntOrNull() ?: 0)
         val cs = (hours * 3600 + minutes * 60 + seconds) * 100
-        if (moveIndex % 2 == 0) whiteTimes.add(cs) else blackTimes.add(cs)
-        moveIndex++
+        if (plyIndex % 2 == 0) whiteTimes.add(cs) else blackTimes.add(cs)
+        plyIndex++
     }
     return ClockData(white = whiteTimes, black = blackTimes)
 }
@@ -240,6 +246,7 @@ private suspend fun fetchLichessClocks(gameId: String): ClockData? = withContext
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .build()
+    // clocks=true вернёт только теги [%clk ...]
     val url = "https://lichess.org/game/export/$gameId?clocks=true&moves=false&tags=false"
     val request = Request.Builder().url(url).header("Accept", "application/x-chess-pgn").build()
     try {
@@ -286,19 +293,18 @@ fun GameReportScreen(
     val surfaceColor = Color(0xFF262522)
     val cardColor = Color(0xFF1E1C1A)
 
+    // Загрузка часов: сперва пробуем вытащить из PGN, если пусто — для Lichess дергаем экспорт clocks
     LaunchedEffect(report) {
-        scope.launch {
-            val pgn = report.header.pgn
-            if (!pgn.isNullOrBlank()) {
-                val parsed = parseClockData(pgn)
-                clockData = if (parsed.white.isNotEmpty() || parsed.black.isNotEmpty()) {
-                    parsed
-                } else {
-                    val gameId = extractGameId(pgn)
-                    if (gameId != null && report.header.site == Provider.LICHESS) {
-                        fetchClockData(report)
-                    } else null
-                }
+        val pgn = report.header.pgn
+        if (!pgn.isNullOrBlank()) {
+            val parsed = parseClockData(pgn)
+            clockData = if (parsed.white.isNotEmpty() || parsed.black.isNotEmpty()) {
+                parsed
+            } else {
+                val gameId = extractGameId(pgn)
+                if (gameId != null && report.header.site == Provider.LICHESS) {
+                    fetchLichessClocks(gameId)
+                } else null
             }
         }
     }
@@ -443,8 +449,7 @@ fun GameReportScreen(
                         best = l.pv.firstOrNull()
                     )
                 }.take(3)
-            } catch (e: Exception) {
-                e.printStackTrace()
+            } catch (_: Exception) {
                 variationEval = evalOfPosition(report.positions.getOrNull(currentPlyIndex))
                 variationMoveClass = MoveClass.OKAY
                 variationBestUci = null
@@ -523,8 +528,7 @@ fun GameReportScreen(
                         best = l.pv.firstOrNull()
                     )
                 }.take(3)
-            } catch (e: Exception) {
-                e.printStackTrace()
+            } catch (_: Exception) {
                 variationEval = evalOfPosition(report.positions.getOrNull(currentPlyIndex))
                 variationMoveClass = MoveClass.OKAY
                 variationBestUci = null
@@ -675,7 +679,7 @@ fun GameReportScreen(
                             isWhiteBottom = isWhiteBottom,
                             selectedSquare = selectedSquare,
                             legalMoves = legalTargets,
-                            onSquareClick = { handleSquareClick(it) }, // ВКЛЮЧИЛИ КЛИКИ ПО ДОСКЕ
+                            onSquareClick = { handleSquareClick(it) }, // клики по доске включены в отчёте
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -794,8 +798,6 @@ fun GameReportScreen(
 
 // --------- Вспомогательные компоненты / часы ---------
 
-// 2) ЗАМЕНИ существующую функцию PlayerCard на эту:
-
 @Composable
 private fun PlayerCard(
     name: String,
@@ -824,7 +826,7 @@ private fun PlayerCard(
                     .background(if (inverted) Color.Black else Color.White, CircleShape)
             )
             Spacer(Modifier.width(8.dp))
-            // Новый фолбэк-аватар с инициалом
+            // Фолбэк-аватар с инициалом
             InitialAvatar(name = name, size = 28.dp)
             Spacer(Modifier.width(8.dp))
             Text(
@@ -845,7 +847,6 @@ private fun PlayerCard(
     }
 }
 
-
 private fun formatClock(centiseconds: Int): String {
     val seconds = centiseconds / 100
     val minutes = seconds / 60
@@ -858,22 +859,10 @@ data class ClockData(
     val black: List<Int> = emptyList()
 )
 
-private suspend fun fetchClockData(report: FullReport): ClockData? = withContext(Dispatchers.IO) {
-    try {
-        val site = report.header.site ?: return@withContext null
-        val gameId = extractGameId(report.header.pgn) ?: return@withContext null
-        when (site) {
-            Provider.LICHESS -> fetchLichessClocks(gameId)
-            Provider.CHESSCOM -> null
-            Provider.BOT -> TODO()
-        }
-    } catch (_: Exception) { null } as Nothing?
-}
-
 @Composable
 private fun InitialAvatar(
     name: String,
-    size: androidx.compose.ui.unit.Dp,
+    size: Dp,
     bg: Color = Color(0xFF6D5E4A),
     fg: Color = Color(0xFFF5F3EF)
 ) {

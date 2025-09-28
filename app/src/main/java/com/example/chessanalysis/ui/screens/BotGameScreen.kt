@@ -35,37 +35,53 @@ fun BotGameScreen(
             Slider(
                 value = elo,
                 onValueChange = { elo = it },
-                valueRange = 800f..2200f,
-                steps = ((2200 - 800) / 50) - 1
+                valueRange = 800f..3000f,
+                steps = ((3000 - 800) / 50) - 1 // шаг 50
             )
 
             Text("Цвет фигуры")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = side == BotSide.WHITE, onClick = { side = BotSide.WHITE }, label = { Text("Белые") })
-                FilterChip(selected = side == BotSide.BLACK, onClick = { side = BotSide.BLACK }, label = { Text("Чёрные") })
-                FilterChip(selected = side == BotSide.AUTO,  onClick = { side = BotSide.AUTO },  label = { Text("Случайно") })
+                FilterChip(
+                    selected = side == BotSide.WHITE,
+                    onClick = { side = BotSide.WHITE },
+                    label = { Text("Белые") }
+                )
+                FilterChip(
+                    selected = side == BotSide.BLACK,
+                    onClick = { side = BotSide.BLACK },
+                    label = { Text("Чёрные") }
+                )
+                FilterChip(
+                    selected = side == BotSide.AUTO,
+                    onClick = { side = BotSide.AUTO },
+                    label = { Text("Случайно") }
+                )
             }
 
             Divider()
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Switch(checked = hints, onCheckedChange = { hints = it })
-                Spacer(Modifier.width(8.dp)); Text("Подсказки (лучший ход)")
+                Spacer(Modifier.width(8.dp))
+                Text("Подсказки (лучший ход)")
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Switch(checked = showMultiPv, onCheckedChange = { showMultiPv = it })
-                Spacer(Modifier.width(8.dp)); Text("Показывать топ-3 линии")
+                Spacer(Modifier.width(8.dp))
+                Text("Показывать топ-3 линии")
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Switch(checked = showEvalBar, onCheckedChange = { showEvalBar = it })
-                Spacer(Modifier.width(8.dp)); Text("Показывать шкалу оценки")
+                Spacer(Modifier.width(8.dp))
+                Text("Показывать шкалу оценки")
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Switch(checked = allowUndo, onCheckedChange = { allowUndo = it })
-                Spacer(Modifier.width(8.dp)); Text("Разрешить «Вернуть ход»")
+                Spacer(Modifier.width(8.dp))
+                Text("Разрешить «Вернуть ход»")
             }
 
             Spacer(Modifier.weight(1f))

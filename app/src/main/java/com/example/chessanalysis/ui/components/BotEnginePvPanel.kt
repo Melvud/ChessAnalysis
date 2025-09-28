@@ -21,7 +21,6 @@ import coil.compose.rememberAsyncImagePainter
 import coil.decode.SvgDecoder
 import coil.request.ImageRequest
 import com.example.chessanalysis.LineEval
-import com.example.chessanalysis.PositionEval
 import com.github.bhlangonijr.chesslib.Board
 import com.github.bhlangonijr.chesslib.Piece
 import com.github.bhlangonijr.chesslib.PieceType
@@ -177,7 +176,7 @@ private fun BotPvRow(
 fun BotEnginePvPanel(
     baseFen: String,
     lines: List<LineEval>,
-    onClickMoveInLine: (lineIdx: Int, moveIdx: Int) -> Unit,
+    onClickMoveInLine: ((Int, Int) -> Unit)?,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -190,7 +189,7 @@ fun BotEnginePvPanel(
             BotPvRow(
                 baseFen = baseFen,
                 line = line,
-                onClickMoveAtIndex = { mi -> onClickMoveInLine(li, mi) }
+                onClickMoveAtIndex = { mi -> onClickMoveInLine?.invoke(li, mi) }
             )
         }
     }

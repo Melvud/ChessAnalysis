@@ -60,7 +60,6 @@ fun BotPlayScreen(
     fun skillFromElo(elo: Int): Int =
         (((elo - 800) / 50.0).toInt()).coerceIn(1, 20)
 
-    // читаем тумблеры из BotConfig
     val showLines   = config.showMultiPv
     val showEvalBar = config.showEvalBar
     val allowUndo   = config.allowUndo
@@ -79,6 +78,10 @@ fun BotPlayScreen(
 
     var isWhiteBottom by remember { mutableStateOf(mySide == Side.WHITE) }
     var currentEvalPos by remember { mutableStateOf<PositionEval?>(null) }
+
+    // Сохраняем предыдущие значения, чтобы не исчезали во время анализа
+    var previousEvalPos by remember { mutableStateOf<PositionEval?>(null) }
+    var previousPvLines by remember { mutableStateOf<List<LineEval>>(emptyList()) }
 
     val bgColor = Color(0xFF161512)
     val cardColor = Color(0xFF1E1C1A)
@@ -100,19 +103,30 @@ fun BotPlayScreen(
             evaluateFenDetailed(board.fen, depth = 16, multiPv = multiPvForThink, skillLevel = engineSkill)
         }
         bestMoveHint = pos.bestMove
-        pvLines = if (showLines) {
+
+        val newLines = if (showLines) {
             pos.lines.take(3).map { line ->
                 LineEval(pv = line.pv, cp = line.cp, mate = line.mate, best = line.pv.firstOrNull())
             }
         } else emptyList()
 
+        if (newLines.isNotEmpty()) {
+            pvLines = newLines
+            previousPvLines = newLines
+        }
+
         val firstLine = pos.lines.firstOrNull()
-        currentEvalPos = firstLine?.let {
+        val newEvalPos = firstLine?.let {
             PositionEval(
                 fen = board.fen,
                 idx = 0,
                 lines = listOf(LineEval(pv = it.pv, cp = it.cp, mate = it.mate, best = it.pv.firstOrNull()))
             )
+        }
+
+        if (newEvalPos != null) {
+            currentEvalPos = newEvalPos
+            previousEvalPos = newEvalPos
         }
     }
 
@@ -175,8 +189,7 @@ fun BotPlayScreen(
         legalTargets = emptySet()
         userToMove = false
         bestMoveHint = null
-        pvLines = emptyList()
-        currentEvalPos = null
+        // Не обнуляем линии и эвал, оставляем предыдущие значения
         checkEnd()
         if (!isGameOver) {
             scope.launch { engineThinkAndMove() }
@@ -190,8 +203,8 @@ fun BotPlayScreen(
 
     @RequiresApi(Build.VERSION_CODES.O)
     suspend fun openReport() {
-        val headerWhite = if (mySide == Side.WHITE) "You" else "Engine"
-        val headerBlack = if (mySide == Side.BLACK) "You" else "Engine"
+        val headerWhite = if (mySide == Side.WHITE) "You" else "Bot"
+        val headerBlack = if (mySide == Side.BLACK) "You" else "Bot"
         val resStr = when (result) {
             GameResult.WHITE_WON -> "1-0"
             GameResult.BLACK_WON -> "0-1"
@@ -240,8 +253,7 @@ fun BotPlayScreen(
         result = GameResult.ONGOING
         lastMovePair = null
         bestMoveHint = null
-        pvLines = emptyList()
-        currentEvalPos = null
+        // Не обнуляем линии и эвал при отмене хода
         if ((config.hints || showLines || showEvalBar) && userToMove) {
             scope.launch { updateHints() }
         }
@@ -279,29 +291,37 @@ fun BotPlayScreen(
         lastMovePair = from to to
 
         scope.launch {
-            isEngineThinking = true
             try {
                 val (newEval, _, _) = analyzeMoveRealtime(
                     beforeFen = beforeFen, afterFen = afterFen,
                     uciMove = uciMove, depth = 16, multiPv = 3
                 )
                 val evalCp = (newEval * 100).toInt()
-                currentEvalPos = PositionEval(
+                val newEvalPos = PositionEval(
                     fen = afterFen, idx = 0,
                     lines = listOf(LineEval(pv = emptyList(), cp = evalCp, mate = null, best = null))
                 )
+                currentEvalPos = newEvalPos
+                previousEvalPos = newEvalPos
+
                 val detailed = evaluateFenDetailed(afterFen, depth = 16, multiPv = multiPvForThink, skillLevel = engineSkill)
-                pvLines = if (showLines) {
+                val newLines = if (showLines) {
                     detailed.lines.take(3).map {
                         LineEval(pv = it.pv, cp = it.cp, mate = it.mate, best = it.pv.firstOrNull())
                     }
                 } else emptyList()
-            } catch (_: Exception) {
-            } finally {
-                isEngineThinking = false
-            }
+
+                if (newLines.isNotEmpty()) {
+                    pvLines = newLines
+                    previousPvLines = newLines
+                }
+            } catch (_: Exception) {}
         }
     }
+
+    // Используем предыдущие значения, если текущие null
+    val displayEvalPos = currentEvalPos ?: previousEvalPos
+    val displayPvLines = if (pvLines.isNotEmpty()) pvLines else previousPvLines
 
     Scaffold(
         containerColor = bgColor,
@@ -375,10 +395,9 @@ fun BotPlayScreen(
                         .aspectRatio(1f)
                 ) {
                     if (showEvalBar) {
-                        val eval = currentEvalPos
-                        if (eval != null) {
+                        if (displayEvalPos != null) {
                             EvalBar(
-                                positions = listOf(eval),
+                                positions = listOf(displayEvalPos),
                                 currentPlyIndex = 0,
                                 isWhiteBottom = isWhiteBottom,
                                 modifier = Modifier
@@ -412,18 +431,14 @@ fun BotPlayScreen(
                             onSquareClick = { onUserSquareClick(it) },
                             modifier = Modifier.fillMaxSize()
                         )
-                        if (isEngineThinking) {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                            }
-                        }
+                        // Убираем CircularProgressIndicator
                     }
                 }
 
-                if (showLines && pvLines.isNotEmpty()) {
+                if (showLines && displayPvLines.isNotEmpty()) {
                     BotEnginePvPanel(
                         baseFen = board.fen,
-                        lines = pvLines,
+                        lines = displayPvLines,
                         onClickMoveInLine = ::onClickPvMove,
                         modifier = Modifier
                             .fillMaxWidth()

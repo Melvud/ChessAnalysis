@@ -104,10 +104,6 @@ data class GamePgnRequest(
     val header: GameHeader? = null
 )
 
-/**
- * Запрос для endpoint /api/v1/evaluate/game/by-fens. Содержит список FEN-позиций (как правило, две: до и после хода)
- * и список ходов в формате UCI. Поля depth и multiPv аналогичны другим функциям анализа.
- */
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class FensUciRequest(
@@ -124,23 +120,21 @@ data class ProgressSnapshot(
     val total: Int,
     val done: Int,
     val percent: Double? = null,
-    val etaMs: Long? = null,         // <— оставлено для совместимости с экранами
+    val etaMs: Long? = null,
     val stage: String? = null,
     val startedAt: Long? = null,
     val updatedAt: Long? = null
 )
 
-/** Типизированный запрос для /evaluate/position (позиционный режим) */
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
 private data class EvaluatePositionRequest(
     val fen: String,
     val depth: Int,
     val multiPv: Int,
-    val skillLevel: Int? = null      // <— добавлено, если null — поле не уйдёт в JSON
+    val skillLevel: Int? = null
 )
 
-/** Типизированный запрос для /evaluate/position (real-time режим) */
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
 private data class EvaluateMoveRealtimeRequest(
@@ -149,41 +143,30 @@ private data class EvaluateMoveRealtimeRequest(
     val uciMove: String,
     val depth: Int,
     val multiPv: Int,
-    val skillLevel: Int? = null      // <— добавлено
+    val skillLevel: Int? = null
 )
 
 // ---------- УТИЛИТЫ ----------
 
-/**
- * Нормализация PGN:
- *  - убираем BOM, CRLF/CR → LF, заменяем «0-0/0-0-0» → «O-O/O-O-O» и разные тире/½;
- *  - удаляем часы {[%clk …]} и NAG ($…);
- *  - теги оставляем строго сверху, между тегами и ходами ровно одна пустая строка;
- *  - чистим управляющие символы; всегда заканчиваем одним '\n'.
- */
 private fun normalizePgn(src: String): String {
     var s = src
         .replace("\uFEFF", "")
         .replace("\r\n", "\n")
         .replace("\r", "\n")
 
-    // Рокировки/результаты/½
     s = s.replace("0-0-0", "O-O-O").replace("0-0", "O-O")
     s = s.replace("1–0", "1-0").replace("0–1", "0-1")
         .replace("½–½", "1/2-1/2").replace("½-½", "1/2-1/2")
 
-    // Удаляем часы и NAG
     s = s.replace(Regex("""\{\[%clk [^}]+\]\}"""), "")
     s = s.replace(Regex("""\s\$\d+"""), "")
 
-    // Счистить странные управляющие (кроме таба/перевода строки)
     s = buildString(s.length) {
         for (ch in s) {
             if (ch == '\n' || ch == '\t' || ch.code >= 32) append(ch)
         }
     }
 
-    // Теги — только с самого начала
     val tagBlockRegex = Regex("""\A(?:\[[^\]\n]+\]\s*\n)+""")
     val tagMatch = tagBlockRegex.find(s)
 
@@ -201,22 +184,15 @@ private fun normalizePgn(src: String): String {
     return out
 }
 
-// ---------- Публичное API (старое — без изменений сигнатур) ----------
+// ---------- Публичное API ----------
 
-/**
- * Оценка позиции по FEN с указанием глубины (по умолчанию 14).
- */
 suspend fun analyzeFen(
     fen: String,
     depth: Int = 14,
-    skillLevel: Int? = null          // <— добавлено (опционально)
+    skillLevel: Int? = null
 ): StockfishResponse =
     withContext(Dispatchers.IO) { requestEvaluatePosition(fen, depth, 3, skillLevel) }
 
-/**
- * Анализ партии по PGN с отображением прогресса. В отличие от старой версии,
- * не обнуляем поле pgn в заголовке: оно нужно для корректного отображения часов.
- */
 suspend fun analyzeGameByPgnWithProgress(
     pgn: String,
     depth: Int = 16,
@@ -232,10 +208,14 @@ suspend fun analyzeGameByPgnWithProgress(
             pingOrThrow()
             val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game?progressId=$progressId"
             val normalized = normalizePgn(pgn)
-            runCatching { PgnChess.validatePgn(normalized) }
-                .onFailure { e -> throw IllegalArgumentException("Проблема с PGN: ${e.message}", e) }
 
-            // Не удаляем pgn из header, чтобы вернуть PGN обратно в отчёте
+            // Более мягкая валидация для партий с ботом
+            val validationResult = runCatching { PgnChess.validatePgn(normalized) }
+            if (validationResult.isFailure) {
+                Log.w(TAG, "PGN validation warning: ${validationResult.exceptionOrNull()?.message}")
+                // Не бросаем исключение для партий с ботом, пробуем анализировать как есть
+            }
+
             val headerSanitized = header
             val payload = json.encodeToString(
                 GamePgnRequest(
@@ -266,15 +246,13 @@ suspend fun analyzeGameByPgnWithProgress(
     }
 }
 
-
-// ДОБАВИТЬ: подробный реал-тайм анализ с возвратом топ-линий
 suspend fun analyzeMoveRealtimeDetailed(
     beforeFen: String,
     afterFen: String,
     uciMove: String,
     depth: Int = 18,
     multiPv: Int = 3,
-    skillLevel: Int? = null          // <— добавлено
+    skillLevel: Int? = null
 ): MoveRealtimeResult = withContext(Dispatchers.IO) {
     val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
     val payload = json.encodeToString(
@@ -329,14 +307,11 @@ suspend fun analyzeMoveRealtimeDetailed(
             evalAfter = evalAfter,
             moveClass = cls,
             bestMove = parsed.bestMove,
-            lines = parsed.lines.take(3) // показываем топ-3
+            lines = parsed.lines.take(3)
         )
     }
 }
 
-/**
- * Анализ партии по PGN без отображения прогресса. pgn в header остаётся нетронутым.
- */
 suspend fun analyzeGameByPgn(
     pgn: String,
     depth: Int = 16,
@@ -348,12 +323,14 @@ suspend fun analyzeGameByPgn(
     val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game"
 
     val normalized = normalizePgn(pgn)
-    runCatching { PgnChess.validatePgn(normalized) }
-        .onFailure { e -> throw IllegalArgumentException("Проблема с PGN: ${e.message}", e) }
 
-    // Не удаляем pgn из header
+    // Более мягкая валидация для партий с ботом
+    val validationResult = runCatching { PgnChess.validatePgn(normalized) }
+    if (validationResult.isFailure) {
+        Log.w(TAG, "PGN validation warning: ${validationResult.exceptionOrNull()?.message}")
+    }
+
     val headerSanitized = header
-
     val payload = json.encodeToString(GamePgnRequest(normalized, depth, multiPv, workersNb, headerSanitized))
     val req = Request.Builder()
         .url(url)
@@ -369,17 +346,13 @@ suspend fun analyzeGameByPgn(
     }
 }
 
-/**
- * Реал-тайм анализ одного хода через /api/v1/evaluate/position.
- * Сервер возвращает: lines (оценка ПОСЛЕ), bestMove (совет ДО), moveClassification (строка).
- */
 suspend fun analyzeMoveRealtime(
     beforeFen: String,
     afterFen: String,
     uciMove: String,
     depth: Int = 14,
     multiPv: Int = 3,
-    skillLevel: Int? = null          // <— добавлено
+    skillLevel: Int? = null
 ): Triple<Float, MoveClass, String?> = withContext(Dispatchers.IO) {
     val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
     val payload = json.encodeToString(
@@ -403,15 +376,12 @@ suspend fun analyzeMoveRealtime(
         val text = resp.body?.string().orEmpty()
         if (!resp.isSuccessful) throw IllegalStateException("http_${resp.code}: ${text.take(300)}")
 
-        // --- Основной путь: real-time DTO ---
         val parsed = runCatching { json.decodeFromString<MoveEvalDTO>(text) }.getOrNull()
             ?: run {
-                // --- Совместимость: если вдруг пришёл позиционный ответ ---
                 val pos = json.decodeFromString<PositionDTO>(text)
                 MoveEvalDTO(lines = pos.lines, bestMove = pos.bestMove, moveClassification = null)
             }
 
-        // оценка позиции ПОСЛЕ хода
         val top = parsed.lines.firstOrNull()
         val evalAfter: Float = when {
             top?.mate != null -> if (top.mate!! > 0) 30f else -30f
@@ -419,7 +389,6 @@ suspend fun analyzeMoveRealtime(
             else -> 0f
         }
 
-        // классификация с сервера (если нет — считаем ОК)
         val cls = when (parsed.moveClassification?.uppercase()) {
             "BEST" -> MoveClass.BEST
             "PERFECT" -> MoveClass.PERFECT
@@ -439,9 +408,6 @@ suspend fun analyzeMoveRealtime(
     }
 }
 
-/**
- * Анализ одиночного хода через /evaluate/game/by-fens (получаем FullReport и берём оттуда нужное).
- */
 suspend fun analyzeMoveByFens(
     beforeFen: String,
     afterFen: String,
@@ -469,26 +435,20 @@ suspend fun analyzeMoveByFens(
         val text = resp.body?.string().orEmpty()
         if (!resp.isSuccessful) throw IllegalStateException("http_${resp.code}: ${text.take(300)}")
         val report = json.decodeFromString<FullReport>(text)
-        // оценка новой позиции
         val evalAfter = report.positions.getOrNull(1)?.lines?.firstOrNull()?.let { line ->
             line.mate?.let { if (it > 0) 30f else -30f } ?: (line.cp?.toFloat()?.div(100f))
         } ?: 0f
-        // классификация хода
         val cls = report.moves.firstOrNull()?.classification ?: MoveClass.OKAY
-        // лучший ход из предыдущей позиции (если есть)
         val best = report.positions.getOrNull(0)?.lines?.firstOrNull()?.pv?.firstOrNull()
         return@use Triple(evalAfter, cls, best)
     }
 }
 
-// ---------- Новое безопасное API, НЕ ломающее старое ----------
-
-/** Подробная оценка одной позиции: возвращает сырые линии (PV/cp/mate). */
 suspend fun evaluateFenDetailed(
     fen: String,
     depth: Int = 14,
     multiPv: Int = 3,
-    skillLevel: Int? = null          // <— добавлено
+    skillLevel: Int? = null
 ): PositionDTO = withContext(Dispatchers.IO) {
     val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
     val body = json.encodeToString(EvaluatePositionRequest(fen, depth, multiPv, skillLevel))
@@ -505,7 +465,7 @@ suspend fun evaluateFenDetailed(
     }
 }
 
-// --- внутренние помощники (ping/poll/position) ---
+// --- внутренние помощники ---
 private suspend fun pingOrThrow() = withContext(Dispatchers.IO) {
     val url = "${ServerConfig.BASE_URL}/ping"
     try {
@@ -522,15 +482,11 @@ private suspend fun pingOrThrow() = withContext(Dispatchers.IO) {
     }
 }
 
-/**
- * Прямой вызов оценщика позиции. Служебная функция.
- * (ОСТАВЛЕНА ПОДПИСЬ ФУНКЦИИ, НО ВНУТРИ — типизированный DTO вместо Map<String, Any>)
- */
 private fun requestEvaluatePosition(
     fen: String,
     depth: Int,
     multiPv: Int,
-    skillLevel: Int? = null          // <— добавлено
+    skillLevel: Int? = null
 ): StockfishResponse {
     val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
     val bodyStr = json.encodeToString(
