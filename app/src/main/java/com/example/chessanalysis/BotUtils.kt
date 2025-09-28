@@ -1,9 +1,10 @@
 package com.example.chessanalysis
 
 import android.content.Context
-import com.example.chessanalysis.ui.screens.BotConfig
-import com.example.chessanalysis.ui.screens.BotSide
+import com.example.chessanalysis.ui.screens.bot.BotConfig
 import com.github.bhlangonijr.chesslib.Board
+import com.github.bhlangonijr.chesslib.Piece
+import com.github.bhlangonijr.chesslib.PieceType
 import com.github.bhlangonijr.chesslib.Side
 import com.github.bhlangonijr.chesslib.move.Move
 import com.github.bhlangonijr.chesslib.move.MoveGenerator
@@ -21,52 +22,105 @@ fun Board.sanMove(move: Move): String {
 
 private fun Board.getSanMoveFromMove(move: Move): String {
     val piece = getPiece(move.from)
-    val capture = getPiece(move.to) != com.github.bhlangonijr.chesslib.Piece.NONE
 
-    val sanBuilder = StringBuilder()
+    // Обработка рокировки: король делает ход на две клетки – короткая/длинная
+    if (piece.pieceType == PieceType.KING) {
+        val fromFile = move.from.file.ordinal
+        val toFile   = move.to.file.ordinal
+        if (kotlin.math.abs(toFile - fromFile) == 2) {
+            return if (toFile > fromFile) "O-O" else "O-O-O"
+        }
+    }
+
+    // Определяем факт взятия. Для пешек учитываем взятие «на проходе» –
+    // когда целевая клетка пуста, но колонка меняется
+    var capture = getPiece(move.to) != Piece.NONE
+    if (!capture && piece.pieceType == PieceType.PAWN) {
+        if (move.from.file != move.to.file) {
+            capture = true
+        }
+    }
+
+    val sb = StringBuilder()
 
     when (piece.pieceType) {
-        com.github.bhlangonijr.chesslib.PieceType.PAWN -> {
+        PieceType.PAWN -> {
+            // Для пешек записываем букву столбца при взятии
             if (capture) {
-                sanBuilder.append(move.from.toString()[0].lowercase())
-                sanBuilder.append("x")
+                sb.append(move.from.toString()[0].lowercaseChar())
+                sb.append('x')
             }
-            sanBuilder.append(move.to.toString().lowercase())
+            // Клетка назначения
+            sb.append(move.to.toString().lowercase())
+            // Промоция, если есть
             move.promotion?.let { promo ->
-                sanBuilder.append("=")
-                sanBuilder.append(when (promo.pieceType) {
-                    com.github.bhlangonijr.chesslib.PieceType.QUEEN -> "Q"
-                    com.github.bhlangonijr.chesslib.PieceType.ROOK -> "R"
-                    com.github.bhlangonijr.chesslib.PieceType.BISHOP -> "B"
-                    com.github.bhlangonijr.chesslib.PieceType.KNIGHT -> "N"
-                    else -> ""
-                })
+                sb.append('=')
+                sb.append(
+                    when (promo.pieceType) {
+                        PieceType.QUEEN  -> "Q"
+                        PieceType.ROOK   -> "R"
+                        PieceType.BISHOP -> "B"
+                        PieceType.KNIGHT -> "N"
+                        else -> ""
+                    }
+                )
             }
         }
         else -> {
-            sanBuilder.append(when (piece.pieceType) {
-                com.github.bhlangonijr.chesslib.PieceType.KING -> "K"
-                com.github.bhlangonijr.chesslib.PieceType.QUEEN -> "Q"
-                com.github.bhlangonijr.chesslib.PieceType.ROOK -> "R"
-                com.github.bhlangonijr.chesslib.PieceType.BISHOP -> "B"
-                com.github.bhlangonijr.chesslib.PieceType.KNIGHT -> "N"
-                else -> ""
-            })
-            if (capture) sanBuilder.append("x")
-            sanBuilder.append(move.to.toString().lowercase())
+            // Буква фигуры
+            sb.append(
+                when (piece.pieceType) {
+                    PieceType.KING   -> "K"
+                    PieceType.QUEEN  -> "Q"
+                    PieceType.ROOK   -> "R"
+                    PieceType.BISHOP -> "B"
+                    PieceType.KNIGHT -> "N"
+                    else             -> ""
+                }
+            )
+
+            // Уточнение исходной клетки, если несколько фигур того же типа могут пойти на тот же квадрат
+            val legalMoves = MoveGenerator.generateLegalMoves(this)
+            val sameDestinations = legalMoves.filter { lm ->
+                lm.to == move.to && getPiece(lm.from) == piece
+            }
+            if (sameDestinations.size > 1) {
+                var needsFile = false
+                var needsRank = false
+                for (other in sameDestinations) {
+                    if (other == move) continue
+                    // Одинаковая горизонталь -> указываем файл
+                    if (other.from.rank == move.from.rank) needsFile = true
+                    // Одинаковый файл -> указываем ранг
+                    if (other.from.file == move.from.file) needsRank = true
+                }
+                if (needsFile) {
+                    sb.append(move.from.toString()[0].lowercaseChar())
+                }
+                if (needsRank) {
+                    sb.append(move.from.toString()[1])
+                }
+            }
+
+            // Захват
+            if (capture) {
+                sb.append('x')
+            }
+
+            // Клетка назначения
+            sb.append(move.to.toString().lowercase())
         }
     }
 
-    // Проверяем на шах или мат после хода
+    // Проверяем шах/мат после хода
     doMove(move)
     when {
-        isMated -> sanBuilder.append("#")
-        isKingAttacked -> sanBuilder.append("+")
+        isMated -> sb.append('#')
+        isKingAttacked -> sb.append('+')
     }
-    // Откатываем ход обратно
     undoMove()
 
-    return sanBuilder.toString()
+    return sb.toString()
 }
 
 @Serializable
@@ -118,12 +172,13 @@ object BotGamesLocal {
         val existing = prefs.getString(KEY_GAMES, null) ?: return emptyList()
 
         return try {
-            json.decodeFromString<List<BotGameSave>>(existing)
+            json.decodeFromString(existing)
         } catch (e: Exception) {
             emptyList()
         }
     }
 }
+
 object PgnChess_bot {
     fun sanListToPgn(moves: List<String>): String {
         val sb = StringBuilder()

@@ -20,7 +20,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
-
+import com.example.chessanalysis.ui.screens.bot.BotConfig
 @Serializable
 data class UserProfile(
     val email: String = "",

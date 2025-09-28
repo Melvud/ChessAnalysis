@@ -6,30 +6,20 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import kotlinx.serialization.Serializable
-
-// Перенесено сюда для общего доступа
-@Serializable
-enum class BotSide { WHITE, BLACK, RANDOM }
-
-@Serializable
-data class BotConfig(
-    val skill: Int,  // 1..20 - настоящий Stockfish skill level
-    val side: BotSide,
-    val hints: Boolean,
-    val showLines: Boolean,
-    val multiPv: Int = 3
-)
+import com.example.chessanalysis.ui.screens.bot.BotConfig
+import com.example.chessanalysis.ui.screens.bot.BotSide
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BotGameScreen(
     onStart: (BotConfig) -> Unit
 ) {
-    var skill by remember { mutableStateOf(12f) }
-    var side by remember { mutableStateOf(BotSide.RANDOM) }
-    var hints by remember { mutableStateOf(true) }
-    var showLines by remember { mutableStateOf(true) }
+    var elo by remember { mutableStateOf(1350f) }
+    var side by remember { mutableStateOf(BotSide.AUTO) }
+    var hints by remember { mutableStateOf(false) }
+    var showMultiPv by remember { mutableStateOf(false) }
+    var showEvalBar by remember { mutableStateOf(false) }
+    var allowUndo by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Игра с ботом") }) }
@@ -41,32 +31,41 @@ fun BotGameScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
-            Text("Сложность (Skill): ${skill.toInt()}")
-
+            Text("Эло бота: ${elo.toInt()}")
             Slider(
-                value = skill,
-                onValueChange = { skill = it },
-                valueRange = 1f..20f,
-                steps = 18
+                value = elo,
+                onValueChange = { elo = it },
+                valueRange = 800f..2200f,
+                steps = ((2200 - 800) / 50) - 1
             )
 
             Text("Цвет фигуры")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected = side == BotSide.WHITE, onClick = { side = BotSide.WHITE }, label = { Text("Белые") })
                 FilterChip(selected = side == BotSide.BLACK, onClick = { side = BotSide.BLACK }, label = { Text("Чёрные") })
-                FilterChip(selected = side == BotSide.RANDOM, onClick = { side = BotSide.RANDOM }, label = { Text("Случайно") })
+                FilterChip(selected = side == BotSide.AUTO,  onClick = { side = BotSide.AUTO },  label = { Text("Случайно") })
             }
 
             Divider()
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Switch(checked = hints, onCheckedChange = { hints = it })
-                Spacer(Modifier.width(8.dp)); Text("Подсказки (зелёная стрелка)")
+                Spacer(Modifier.width(8.dp)); Text("Подсказки (лучший ход)")
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(checked = showLines, onCheckedChange = { showLines = it })
+                Switch(checked = showMultiPv, onCheckedChange = { showMultiPv = it })
                 Spacer(Modifier.width(8.dp)); Text("Показывать топ-3 линии")
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = showEvalBar, onCheckedChange = { showEvalBar = it })
+                Spacer(Modifier.width(8.dp)); Text("Показывать шкалу оценки")
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = allowUndo, onCheckedChange = { allowUndo = it })
+                Spacer(Modifier.width(8.dp)); Text("Разрешить «Вернуть ход»")
             }
 
             Spacer(Modifier.weight(1f))
@@ -75,15 +74,18 @@ fun BotGameScreen(
                 onClick = {
                     onStart(
                         BotConfig(
-                            skill = skill.toInt(),
+                            elo = elo.toInt(),
                             side = side,
                             hints = hints,
-                            showLines = showLines,
-                            multiPv = if (showLines) 3 else 1
+                            showMultiPv = showMultiPv,
+                            showEvalBar = showEvalBar,
+                            allowUndo = allowUndo
                         )
                     )
                 },
-                modifier = Modifier.fillMaxWidth().height(56.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
             ) { Text("Играть") }
         }
     }

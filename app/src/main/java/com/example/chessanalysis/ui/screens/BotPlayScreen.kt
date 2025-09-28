@@ -4,12 +4,12 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,6 +18,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.chessanalysis.ui.components.BoardCanvas
+import com.example.chessanalysis.ui.components.EvalBar
+import com.example.chessanalysis.ui.components.BotEnginePvPanel
 import com.github.bhlangonijr.chesslib.Board
 import com.github.bhlangonijr.chesslib.Side
 import com.github.bhlangonijr.chesslib.game.GameResult
@@ -31,6 +33,8 @@ import com.example.chessanalysis.data.local.gameRepository
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import kotlinx.serialization.json.Json
+import com.example.chessanalysis.ui.screens.bot.BotConfig
+import com.example.chessanalysis.ui.screens.bot.BotSide
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -48,10 +52,20 @@ fun BotPlayScreen(
         when (config.side) {
             BotSide.WHITE -> Side.WHITE
             BotSide.BLACK -> Side.BLACK
-            BotSide.RANDOM -> if (System.currentTimeMillis() % 2L == 0L) Side.WHITE else Side.BLACK
+            BotSide.AUTO  -> if (System.currentTimeMillis() % 2L == 0L) Side.WHITE else Side.BLACK
         }
     }
     val engineSide = if (mySide == Side.WHITE) Side.BLACK else Side.WHITE
+
+    fun skillFromElo(elo: Int): Int =
+        (((elo - 800) / 50.0).toInt()).coerceIn(1, 20)
+
+    // читаем тумблеры из BotConfig
+    val showLines   = config.showMultiPv
+    val showEvalBar = config.showEvalBar
+    val allowUndo   = config.allowUndo
+    val multiPvForThink = if (showLines || showEvalBar) 3 else 1
+    val engineSkill = skillFromElo(config.elo)
 
     var board by remember { mutableStateOf(Board()) }
     var bestMoveHint by remember { mutableStateOf<String?>(null) }
@@ -62,6 +76,9 @@ fun BotPlayScreen(
     var isGameOver by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf(GameResult.ONGOING) }
     val moveList = remember { mutableStateListOf<String>() }
+
+    var isWhiteBottom by remember { mutableStateOf(mySide == Side.WHITE) }
+    var currentEvalPos by remember { mutableStateOf<PositionEval?>(null) }
 
     val bgColor = Color(0xFF161512)
     val cardColor = Color(0xFF1E1C1A)
@@ -80,28 +97,31 @@ fun BotPlayScreen(
 
     suspend fun updateHints() {
         val pos = withContext(Dispatchers.IO) {
-            evaluateFenDetailed(board.fen, depth = 16, multiPv = config.multiPv, skillLevel = config.skill)
+            evaluateFenDetailed(board.fen, depth = 16, multiPv = multiPvForThink, skillLevel = engineSkill)
         }
         bestMoveHint = pos.bestMove
-        pvLines = if (config.showLines) {
+        pvLines = if (showLines) {
             pos.lines.take(3).map { line ->
-                LineEval(
-                    pv = line.pv,
-                    cp = line.cp,
-                    mate = line.mate,
-                    best = line.pv.firstOrNull()
-                )
+                LineEval(pv = line.pv, cp = line.cp, mate = line.mate, best = line.pv.firstOrNull())
             }
         } else emptyList()
+
+        val firstLine = pos.lines.firstOrNull()
+        currentEvalPos = firstLine?.let {
+            PositionEval(
+                fen = board.fen,
+                idx = 0,
+                lines = listOf(LineEval(pv = it.pv, cp = it.cp, mate = it.mate, best = it.pv.firstOrNull()))
+            )
+        }
     }
 
     suspend fun engineThinkAndMove() {
         isEngineThinking = true
         val pos = withContext(Dispatchers.IO) {
-            evaluateFenDetailed(board.fen, depth = 16, multiPv = 1, skillLevel = config.skill)
+            evaluateFenDetailed(board.fen, depth = 16, multiPv = 1, skillLevel = engineSkill)
         }
         isEngineThinking = false
-
         pos.bestMove?.let { uci ->
             val m = uciToLegal(board, uci)
             if (m != null) {
@@ -113,8 +133,7 @@ fun BotPlayScreen(
                 checkEnd()
             }
         }
-
-        if (!isGameOver && config.hints) {
+        if (!isGameOver && (config.hints || showLines || showEvalBar)) {
             updateHints()
         }
     }
@@ -122,7 +141,7 @@ fun BotPlayScreen(
     LaunchedEffect(Unit) {
         if (!userToMove) {
             engineThinkAndMove()
-        } else if (config.hints) {
+        } else if (config.hints || showLines || showEvalBar) {
             updateHints()
         }
     }
@@ -157,6 +176,7 @@ fun BotPlayScreen(
         userToMove = false
         bestMoveHint = null
         pvLines = emptyList()
+        currentEvalPos = null
         checkEnd()
         if (!isGameOver) {
             scope.launch { engineThinkAndMove() }
@@ -194,18 +214,93 @@ fun BotPlayScreen(
         val dateIso = OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
         val stored = BotGameSave(pgn, headerWhite, headerBlack, resStr, dateIso)
 
-        // Сохраняем в локальную БД
         repo.insertBotGame(pgn, headerWhite, headerBlack, resStr, dateIso)
 
         val cached = repo.getCachedReport(pgn)
         val report = cached ?: analyzeGameByPgnWithProgress(
-            pgn = pgn,
-            depth = 15,
-            multiPv = 3,
+            pgn = pgn, depth = 15, multiPv = 3,
             header = runCatching { PgnChess_bot.headerFromPgn(pgn) }.getOrNull()
         ) { }.also { repo.saveReport(pgn, it) }
 
         onFinish(BotFinishResult(stored, report))
+    }
+
+    fun undo() {
+        if (!allowUndo || moveList.isEmpty() || isEngineThinking) return
+        repeat(2) {
+            try {
+                board.undoMove()
+                if (moveList.isNotEmpty()) moveList.removeLast()
+            } catch (_: Exception) {
+                return@repeat
+            }
+        }
+        userToMove = board.sideToMove == mySide
+        isGameOver = false
+        result = GameResult.ONGOING
+        lastMovePair = null
+        bestMoveHint = null
+        pvLines = emptyList()
+        currentEvalPos = null
+        if ((config.hints || showLines || showEvalBar) && userToMove) {
+            scope.launch { updateHints() }
+        }
+    }
+
+    fun onClickPvMove(lineIdx: Int, moveIdx: Int) {
+        val line = pvLines.getOrNull(lineIdx) ?: return
+        val fen0 = board.fen
+        if (moveIdx !in line.pv.indices) return
+        val b = Board().apply { loadFromFen(fen0) }
+        for (i in 0 until moveIdx) {
+            val m = uciToLegal(b, line.pv[i]) ?: return
+            b.doMove(m)
+        }
+        val beforeFen = b.fen
+        val move = uciToLegal(b, line.pv[moveIdx]) ?: return
+        val from = move.from.toString().lowercase()
+        val to   = move.to.toString().lowercase()
+        val uciMove = buildString {
+            append(from).append(to)
+            move.promotion?.pieceType?.let {
+                append(
+                    when (it) {
+                        com.github.bhlangonijr.chesslib.PieceType.QUEEN  -> "q"
+                        com.github.bhlangonijr.chesslib.PieceType.ROOK   -> "r"
+                        com.github.bhlangonijr.chesslib.PieceType.BISHOP -> "b"
+                        com.github.bhlangonijr.chesslib.PieceType.KNIGHT -> "n"
+                        else -> ""
+                    }
+                )
+            }
+        }
+        b.doMove(move)
+        val afterFen = b.fen
+        lastMovePair = from to to
+
+        scope.launch {
+            isEngineThinking = true
+            try {
+                val (newEval, _, _) = analyzeMoveRealtime(
+                    beforeFen = beforeFen, afterFen = afterFen,
+                    uciMove = uciMove, depth = 16, multiPv = 3
+                )
+                val evalCp = (newEval * 100).toInt()
+                currentEvalPos = PositionEval(
+                    fen = afterFen, idx = 0,
+                    lines = listOf(LineEval(pv = emptyList(), cp = evalCp, mate = null, best = null))
+                )
+                val detailed = evaluateFenDetailed(afterFen, depth = 16, multiPv = multiPvForThink, skillLevel = engineSkill)
+                pvLines = if (showLines) {
+                    detailed.lines.take(3).map {
+                        LineEval(pv = it.pv, cp = it.cp, mate = it.mate, best = it.pv.firstOrNull())
+                    }
+                } else emptyList()
+            } catch (_: Exception) {
+            } finally {
+                isEngineThinking = false
+            }
+        }
     }
 
     Scaffold(
@@ -214,6 +309,26 @@ fun BotPlayScreen(
             TopAppBar(
                 title = { Text("Игра с ботом") },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null, tint = Color.White) } },
+                actions = {
+                    if (allowUndo) {
+                        IconButton(
+                            onClick = { undo() },
+                            enabled = moveList.isNotEmpty() && !isEngineThinking && !isGameOver
+                        ) {
+                            Icon(
+                                Icons.Default.Undo,
+                                contentDescription = "Вернуть ход",
+                                tint = if (moveList.isNotEmpty() && !isEngineThinking && !isGameOver) Color.White else Color.Gray
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = { isWhiteBottom = !isWhiteBottom },
+                        enabled = !isEngineThinking
+                    ) {
+                        Icon(Icons.Default.ScreenRotation, contentDescription = "Перевернуть", tint = if (!isEngineThinking) Color.White else Color.Gray)
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = surfaceColor,
                     titleContentColor = Color.White
@@ -221,81 +336,155 @@ fun BotPlayScreen(
             )
         }
     ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .background(bgColor)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Surface(color = cardColor, shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(color = cardColor, shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "Elo: ${config.elo} • " + if (mySide == Side.WHITE) "Вы белыми" else "Вы чёрными",
+                            color = Color.White
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .background(
+                                    if (userToMove) MaterialTheme.colorScheme.primary else Color.Gray,
+                                    CircleShape
+                                )
+                        )
+                    }
+                }
+
                 Row(
-                    Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f)
                 ) {
-                    Text(
-                        "Skill: ${config.skill} • " + if (mySide == Side.WHITE) "Вы белыми" else "Вы чёрными",
-                        color = Color.White
-                    )
+                    if (showEvalBar) {
+                        val eval = currentEvalPos
+                        if (eval != null) {
+                            EvalBar(
+                                positions = listOf(eval),
+                                currentPlyIndex = 0,
+                                isWhiteBottom = isWhiteBottom,
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .width(20.dp)
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .width(20.dp)
+                                    .background(Color(0xFF1E1C1A))
+                            )
+                        }
+                    }
+
                     Box(
-                        modifier = Modifier.size(10.dp).background(if (userToMove) MaterialTheme.colorScheme.primary else Color.Gray, CircleShape)
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .weight(1f)
+                    ) {
+                        BoardCanvas(
+                            fen = board.fen,
+                            lastMove = lastMovePair,
+                            moveClass = null,
+                            bestMoveUci = if (config.hints && userToMove) bestMoveHint else null,
+                            showBestArrow = config.hints && userToMove,
+                            isWhiteBottom = isWhiteBottom,
+                            selectedSquare = selected,
+                            legalMoves = legalTargets,
+                            onSquareClick = { onUserSquareClick(it) },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        if (isEngineThinking) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+
+                if (showLines && pvLines.isNotEmpty()) {
+                    BotEnginePvPanel(
+                        baseFen = board.fen,
+                        lines = pvLines,
+                        onClickMoveInLine = ::onClickPvMove,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 64.dp)
                     )
                 }
-            }
 
-            Box(Modifier.fillMaxWidth().aspectRatio(1f)) {
-                BoardCanvas(
-                    fen = board.fen,
-                    lastMove = lastMovePair,
-                    moveClass = null,
-                    bestMoveUci = if (config.hints && userToMove) bestMoveHint else null,
-                    showBestArrow = config.hints && userToMove,
-                    isWhiteBottom = mySide == Side.WHITE,
-                    selectedSquare = selected,
-                    legalMoves = legalTargets,
-                    onSquareClick = { onUserSquareClick(it) },
-                    modifier = Modifier.fillMaxSize()
-                )
-                if (isEngineThinking) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                    }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = { if (!isGameOver) resign() },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Сдаться") }
                 }
             }
 
-            if (config.showLines && pvLines.isNotEmpty()) {
-                Surface(color = cardColor, shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
-                    Column(Modifier.verticalScroll(rememberScrollState()).padding(12.dp)) {
-                        pvLines.take(3).forEachIndexed { i, line ->
-                            val head = when {
-                                line.mate != null -> if (line.mate!! > 0) "M${line.mate}" else "M-${-line.mate!!}"
-                                line.cp != null -> String.format("%+,.2f", line.cp!! / 100f)
-                                else -> "—"
+            if (isGameOver) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.6f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Surface(
+                        color = cardColor,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth(0.85f)
+                            .padding(16.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = "Бот (сила ${engineSkill})  –  Вы",
+                                color = Color.White,
+                                style = MaterialTheme.typography.titleLarge
+                            )
+                            val resStrText = when (result) {
+                                GameResult.WHITE_WON -> if (mySide == Side.WHITE) "Вы победили" else "Вы проиграли"
+                                GameResult.BLACK_WON -> if (mySide == Side.BLACK) "Вы победили" else "Вы проиграли"
+                                GameResult.DRAW -> "Ничья"
+                                else -> ""
                             }
-                            Text("${i + 1}) $head  ${line.pv.joinToString(" ")}", color = Color.White)
-                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = resStrText,
+                                color = Color.White.copy(alpha = 0.9f),
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Button(
+                                onClick = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                        scope.launch { openReport() }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Смотреть отчёт") }
                         }
                     }
                 }
-            }
-
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = { if (!isGameOver) resign() },
-                    modifier = Modifier.weight(1f)
-                ) { Text("Сдаться") }
-
-                Button(
-                    onClick = {
-                        scope.launch {
-                            if (!isGameOver) resign()
-                            openReport()
-                        }
-                    },
-                    modifier = Modifier.weight(1f)
-                ) { Text("Смотреть отчёт") }
             }
         }
     }
