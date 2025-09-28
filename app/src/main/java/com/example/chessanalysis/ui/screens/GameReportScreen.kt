@@ -865,8 +865,9 @@ private suspend fun fetchClockData(report: FullReport): ClockData? = withContext
         when (site) {
             Provider.LICHESS -> fetchLichessClocks(gameId)
             Provider.CHESSCOM -> null
+            Provider.BOT -> TODO()
         }
-    } catch (_: Exception) { null }
+    } catch (_: Exception) { null } as Nothing?
 }
 
 @Composable

@@ -9,6 +9,7 @@ import kotlinx.serialization.json.jsonNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import kotlinx.serialization.json.contentOrNull
 
 object GameLoaders {
     private val client = OkHttpClient()
@@ -99,7 +100,7 @@ object GameLoaders {
                             if (line.isBlank()) return@forEach
                             runCatching {
                                 val el = json.parseToJsonElement(line).jsonObject
-                                val pgn = el["pgn"]?.jsonPrimitive?.content
+                                val pgn = el["pgn"]?.jsonPrimitive?.contentOrNull
                                 if (!pgn.isNullOrBlank()) {
                                     val header = PgnChess.headerFromPgn(pgn)
                                     val sideToView = determineUserSide(pgn, username)

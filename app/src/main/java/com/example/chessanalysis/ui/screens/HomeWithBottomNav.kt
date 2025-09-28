@@ -16,6 +16,10 @@ import com.example.chessanalysis.GameHeader
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import androidx.navigation.NavDestination.Companion.hierarchy
+import com.example.chessanalysis.ui.navigation.BottomItems
+import com.example.chessanalysis.ui.navigation.Routes
+import androidx.compose.ui.Modifier
 
 @Composable
 fun HomeWithBottomNav(
@@ -26,13 +30,6 @@ fun HomeWithBottomNav(
     onOpenProfileEdit: (() -> Unit)? = null
 ) {
     val tabsNav = rememberNavController()
-
-    val items = listOf(
-        BottomItem(route = Routes.GAMES,   label = "Игры",   icon = Icons.Filled.List),
-        BottomItem(route = Routes.BOT,     label = "Бот",    icon = Icons.Filled.SmartToy),
-        BottomItem(route = Routes.STATS,   label = "Статы",  icon = Icons.Filled.QueryStats),
-        BottomItem(route = Routes.PROFILE, label = "Профиль",icon = Icons.Filled.Person),
-    )
 
     Scaffold(
         bottomBar = {

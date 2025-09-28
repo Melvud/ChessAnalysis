@@ -216,8 +216,10 @@ fun GamesListScreen(
                                         val siteName = when (game.site) {
                                             Provider.LICHESS -> "Lichess"
                                             Provider.CHESSCOM -> "Chess.com"
-                                            Provider.BOT -> "Bot"
+                                            Provider.BOT -> "Bot"          // если у тебя есть локальные партии с ботом
+                                            null -> ""                     // ← добавь это
                                         }
+
                                         Text(siteName, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
 
                                         Spacer(Modifier.height(8.dp))

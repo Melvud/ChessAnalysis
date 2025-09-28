@@ -1,14 +1,10 @@
-package com.example.chessanalysis.ui.screens
+package com.example.chessanalysis.ui.screens.bot
 
-import kotlinx.serialization.Serializable
+enum class BotSide { AUTO, WHITE, BLACK }
 
-@Serializable
 data class BotConfig(
-    val skill: Int,           // 1..20 — НАСТОЯЩИЙ SKILL
-    val side: BotSide,        // WHITE / BLACK / RANDOM
-    val hints: Boolean,       // зелёная стрелка
-    val showLines: Boolean,   // панель топ-3
-    val multiPv: Int = 3
+    val elo: Int = 1350,
+    val side: BotSide = BotSide.AUTO,
+    val hints: Boolean = false,
+    val showMultiPv: Boolean = false
 )
-@Serializable
-enum class BotSide { WHITE, BLACK, RANDOM }

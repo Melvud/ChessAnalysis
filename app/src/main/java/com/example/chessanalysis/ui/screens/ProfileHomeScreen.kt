@@ -14,6 +14,8 @@ import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.compose.*
 import com.example.chessanalysis.FullReport
 import com.example.chessanalysis.GameHeader
+import com.example.chessanalysis.ui.navigation.BottomItems
+import com.example.chessanalysis.ui.navigation.Routes
 
 @Composable
 fun HomeWithBottomNav(
@@ -25,13 +27,6 @@ fun HomeWithBottomNav(
     onOpenBotSetup: (() -> Unit)? = null // <-- НОВОЕ: просим родителя открыть setup бота
 ) {
     val tabsNav = rememberNavController()
-
-    val items = listOf(
-        BottomItem(route = Routes.GAMES,   label = "Игры",   icon = Icons.Filled.List),
-        BottomItem(route = Routes.BOT,     label = "Бот",    icon = Icons.Filled.SmartToy),
-        BottomItem(route = Routes.STATS,   label = "Статы",  icon = Icons.Filled.QueryStats),
-        BottomItem(route = Routes.PROFILE, label = "Профиль",icon = Icons.Filled.Person),
-    )
 
     Scaffold(
         bottomBar = {
