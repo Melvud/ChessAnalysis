@@ -3,6 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
+    id("com.google.gms.google-services")
+    id("org.jetbrains.kotlin.kapt")
 }
 
 android {
@@ -48,11 +50,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
     implementation("androidx.activity:activity-compose:1.7.2")
     implementation("com.google.code.gson:gson:2.10.1")
-    // Compose BOM
-    implementation(platform("androidx.compose:compose-bom:2023.08.00"))
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.material3:material3:1.2.0")
-    implementation("androidx.compose.ui:ui-tooling-preview")
+    // Compose BO
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.6.2")
     // Сеть
@@ -94,4 +92,27 @@ dependencies {
     implementation("dev.chrisbanes.snapper:snapper:0.3.0")
     implementation("androidx.compose.foundation:foundation") // тут есть HorizontalPager
     implementation("androidx.navigation:navigation-compose:2.7.7")
+
+    // Firebase BOM (задаёт версии для всех артефактов Firebase)
+    implementation(platform("com.google.firebase:firebase-bom:33.3.0"))
+
+    // Firebase Auth + Firestore (KTX)
+    implementation("com.google.firebase:firebase-auth-ktx")
+    implementation("com.google.firebase:firebase-firestore-ktx")
+
+    // (опционально, если хочешь логировать события — не обязательно)
+    implementation("com.google.firebase:firebase-analytics-ktx")
+
+    // Pull-to-refresh для Compose (тот самый androidx.compose.material.pullrefresh.*)
+
+    implementation(platform("androidx.compose:compose-bom:2024.09.02"))
+    implementation("androidx.compose.material3:material3") // без версии, подхватится из BOM
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.room:room-runtime:2.6.1")
+// или KSP:
+// ksp("androidx.room:room-compiler:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    kapt("androidx.room:room-compiler:2.6.1") // если используешь KAPT
+
 }

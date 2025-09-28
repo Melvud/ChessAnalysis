@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.jsonNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -176,5 +177,55 @@ object GameLoaders {
                     }
                 }
             }
+        }
+
+    // ------------------ Мини-клиент для аватаров ------------------
+
+    /**
+     * Lichess: https://lichess.org/api/user/{username}
+     * Ищем profile.image (прямая ссылка). Возвращаем null, если не нашли/ошибка.
+     */
+    suspend fun fetchLichessAvatar(username: String): String? =
+        withContext(Dispatchers.IO) {
+            if (username.isBlank()) return@withContext null
+            val url = "https://lichess.org/api/user/${username.trim()}"
+            val req = Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                .header("User-Agent", UA)
+                .build()
+            runCatching {
+                client.newCall(req).execute().use { resp ->
+                    val body = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful || body.isBlank()) return@use null
+                    val root = json.parseToJsonElement(body).jsonObject
+                    val profile = root["profile"]?.jsonObject
+                    val image = profile?.get("image")
+                    image?.jsonPrimitive?.contentOrNull
+                }
+            }.getOrNull()
+        }
+
+    /**
+     * Chess.com: https://api.chess.com/pub/player/{username}
+     * Поле avatar содержит URL (может быть .jpg/.png). Возвращаем null, если не найдено/ошибка.
+     */
+    suspend fun fetchChessComAvatar(username: String): String? =
+        withContext(Dispatchers.IO) {
+            if (username.isBlank()) return@withContext null
+            val url = "https://api.chess.com/pub/player/${username.trim().lowercase()}"
+            val req = Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                .header("User-Agent", UA)
+                .build()
+            runCatching {
+                client.newCall(req).execute().use { resp ->
+                    val body = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful || body.isBlank()) return@use null
+                    val root = json.parseToJsonElement(body).jsonObject
+                    root["avatar"]?.jsonPrimitive?.contentOrNull
+                }
+            }.getOrNull()
         }
 }

@@ -5,29 +5,37 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.chessanalysis.AccByColor
 import com.example.chessanalysis.FullReport
 import com.example.chessanalysis.MoveClass
 import com.example.chessanalysis.R
-import kotlin.math.max
-import kotlin.math.min
+import com.example.chessanalysis.net.AvatarRepository
+import kotlinx.coroutines.launch
+
+private val ScreenBg = Color(0xFF121212)
+private val CardBg   = Color(0xFF2B2A27)
+private val DividerC = Color(0xFF3A3936)
+private val ChessComGreen = Color(0xFF59C156)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,158 +47,187 @@ fun ReportScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Отчёт о партии") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) } },
-                actions = {
-                    IconButton(onClick = { /* search */ }) { Icon(Icons.Default.Search, null) }
-                    IconButton(onClick = { /* settings */ }) { Icon(Icons.Default.Settings, null) }
-                }
+                title = { Text("Отчёт о партии", color = Color.White) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = null, tint = Color.White)
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = ScreenBg,
+                    titleContentColor = Color.White,
+                    navigationIconContentColor = Color.White
+                )
             )
         },
-        bottomBar = {
-            Surface(tonalElevation = 3.dp) {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp)
-                ) {
-                    Button(
-                        onClick = { onOpenBoard?.invoke() ?: onBack() },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text(if (onOpenBoard == null) "Вернуться" else "Смотреть отчёт")
-                    }
-                }
-            }
-        }
+        containerColor = ScreenBg
     ) { padding ->
         val scroll = rememberScrollState()
         Column(
             Modifier
                 .fillMaxSize()
+                .background(ScreenBg)
                 .verticalScroll(scroll)
                 .padding(padding)
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // График оценок
-            EvalSparkline(report)
-
-            // Карточка с точностью игроков
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF2B2A27), RoundedCornerShape(12.dp))
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                PlayerColumn(
-                    name = report.header.white ?: "White",
-                    acc = report.accuracy.whiteMovesAcc,
-                    acpl = report.acpl.white,
-                    inverted = false
-                )
-                Spacer(Modifier.width(16.dp))
-                PlayerColumn(
-                    name = report.header.black ?: "Black",
-                    acc = report.accuracy.blackMovesAcc,
-                    acpl = report.acpl.black,
-                    inverted = true
-                )
-            }
-
-            // Таблица классификаций ходов
-            ClassificationTable(report)
-
-            // Карточка с оценкой перформанса (Elo)
+            // 1) Перфоманс
             Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2A27)),
+                colors = CardDefaults.cardColors(containerColor = CardBg),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp)
-                ) {
+                Column(Modifier.fillMaxWidth().padding(12.dp)) {
                     Text(
                         "Оценка перформанса",
                         color = Color.White,
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly
-                    ) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                report.header.white ?: "White",
-                                color = Color.LightGray,
-                                style = MaterialTheme.typography.bodySmall
-                            )
+                            Text(report.header.white ?: "White", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
                             Spacer(Modifier.height(4.dp))
-                            StatBox(
-                                value = report.estimatedElo.whiteEst?.toString() ?: "—",
-                                dark = false
-                            )
+                            StatBox(value = report.estimatedElo.whiteEst?.toString() ?: "—", dark = false)
                         }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                report.header.black ?: "Black",
-                                color = Color.LightGray,
-                                style = MaterialTheme.typography.bodySmall
-                            )
+                            Text(report.header.black ?: "Black", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
                             Spacer(Modifier.height(4.dp))
-                            StatBox(
-                                value = report.estimatedElo.blackEst?.toString() ?: "—",
-                                dark = true
-                            )
+                            StatBox(value = report.estimatedElo.blackEst?.toString() ?: "—", dark = true)
                         }
                     }
                 }
             }
 
-            Spacer(Modifier.height(80.dp))
+            // 2) Точность игроков + АВАТАРЫ (с фолбэком-инициалом)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(CardBg, RoundedCornerShape(12.dp))
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                PlayerColumnWithAvatar(
+                    name = report.header.white ?: "White",
+                    acc = report.accuracy.whiteMovesAcc,
+                    providerHint = guessProvider(report),
+                    inverted = false
+                )
+                Spacer(Modifier.width(16.dp))
+                PlayerColumnWithAvatar(
+                    name = report.header.black ?: "Black",
+                    acc = report.accuracy.blackMovesAcc,
+                    providerHint = guessProvider(report),
+                    inverted = true
+                )
+            }
+
+            // 3) Классификация ходов (с иконками)
+            ClassificationTable(report)
+
+            // 4) График (внизу)
+            EvalSparkline(report)
+
+            // 5) Кнопка
+            Spacer(Modifier.height(4.dp))
+            Button(
+                onClick = { onOpenBoard?.invoke() ?: onBack() },
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = ChessComGreen,
+                    contentColor = Color.White
+                )
+            ) { Text(if (onOpenBoard == null) "Вернуться" else "Смотреть отчёт") }
+
+            Spacer(Modifier.height(8.dp))
         }
     }
 }
 
-@Composable
-private fun PlayerColumn(name: String, acc: AccByColor, acpl: Int, inverted: Boolean) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        // Аватар игрока
-        Image(
-            painter = painterResource(R.drawable.opening),
-            contentDescription = null,
-            modifier = Modifier.size(48.dp)
-        )
-        Spacer(Modifier.height(8.dp))
+/* ================= Аватарка с фолбэком-инициалом ================= */
 
-        // Имя игрока
+private enum class ProviderHint { LICHESS, CHESSCOM, UNKNOWN }
+
+@Composable
+private fun PlayerColumnWithAvatar(
+    name: String,
+    acc: AccByColor,
+    providerHint: ProviderHint,
+    inverted: Boolean
+) {
+    val context = LocalContext.current
+    var avatarUrl by remember(name, providerHint) { mutableStateOf<String?>(null) }
+    var loadFailed by remember(name, providerHint) { mutableStateOf(false) }
+
+    // Подгружаем URL аватара
+    LaunchedEffect(name, providerHint) {
+        val u = name.trim()
+        if (u.isBlank()) {
+            avatarUrl = null
+            return@LaunchedEffect
+        }
+        avatarUrl = when (providerHint) {
+            ProviderHint.CHESSCOM -> AvatarRepository.fetchChessComAvatar(u)
+            ProviderHint.LICHESS  -> AvatarRepository.fetchLichessAvatar(u)
+            ProviderHint.UNKNOWN  -> null
+        }
+        loadFailed = false
+    }
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        if (avatarUrl.isNullOrBlank() || loadFailed) {
+            InitialAvatar(name = name, size = 48.dp)
+        } else {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(avatarUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(48.dp),
+                onError = { loadFailed = true },
+                onLoading = { /* no-op */ },
+                onSuccess = { loadFailed = false },
+                placeholder = painterResource(R.drawable.opening)
+            )
+        }
+
+        Spacer(Modifier.height(8.dp))
         Text(name, color = Color.LightGray)
         Spacer(Modifier.height(8.dp))
 
-        // Главная точность - используем готовое значение itera с сервера
-        StatBox(
-            value = String.format("%.1f%%", acc.itera),
-            dark = inverted
-        )
+        // Только itera — без harm/ACPL
+        StatBox(value = String.format("%.1f%%", acc.itera), dark = inverted)
+    }
+}
 
-        Spacer(Modifier.height(6.dp))
-
-        // Дополнительная информация
+@Composable
+private fun InitialAvatar(
+    name: String,
+    size: androidx.compose.ui.unit.Dp,
+    bg: Color = Color(0xFF6D5E4A), // близкий к chesscom бедж
+    fg: Color = Color(0xFFF5F3EF)
+) {
+    val initial = name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
+    Box(
+        modifier = Modifier
+            .size(size)
+            .background(bg, CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
         Text(
-            text = String.format("harm=%.1f%%  ACPL=%d", acc.harmonic, acpl),
-            color = Color(0xFFBDBDBD),
-            style = MaterialTheme.typography.bodySmall
+            text = initial,
+            color = fg,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
         )
     }
 }
+
+/* ================= Остальные блоки ================= */
 
 @Composable
 private fun StatBox(value: String, dark: Boolean = false) {
@@ -227,22 +264,19 @@ private fun ClassificationTable(report: FullReport) {
         Triple("Зевок", R.drawable.blunder, MoveClass.BLUNDER)
     )
 
-    // Подсчет ходов по классификациям для каждого цвета
     val whiteMovesMap = mutableMapOf<MoveClass, Int>().withDefault { 0 }
     val blackMovesMap = mutableMapOf<MoveClass, Int>().withDefault { 0 }
-
-    report.moves.forEachIndexed { index, move ->
-        val targetMap = if (index % 2 == 0) whiteMovesMap else blackMovesMap
-        targetMap[move.classification] = targetMap.getValue(move.classification) + 1
+    report.moves.forEachIndexed { i, move ->
+        val target = if (i % 2 == 0) whiteMovesMap else blackMovesMap
+        target[move.classification] = target.getValue(move.classification) + 1
     }
 
     Card(
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2A27)),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
         shape = RoundedCornerShape(12.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.fillMaxWidth()) {
-            // Заголовок таблицы
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -256,9 +290,8 @@ private fun ClassificationTable(report: FullReport) {
                     Text(" ", modifier = Modifier.width(36.dp))
                 }
             }
-            Divider(color = Color(0xFF3A3936))
+            Divider(color = DividerC)
 
-            // Строки таблицы
             rows.forEach { (label, icon, moveClass) ->
                 Row(
                     Modifier
@@ -277,7 +310,7 @@ private fun ClassificationTable(report: FullReport) {
                     }
                     Text(
                         whiteMovesMap.getValue(moveClass).toString(),
-                        color = Color(0xFF59C156),
+                        color = ChessComGreen,
                         textAlign = TextAlign.End,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.width(36.dp)
@@ -285,13 +318,13 @@ private fun ClassificationTable(report: FullReport) {
                     Spacer(Modifier.width(24.dp))
                     Text(
                         blackMovesMap.getValue(moveClass).toString(),
-                        color = Color(0xFF59C156),
+                        color = ChessComGreen,
                         textAlign = TextAlign.End,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.width(36.dp)
                     )
                 }
-                Divider(color = Color(0xFF3A3936))
+                Divider(color = DividerC)
             }
         }
     }
@@ -299,7 +332,6 @@ private fun ClassificationTable(report: FullReport) {
 
 @Composable
 private fun EvalSparkline(report: FullReport) {
-    // 1) вытаскиваем числовые оценки
     val raw = report.positions.mapNotNull { pos ->
         val l = pos.lines.firstOrNull()
         when {
@@ -310,7 +342,6 @@ private fun EvalSparkline(report: FullReport) {
     }
     if (raw.isEmpty()) return
 
-    // 2) ограничиваем пики и слегка сглаживаем, чтобы линия была плавной
     val cap = 800f
     val clamped = raw.map { it.coerceIn(-cap, cap) }
     val smooth = if (clamped.size < 4) clamped else buildList {
@@ -322,9 +353,8 @@ private fun EvalSparkline(report: FullReport) {
         add(clamped.last())
     }
 
-    // 3) рисуем
     Card(
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2A27)),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
         shape = RoundedCornerShape(12.dp),
         modifier = Modifier
             .fillMaxWidth()
@@ -339,7 +369,6 @@ private fun EvalSparkline(report: FullReport) {
             val h = size.height
             val midY = h * 0.5f
 
-            // ось 0.0 по центру (как на примере)
             drawLine(
                 color = Color(0xFF5E5E5E),
                 start = androidx.compose.ui.geometry.Offset(0f, midY),
@@ -347,9 +376,7 @@ private fun EvalSparkline(report: FullReport) {
                 strokeWidth = 1f
             )
 
-            // преобразуем cp -> [0..1] -> y
             fun to01(cp: Float) = (cp + cap) / (2f * cap)
-
             val stepX = if (smooth.size <= 1) 0f else w / (smooth.size - 1)
             val pts = smooth.mapIndexed { i, v ->
                 val x = i * stepX
@@ -358,16 +385,13 @@ private fun EvalSparkline(report: FullReport) {
             }
             if (pts.isEmpty()) return@Canvas
 
-            // вспомогательная: строим одновременно ПУТЬ ЛИНИИ и ПУТЬ ЗАЛИВКИ ДО НИЗА
             val strokeWidth = 1.7.dp.toPx()
             val linePath = Path()
             val fillPath = Path()
 
-            // fill: снизу-влево -> по кривой -> снизу-вправо -> закрыть
             fillPath.moveTo(0f, h)
             fillPath.lineTo(pts.first().x, pts.first().y)
 
-            // Catmull–Rom -> кубические Безье (плавность как у вторй картинки)
             linePath.moveTo(pts.first().x, pts.first().y)
             for (i in 1 until pts.size) {
                 val p0 = pts[(i - 1).coerceAtLeast(0)]
@@ -384,19 +408,27 @@ private fun EvalSparkline(report: FullReport) {
                 fillPath.cubicTo(c1x, c1y, c2x, c2y, p1.x, p1.y)
             }
 
-            // замыкаем заливку к низу
             fillPath.lineTo(pts.last().x, h)
             fillPath.close()
 
-            // Белая область — ВСЕГДА от линии до низа (точно как на второй картинке)
             drawPath(fillPath, color = Color.White)
-
-            // Тонкая обводка самой кривой поверх (делает границу читаемой на тёмном фоне)
             drawPath(
                 path = linePath,
                 color = Color(0xFFBDBDBD),
                 style = androidx.compose.ui.graphics.drawscope.Stroke(width = strokeWidth)
             )
         }
+    }
+}
+
+/* ================= helpers ================= */
+
+private fun guessProvider(report: FullReport): ProviderHint {
+    val pgn = report.header.pgn ?: ""
+    val siteTag = Regex("""\[Site\s+"([^"]+)"]""").find(pgn)?.groupValues?.get(1)?.lowercase()
+    return when {
+        siteTag?.contains("lichess") == true -> ProviderHint.LICHESS
+        siteTag?.contains("chess.com") == true -> ProviderHint.CHESSCOM
+        else -> ProviderHint.UNKNOWN
     }
 }

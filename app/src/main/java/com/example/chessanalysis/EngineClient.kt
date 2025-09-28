@@ -136,7 +136,8 @@ data class ProgressSnapshot(
 private data class EvaluatePositionRequest(
     val fen: String,
     val depth: Int,
-    val multiPv: Int
+    val multiPv: Int,
+    val skillLevel: Int? = null      // <— добавлено, если null — поле не уйдёт в JSON
 )
 
 /** Типизированный запрос для /evaluate/position (real-time режим) */
@@ -147,7 +148,8 @@ private data class EvaluateMoveRealtimeRequest(
     val afterFen: String,
     val uciMove: String,
     val depth: Int,
-    val multiPv: Int
+    val multiPv: Int,
+    val skillLevel: Int? = null      // <— добавлено
 )
 
 // ---------- УТИЛИТЫ ----------
@@ -204,8 +206,12 @@ private fun normalizePgn(src: String): String {
 /**
  * Оценка позиции по FEN с указанием глубины (по умолчанию 14).
  */
-suspend fun analyzeFen(fen: String, depth: Int = 14): StockfishResponse =
-    withContext(Dispatchers.IO) { requestEvaluatePosition(fen, depth, 3) }
+suspend fun analyzeFen(
+    fen: String,
+    depth: Int = 14,
+    skillLevel: Int? = null          // <— добавлено (опционально)
+): StockfishResponse =
+    withContext(Dispatchers.IO) { requestEvaluatePosition(fen, depth, 3, skillLevel) }
 
 /**
  * Анализ партии по PGN с отображением прогресса. В отличие от старой версии,
@@ -267,7 +273,8 @@ suspend fun analyzeMoveRealtimeDetailed(
     afterFen: String,
     uciMove: String,
     depth: Int = 18,
-    multiPv: Int = 3
+    multiPv: Int = 3,
+    skillLevel: Int? = null          // <— добавлено
 ): MoveRealtimeResult = withContext(Dispatchers.IO) {
     val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
     val payload = json.encodeToString(
@@ -276,7 +283,8 @@ suspend fun analyzeMoveRealtimeDetailed(
             afterFen = afterFen,
             uciMove = uciMove,
             depth = depth,
-            multiPv = multiPv
+            multiPv = multiPv,
+            skillLevel = skillLevel
         )
     )
     val req = Request.Builder()
@@ -370,7 +378,8 @@ suspend fun analyzeMoveRealtime(
     afterFen: String,
     uciMove: String,
     depth: Int = 14,
-    multiPv: Int = 3
+    multiPv: Int = 3,
+    skillLevel: Int? = null          // <— добавлено
 ): Triple<Float, MoveClass, String?> = withContext(Dispatchers.IO) {
     val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
     val payload = json.encodeToString(
@@ -379,7 +388,8 @@ suspend fun analyzeMoveRealtime(
             afterFen = afterFen,
             uciMove = uciMove,
             depth = depth,
-            multiPv = multiPv
+            multiPv = multiPv,
+            skillLevel = skillLevel
         )
     )
     val req = Request.Builder()
@@ -477,10 +487,11 @@ suspend fun analyzeMoveByFens(
 suspend fun evaluateFenDetailed(
     fen: String,
     depth: Int = 14,
-    multiPv: Int = 3
+    multiPv: Int = 3,
+    skillLevel: Int? = null          // <— добавлено
 ): PositionDTO = withContext(Dispatchers.IO) {
     val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
-    val body = json.encodeToString(EvaluatePositionRequest(fen, depth, multiPv))
+    val body = json.encodeToString(EvaluatePositionRequest(fen, depth, multiPv, skillLevel))
     val req = Request.Builder()
         .url(url)
         .header("Accept", "application/json")
@@ -500,12 +511,15 @@ private suspend fun pingOrThrow() = withContext(Dispatchers.IO) {
     try {
         val getReq = Request.Builder().url(url).header("User-Agent", UA).get().build()
         client.newCall(getReq).execute().use { resp ->
-            if (resp.isSuccessful) return@withContext
+            if (resp.isSuccessful) {
+                return@withContext
+            } else {
+                throw IllegalStateException("Ping failed with HTTP ${resp.code}")
+            }
         }
     } catch (e: Exception) {
         throw IllegalStateException("Cannot reach server at ${ServerConfig.BASE_URL}", e)
     }
-    throw IllegalStateException("Server not responding at: ${ServerConfig.BASE_URL}")
 }
 
 /**
@@ -515,10 +529,18 @@ private suspend fun pingOrThrow() = withContext(Dispatchers.IO) {
 private fun requestEvaluatePosition(
     fen: String,
     depth: Int,
-    multiPv: Int
+    multiPv: Int,
+    skillLevel: Int? = null          // <— добавлено
 ): StockfishResponse {
     val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
-    val bodyStr = json.encodeToString(EvaluatePositionRequest(fen = fen, depth = depth, multiPv = multiPv))
+    val bodyStr = json.encodeToString(
+        EvaluatePositionRequest(
+            fen = fen,
+            depth = depth,
+            multiPv = multiPv,
+            skillLevel = skillLevel
+        )
+    )
     val req = Request.Builder()
         .url(url)
         .header("Accept", "application/json")

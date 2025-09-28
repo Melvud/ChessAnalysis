@@ -794,6 +794,8 @@ fun GameReportScreen(
 
 // --------- Вспомогательные компоненты / часы ---------
 
+// 2) ЗАМЕНИ существующую функцию PlayerCard на эту:
+
 @Composable
 private fun PlayerCard(
     name: String,
@@ -815,11 +817,15 @@ private fun PlayerCard(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            // Цветовой пип (цвет стороны)
             Box(
                 modifier = Modifier
                     .size(10.dp)
                     .background(if (inverted) Color.Black else Color.White, CircleShape)
             )
+            Spacer(Modifier.width(8.dp))
+            // Новый фолбэк-аватар с инициалом
+            InitialAvatar(name = name, size = 28.dp)
             Spacer(Modifier.width(8.dp))
             Text(
                 text = buildString {
@@ -838,6 +844,7 @@ private fun PlayerCard(
         )
     }
 }
+
 
 private fun formatClock(centiseconds: Int): String {
     val seconds = centiseconds / 100
@@ -860,4 +867,26 @@ private suspend fun fetchClockData(report: FullReport): ClockData? = withContext
             Provider.CHESSCOM -> null
         }
     } catch (_: Exception) { null }
+}
+
+@Composable
+private fun InitialAvatar(
+    name: String,
+    size: androidx.compose.ui.unit.Dp,
+    bg: Color = Color(0xFF6D5E4A),
+    fg: Color = Color(0xFFF5F3EF)
+) {
+    val initial = name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
+    Box(
+        modifier = Modifier
+            .size(size)
+            .background(bg, CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = initial,
+            color = fg,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+        )
+    }
 }

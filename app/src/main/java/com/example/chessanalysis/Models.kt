@@ -8,7 +8,8 @@ import kotlinx.serialization.SerialName
 @Serializable
 enum class Provider {
     LICHESS,
-    CHESSCOM
+    CHESSCOM,
+    BOT
 }
 
 // Классы ходов - синхронизированы с сервером
