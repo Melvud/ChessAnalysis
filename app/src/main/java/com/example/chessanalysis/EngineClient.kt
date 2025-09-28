@@ -60,11 +60,21 @@ data class LineDTO(
 )
 
 @SuppressLint("UnsafeOptInUsageError")
+@kotlinx.serialization.Serializable
+data class MoveRealtimeResult(
+    val evalAfter: Float,
+    val moveClass: MoveClass,
+    val bestMove: String?,
+    val lines: List<LineDTO>
+)
+
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class PositionDTO(
     val lines: List<LineDTO> = emptyList(),
     val bestMove: String? = null
 )
+
 @SuppressLint("UnsafeOptInUsageError")
 @kotlinx.serialization.Serializable
 private data class MoveEvalDTO(
@@ -114,17 +124,28 @@ data class ProgressSnapshot(
     val total: Int,
     val done: Int,
     val percent: Double? = null,
-    val etaMs: Long? = null,         // <— добавлено, чтобы GamesListScreen мог читать ETA
+    val etaMs: Long? = null,         // <— оставлено для совместимости с экранами
     val stage: String? = null,
     val startedAt: Long? = null,
     val updatedAt: Long? = null
 )
 
-/** Типизированный запрос для /evaluate/position (чтобы не ловить SerializationException) */
+/** Типизированный запрос для /evaluate/position (позиционный режим) */
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
 private data class EvaluatePositionRequest(
     val fen: String,
+    val depth: Int,
+    val multiPv: Int
+)
+
+/** Типизированный запрос для /evaluate/position (real-time режим) */
+@SuppressLint("UnsafeOptInUsageError")
+@Serializable
+private data class EvaluateMoveRealtimeRequest(
+    val beforeFen: String,
+    val afterFen: String,
+    val uciMove: String,
     val depth: Int,
     val multiPv: Int
 )
@@ -239,6 +260,72 @@ suspend fun analyzeGameByPgnWithProgress(
     }
 }
 
+
+// ДОБАВИТЬ: подробный реал-тайм анализ с возвратом топ-линий
+suspend fun analyzeMoveRealtimeDetailed(
+    beforeFen: String,
+    afterFen: String,
+    uciMove: String,
+    depth: Int = 18,
+    multiPv: Int = 3
+): MoveRealtimeResult = withContext(Dispatchers.IO) {
+    val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
+    val payload = json.encodeToString(
+        EvaluateMoveRealtimeRequest(
+            beforeFen = beforeFen,
+            afterFen = afterFen,
+            uciMove = uciMove,
+            depth = depth,
+            multiPv = multiPv
+        )
+    )
+    val req = Request.Builder()
+        .url(url)
+        .header("Accept", "application/json")
+        .header("User-Agent", UA)
+        .post(payload.toRequestBody(JSON_MEDIA))
+        .build()
+
+    client.newCall(req).execute().use { resp ->
+        val text = resp.body?.string().orEmpty()
+        if (!resp.isSuccessful) throw IllegalStateException("http_${resp.code}: ${text.take(300)}")
+
+        val parsed = runCatching { json.decodeFromString<MoveEvalDTO>(text) }.getOrNull()
+            ?: run {
+                val pos = json.decodeFromString<PositionDTO>(text)
+                MoveEvalDTO(lines = pos.lines, bestMove = pos.bestMove, moveClassification = null)
+            }
+
+        val top = parsed.lines.firstOrNull()
+        val evalAfter: Float = when {
+            top?.mate != null -> if (top.mate!! > 0) 30f else -30f
+            top?.cp != null -> top.cp!! / 100f
+            else -> 0f
+        }
+
+        val cls = when (parsed.moveClassification?.uppercase()) {
+            "BEST" -> MoveClass.BEST
+            "PERFECT" -> MoveClass.PERFECT
+            "SPLENDID" -> MoveClass.SPLENDID
+            "EXCELLENT" -> MoveClass.EXCELLENT
+            "FORCED" -> MoveClass.FORCED
+            "OPENING" -> MoveClass.OPENING
+            "OKAY", "GOOD" -> MoveClass.OKAY
+            "INACCURACY" -> MoveClass.INACCURACY
+            "MISTAKE" -> MoveClass.MISTAKE
+            "BLUNDER" -> MoveClass.BLUNDER
+            else -> MoveClass.OKAY
+        }
+
+        MoveRealtimeResult(
+            evalAfter = evalAfter,
+            moveClass = cls,
+            bestMove = parsed.bestMove,
+            lines = parsed.lines.take(3) // показываем топ-3
+        )
+    }
+}
+
 /**
  * Анализ партии по PGN без отображения прогресса. pgn в header остаётся нетронутым.
  */
@@ -274,7 +361,10 @@ suspend fun analyzeGameByPgn(
     }
 }
 
-
+/**
+ * Реал-тайм анализ одного хода через /api/v1/evaluate/position.
+ * Сервер возвращает: lines (оценка ПОСЛЕ), bestMove (совет ДО), moveClassification (строка).
+ */
 suspend fun analyzeMoveRealtime(
     beforeFen: String,
     afterFen: String,
@@ -283,37 +373,44 @@ suspend fun analyzeMoveRealtime(
     multiPv: Int = 3
 ): Triple<Float, MoveClass, String?> = withContext(Dispatchers.IO) {
     val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
-    val body = json.encodeToString(
-        mapOf(
-            "beforeFen" to beforeFen,
-            "afterFen" to afterFen,
-            "uciMove" to uciMove,
-            "depth" to depth,
-            "multiPv" to multiPv
+    val payload = json.encodeToString(
+        EvaluateMoveRealtimeRequest(
+            beforeFen = beforeFen,
+            afterFen = afterFen,
+            uciMove = uciMove,
+            depth = depth,
+            multiPv = multiPv
         )
     )
     val req = Request.Builder()
         .url(url)
         .header("Accept", "application/json")
         .header("User-Agent", UA)
-        .post(body.toRequestBody(JSON_MEDIA))
+        .post(payload.toRequestBody(JSON_MEDIA))
         .build()
 
     client.newCall(req).execute().use { resp ->
         val text = resp.body?.string().orEmpty()
         if (!resp.isSuccessful) throw IllegalStateException("http_${resp.code}: ${text.take(300)}")
-        val dto = json.decodeFromString<MoveEvalDTO>(text)
+
+        // --- Основной путь: real-time DTO ---
+        val parsed = runCatching { json.decodeFromString<MoveEvalDTO>(text) }.getOrNull()
+            ?: run {
+                // --- Совместимость: если вдруг пришёл позиционный ответ ---
+                val pos = json.decodeFromString<PositionDTO>(text)
+                MoveEvalDTO(lines = pos.lines, bestMove = pos.bestMove, moveClassification = null)
+            }
 
         // оценка позиции ПОСЛЕ хода
-        val top = dto.lines.firstOrNull()
+        val top = parsed.lines.firstOrNull()
         val evalAfter: Float = when {
             top?.mate != null -> if (top.mate!! > 0) 30f else -30f
             top?.cp != null -> top.cp!! / 100f
             else -> 0f
         }
 
-        // классификация с сервера (надёжнее и стабильнее)
-        val cls = when (dto.moveClassification?.uppercase()) {
+        // классификация с сервера (если нет — считаем ОК)
+        val cls = when (parsed.moveClassification?.uppercase()) {
             "BEST" -> MoveClass.BEST
             "PERFECT" -> MoveClass.PERFECT
             "SPLENDID" -> MoveClass.SPLENDID
@@ -327,14 +424,13 @@ suspend fun analyzeMoveRealtime(
             else -> MoveClass.OKAY
         }
 
-        val best = dto.bestMove
+        val best = parsed.bestMove
         Triple(evalAfter, cls, best)
     }
 }
 
 /**
- * Анализ одиночного хода. Принимает FEN до хода, FEN после хода и сам ход в UCI-формате.
- * Возвращает тройку: оценка новой позиции, классификация хода и лучший вариант из предыдущей позиции.
+ * Анализ одиночного хода через /evaluate/game/by-fens (получаем FullReport и берём оттуда нужное).
  */
 suspend fun analyzeMoveByFens(
     beforeFen: String,
