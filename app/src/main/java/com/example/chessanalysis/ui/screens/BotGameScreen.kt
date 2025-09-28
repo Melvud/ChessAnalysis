@@ -6,13 +6,27 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.serialization.Serializable
+
+// Перенесено сюда для общего доступа
+@Serializable
+enum class BotSide { WHITE, BLACK, RANDOM }
+
+@Serializable
+data class BotConfig(
+    val skill: Int,  // 1..20 - настоящий Stockfish skill level
+    val side: BotSide,
+    val hints: Boolean,
+    val showLines: Boolean,
+    val multiPv: Int = 3
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BotGameScreen(
     onStart: (BotConfig) -> Unit
 ) {
-    var skill by remember { mutableStateOf(12f) }             // 1..20 — НАСТОЯЩИЙ SKILL
+    var skill by remember { mutableStateOf(12f) }
     var side by remember { mutableStateOf(BotSide.RANDOM) }
     var hints by remember { mutableStateOf(true) }
     var showLines by remember { mutableStateOf(true) }
@@ -33,7 +47,7 @@ fun BotGameScreen(
                 value = skill,
                 onValueChange = { skill = it },
                 valueRange = 1f..20f,
-                steps = 18 // по 1
+                steps = 18
             )
 
             Text("Цвет фигуры")

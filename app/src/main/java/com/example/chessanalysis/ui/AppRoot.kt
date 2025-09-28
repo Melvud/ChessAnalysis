@@ -111,7 +111,7 @@ fun AppRoot() {
                         navController.navigate("reportSummary")
                     },
                     onOpenProfileEdit = { navController.navigate("profile") },
-                    onOpenBotSetup = { navController.navigate("botSetup") } // <-- открываем бот-стек
+                    onOpenBotSetup = { navController.navigate("botSetup") }
                 )
             }
         }
@@ -136,7 +136,6 @@ fun AppRoot() {
             }
         }
 
-        // ====== БОТ: общий граф ======
         composable("botSetup") {
             BotGameScreen { cfg ->
                 val cfgJson = json.encodeToString(cfg)
@@ -144,6 +143,7 @@ fun AppRoot() {
                 navController.navigate("botPlay")
             }
         }
+
         composable("botPlay") {
             val cfgJson = navController.previousBackStackEntry?.savedStateHandle?.get<String>("bot_cfg")
             val cfg: BotConfig? = cfgJson?.let { runCatching { json.decodeFromString<BotConfig>(it) }.getOrNull() }
@@ -153,11 +153,11 @@ fun AppRoot() {
                 BotPlayScreen(
                     config = cfg,
                     onBack = { navController.popBackStack() },
-                    onFinish = { save ->
-                        // сохраним локально партию бота
-                        BotGamesLocal.append(context, save.stored)
-                        // а потом сразу на отчёт
-                        navController.currentBackStackEntry?.savedStateHandle?.set("reportJson", json.encodeToString(save.report))
+                    onFinish = { finishResult ->
+                        // Сохраняем партию бота
+                        BotGamesLocal.append(context, finishResult.stored)
+                        // Открываем отчёт
+                        navController.currentBackStackEntry?.savedStateHandle?.set("reportJson", json.encodeToString(finishResult.report))
                         navController.navigate("reportSummary")
                     }
                 )

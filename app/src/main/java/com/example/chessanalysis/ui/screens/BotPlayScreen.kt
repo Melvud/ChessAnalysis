@@ -1,5 +1,7 @@
 package com.example.chessanalysis.ui.screens
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -24,12 +26,7 @@ import com.github.bhlangonijr.chesslib.move.MoveGenerator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import com.example.chessanalysis.evaluateFenDetailed
-import com.example.chessanalysis.LineEval
-import com.example.chessanalysis.FullReport
-import com.example.chessanalysis.analyzeGameByPgnWithProgress
-import com.example.chessanalysis.PgnChess
-import com.example.chessanalysis.Provider
+import com.example.chessanalysis.*
 import com.example.chessanalysis.data.local.gameRepository
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -39,7 +36,8 @@ import kotlinx.serialization.json.Json
 @Composable
 fun BotPlayScreen(
     config: BotConfig,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onFinish: (BotFinishResult) -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
@@ -63,47 +61,11 @@ fun BotPlayScreen(
     var isEngineThinking by remember { mutableStateOf(false) }
     var isGameOver by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf(GameResult.ONGOING) }
-    val moveList = remember { mutableStateListOf<String>() } // SAN
+    val moveList = remember { mutableStateListOf<String>() }
 
     val bgColor = Color(0xFF161512)
     val cardColor = Color(0xFF1E1C1A)
     val surfaceColor = Color(0xFF262522)
-
-    LaunchedEffect(Unit) {
-        if (!userToMove) {
-            engineThinkAndMove()
-        } else if (config.hints) {
-            updateHints()
-        }
-    }
-
-    suspend fun updateHints() {
-        val pos = withContext(Dispatchers.IO) {
-            evaluateFenDetailed(board.fen, depth = 16, multiPv = config.multiPv, skillLevel = config.skill)
-        }
-        bestMoveHint = pos.bestMove
-        pvLines = if (config.showLines) pos.lines.take(3) else emptyList()
-    }
-
-    suspend fun engineThinkOnce(): String? {
-        isEngineThinking = true
-        val pos = withContext(Dispatchers.IO) {
-            evaluateFenDetailed(board.fen, depth = 16, multiPv = 1, skillLevel = config.skill)
-        }
-        isEngineThinking = false
-        return pos.bestMove
-    }
-
-    fun applyEngineMove(uci: String?) {
-        if (uci == null) return
-        val m = uciToLegal(board, uci) ?: return
-        lastMovePair = m.from.toString().lowercase() to m.to.toString().lowercase()
-        val san = board.sanMove(m)
-        board.doMove(m)
-        moveList.add(san)
-        userToMove = true
-        checkEnd()
-    }
 
     fun checkEnd() {
         val legal = MoveGenerator.generateLegalMoves(board)
@@ -113,6 +75,55 @@ fun BotPlayScreen(
                 board.isMated -> if (board.sideToMove == Side.WHITE) GameResult.BLACK_WON else GameResult.WHITE_WON
                 else -> GameResult.DRAW
             }
+        }
+    }
+
+    suspend fun updateHints() {
+        val pos = withContext(Dispatchers.IO) {
+            evaluateFenDetailed(board.fen, depth = 16, multiPv = config.multiPv, skillLevel = config.skill)
+        }
+        bestMoveHint = pos.bestMove
+        pvLines = if (config.showLines) {
+            pos.lines.take(3).map { line ->
+                LineEval(
+                    pv = line.pv,
+                    cp = line.cp,
+                    mate = line.mate,
+                    best = line.pv.firstOrNull()
+                )
+            }
+        } else emptyList()
+    }
+
+    suspend fun engineThinkAndMove() {
+        isEngineThinking = true
+        val pos = withContext(Dispatchers.IO) {
+            evaluateFenDetailed(board.fen, depth = 16, multiPv = 1, skillLevel = config.skill)
+        }
+        isEngineThinking = false
+
+        pos.bestMove?.let { uci ->
+            val m = uciToLegal(board, uci)
+            if (m != null) {
+                lastMovePair = m.from.toString().lowercase() to m.to.toString().lowercase()
+                val san = board.sanMove(m)
+                board.doMove(m)
+                moveList.add(san)
+                userToMove = true
+                checkEnd()
+            }
+        }
+
+        if (!isGameOver && config.hints) {
+            updateHints()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (!userToMove) {
+            engineThinkAndMove()
+        } else if (config.hints) {
+            updateHints()
         }
     }
 
@@ -152,18 +163,13 @@ fun BotPlayScreen(
         }
     }
 
-    suspend fun engineThinkAndMove() {
-        val best = engineThinkOnce()
-        applyEngineMove(best)
-        if (!isGameOver && config.hints) updateHints()
-    }
-
     fun resign() {
         isGameOver = true
         result = if (mySide == Side.WHITE) GameResult.BLACK_WON else GameResult.WHITE_WON
     }
 
-    suspend fun buildAndOpenReport() {
+    @RequiresApi(Build.VERSION_CODES.O)
+    suspend fun openReport() {
         val headerWhite = if (mySide == Side.WHITE) "You" else "Engine"
         val headerBlack = if (mySide == Side.BLACK) "You" else "Engine"
         val resStr = when (result) {
@@ -172,7 +178,7 @@ fun BotPlayScreen(
             GameResult.DRAW -> "1/2-1/2"
             else -> "*"
         }
-        val movesPgn = PgnChess.sanListToPgn(moveList.toList())
+        val movesPgn = PgnChess_bot.sanListToPgn(moveList.toList())
         val pgn = buildString {
             appendLine("""[Event "Bot"]""")
             appendLine("""[Site "Local"]""")
@@ -185,33 +191,21 @@ fun BotPlayScreen(
             append(resStr)
         }
 
-        // cохраним запись партии бота (чтобы отображать в списке)
         val dateIso = OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+        val stored = BotGameSave(pgn, headerWhite, headerBlack, resStr, dateIso)
+
+        // Сохраняем в локальную БД
         repo.insertBotGame(pgn, headerWhite, headerBlack, resStr, dateIso)
 
-        // проверим, есть ли кэш (на случай повторного нажатия)
         val cached = repo.getCachedReport(pgn)
         val report = cached ?: analyzeGameByPgnWithProgress(
             pgn = pgn,
             depth = 15,
             multiPv = 3,
-            header = runCatching { PgnChess.headerFromPgn(pgn) }.getOrNull()
-        ) { /* прогресс можно отрисовать, но тут экран игры */ }
-            .also { repo.saveReport(pgn, it) }
+            header = runCatching { PgnChess_bot.headerFromPgn(pgn) }.getOrNull()
+        ) { }.also { repo.saveReport(pgn, it) }
 
-        // открываем ReportScreen через навигацию родителя:
-        // решение — пишем в глобальный SavedStateHandle (см. AppRoot -> reportSummary)
-        // Вернём результат вверх:
-        openReport(report)
-    }
-
-    // делегат: composable сам не знает навигации верхнего уровня — отдаём отчёт наверх
-    var openReport by remember { mutableStateOf<(FullReport) -> Unit>({}) }
-    LaunchedEffect(Unit) {
-        // Родитель (AppRoot) подменяет этот колбэк через CompositionLocal? —
-        // упростим: просто вернём отчёт наружу через Snackbar?
-        // В текущей архитектуре AppRoot уже собирает отчёт по onOpenReport...
-        // Поэтому здесь мы вернёмся на предыдущий экран и там сразу покажем отчёт.
+        onFinish(BotFinishResult(stored, report))
     }
 
     Scaffold(
@@ -297,50 +291,7 @@ fun BotPlayScreen(
                     onClick = {
                         scope.launch {
                             if (!isGameOver) resign()
-                            // Сформируем отчёт, сохраним игру и кэш, затем откроем отчёт:
-                            // Чтобы открыть отчёт в текущей архитектуре:
-                            // 1) Сформируем отчёт;
-                            // 2) Сохраним в кэш;
-                            // 3) Навигация «назад» и сигнал наверх? Упростим:
-                            //    В AppRoot мы уже строим отчёт из SavedStateHandle.
-                            //    Поэтому просто сохраним отчёт в кэш и перекинет тебя на ReportScreen.
-                            // Здесь делаем callback через CompositionLocal — упростим: вернём отчёт вверх через навконтроллер.
-                            val headerWhite = if (mySide == Side.WHITE) "You" else "Engine"
-                            val headerBlack = if (mySide == Side.BLACK) "You" else "Engine"
-                            val resStr = when (result) {
-                                GameResult.WHITE_WON -> "1-0"
-                                GameResult.BLACK_WON -> "0-1"
-                                GameResult.DRAW -> "1/2-1/2"
-                                else -> "*"
-                            }
-                            val movesPgn = PgnChess.sanListToPgn(moveList.toList())
-                            val pgn = buildString {
-                                appendLine("""[Event "Bot"]""")
-                                appendLine("""[Site "Local"]""")
-                                appendLine("""[White "$headerWhite"]""")
-                                appendLine("""[Black "$headerBlack"]""")
-                                appendLine("""[Result "$resStr"]""")
-                                appendLine()
-                                append(movesPgn)
-                                append(" ")
-                                append(resStr)
-                            }
-                            // сохраним запись партии
-                            val dateIso = OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
-                            repo.insertBotGame(pgn, headerWhite, headerBlack, resStr, dateIso)
-                            // отчёт (кэш или новый)
-                            val cached = repo.getCachedReport(pgn)
-                            val report = cached ?: analyzeGameByPgnWithProgress(
-                                pgn = pgn,
-                                depth = 15,
-                                multiPv = 3,
-                                header = runCatching { PgnChess.headerFromPgn(pgn) }.getOrNull()
-                            ) { }.also { repo.saveReport(pgn, it) }
-
-                            // Передадим отчёт наверх через вспомогательный механизма:
-                            // Вызовем глобальный навигатор — это делает AppRoot в твоём проекте.
-                            // Здесь — хак: просто сохраним в синглтоне и откроем через глобальный callback.
-                            _ReportBridge.open(report)
+                            openReport()
                         }
                     },
                     modifier = Modifier.weight(1f)
@@ -350,17 +301,11 @@ fun BotPlayScreen(
     }
 }
 
-/* ===== Вспомогательное "мостик" API для открытия отчёта из экрана бота. =====
-   Подменяется в AppRoot один раз на запуске. Так мы не ломаем твою структуру
-   и не тянем сюда навконтроллер верхнего уровня. */
-object _ReportBridge {
-    var open: (FullReport) -> Unit = {}
-}
-
 private fun uciToLegal(board: Board, uci: String): Move? {
     val moves = MoveGenerator.generateLegalMoves(board)
     return moves.firstOrNull { it.toString().equals(uci, true) }
 }
+
 private fun legalTargetsFrom(board: Board, from: String): Set<String> {
     val sqFrom = from.uppercase()
     return MoveGenerator.generateLegalMoves(board)
