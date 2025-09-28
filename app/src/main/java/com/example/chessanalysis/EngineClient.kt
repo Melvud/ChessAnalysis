@@ -65,6 +65,13 @@ data class PositionDTO(
     val lines: List<LineDTO> = emptyList(),
     val bestMove: String? = null
 )
+@SuppressLint("UnsafeOptInUsageError")
+@kotlinx.serialization.Serializable
+private data class MoveEvalDTO(
+    val lines: List<LineDTO> = emptyList(),
+    val bestMove: String? = null,
+    val moveClassification: String? = null
+)
 
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
@@ -88,7 +95,7 @@ data class GamePgnRequest(
 )
 
 /**
- * Запрос для endpoint /api/v1/evaluate/game/by-fens. Содержит список FEN‑позиций (как правило, две: до и после хода)
+ * Запрос для endpoint /api/v1/evaluate/game/by-fens. Содержит список FEN-позиций (как правило, две: до и после хода)
  * и список ходов в формате UCI. Поля depth и multiPv аналогичны другим функциям анализа.
  */
 @SuppressLint("UnsafeOptInUsageError")
@@ -107,10 +114,19 @@ data class ProgressSnapshot(
     val total: Int,
     val done: Int,
     val percent: Double? = null,
-    val etaMs: Long? = null,
+    val etaMs: Long? = null,         // <— добавлено, чтобы GamesListScreen мог читать ETA
     val stage: String? = null,
     val startedAt: Long? = null,
     val updatedAt: Long? = null
+)
+
+/** Типизированный запрос для /evaluate/position (чтобы не ловить SerializationException) */
+@SuppressLint("UnsafeOptInUsageError")
+@Serializable
+private data class EvaluatePositionRequest(
+    val fen: String,
+    val depth: Int,
+    val multiPv: Int
 )
 
 // ---------- УТИЛИТЫ ----------
@@ -162,7 +178,7 @@ private fun normalizePgn(src: String): String {
     return out
 }
 
-// ---------- Публичное API ----------
+// ---------- Публичное API (старое — без изменений сигнатур) ----------
 
 /**
  * Оценка позиции по FEN с указанием глубины (по умолчанию 14).
@@ -177,8 +193,8 @@ suspend fun analyzeFen(fen: String, depth: Int = 14): StockfishResponse =
 suspend fun analyzeGameByPgnWithProgress(
     pgn: String,
     depth: Int = 16,
-    multiPv: Int = 3,
-    workersNb: Int = 4,
+    multiPv: Int = 2,
+    workersNb: Int = 2,
     header: GameHeader? = null,
     onProgress: (ProgressSnapshot) -> Unit
 ): FullReport = coroutineScope {
@@ -229,8 +245,8 @@ suspend fun analyzeGameByPgnWithProgress(
 suspend fun analyzeGameByPgn(
     pgn: String,
     depth: Int = 16,
-    multiPv: Int = 3,
-    workersNb: Int = 4,
+    multiPv: Int = 2,
+    workersNb: Int = 2,
     header: GameHeader? = null
 ): FullReport = withContext(Dispatchers.IO) {
     pingOrThrow()
@@ -258,8 +274,66 @@ suspend fun analyzeGameByPgn(
     }
 }
 
+
+suspend fun analyzeMoveRealtime(
+    beforeFen: String,
+    afterFen: String,
+    uciMove: String,
+    depth: Int = 14,
+    multiPv: Int = 3
+): Triple<Float, MoveClass, String?> = withContext(Dispatchers.IO) {
+    val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
+    val body = json.encodeToString(
+        mapOf(
+            "beforeFen" to beforeFen,
+            "afterFen" to afterFen,
+            "uciMove" to uciMove,
+            "depth" to depth,
+            "multiPv" to multiPv
+        )
+    )
+    val req = Request.Builder()
+        .url(url)
+        .header("Accept", "application/json")
+        .header("User-Agent", UA)
+        .post(body.toRequestBody(JSON_MEDIA))
+        .build()
+
+    client.newCall(req).execute().use { resp ->
+        val text = resp.body?.string().orEmpty()
+        if (!resp.isSuccessful) throw IllegalStateException("http_${resp.code}: ${text.take(300)}")
+        val dto = json.decodeFromString<MoveEvalDTO>(text)
+
+        // оценка позиции ПОСЛЕ хода
+        val top = dto.lines.firstOrNull()
+        val evalAfter: Float = when {
+            top?.mate != null -> if (top.mate!! > 0) 30f else -30f
+            top?.cp != null -> top.cp!! / 100f
+            else -> 0f
+        }
+
+        // классификация с сервера (надёжнее и стабильнее)
+        val cls = when (dto.moveClassification?.uppercase()) {
+            "BEST" -> MoveClass.BEST
+            "PERFECT" -> MoveClass.PERFECT
+            "SPLENDID" -> MoveClass.SPLENDID
+            "EXCELLENT" -> MoveClass.EXCELLENT
+            "FORCED" -> MoveClass.FORCED
+            "OPENING" -> MoveClass.OPENING
+            "OKAY", "GOOD" -> MoveClass.OKAY
+            "INACCURACY" -> MoveClass.INACCURACY
+            "MISTAKE" -> MoveClass.MISTAKE
+            "BLUNDER" -> MoveClass.BLUNDER
+            else -> MoveClass.OKAY
+        }
+
+        val best = dto.bestMove
+        Triple(evalAfter, cls, best)
+    }
+}
+
 /**
- * Анализ одиночного хода. Принимает FEN до хода, FEN после хода и сам ход в UCI‑формате.
+ * Анализ одиночного хода. Принимает FEN до хода, FEN после хода и сам ход в UCI-формате.
  * Возвращает тройку: оценка новой позиции, классификация хода и лучший вариант из предыдущей позиции.
  */
 suspend fun analyzeMoveByFens(
@@ -301,6 +375,29 @@ suspend fun analyzeMoveByFens(
     }
 }
 
+// ---------- Новое безопасное API, НЕ ломающее старое ----------
+
+/** Подробная оценка одной позиции: возвращает сырые линии (PV/cp/mate). */
+suspend fun evaluateFenDetailed(
+    fen: String,
+    depth: Int = 14,
+    multiPv: Int = 3
+): PositionDTO = withContext(Dispatchers.IO) {
+    val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
+    val body = json.encodeToString(EvaluatePositionRequest(fen, depth, multiPv))
+    val req = Request.Builder()
+        .url(url)
+        .header("Accept", "application/json")
+        .header("User-Agent", UA)
+        .post(body.toRequestBody(JSON_MEDIA))
+        .build()
+    client.newCall(req).execute().use { resp ->
+        val text = resp.body?.string().orEmpty()
+        if (!resp.isSuccessful) throw IllegalStateException("http_${resp.code}: ${text.take(300)}")
+        json.decodeFromString(text)
+    }
+}
+
 // --- внутренние помощники (ping/poll/position) ---
 private suspend fun pingOrThrow() = withContext(Dispatchers.IO) {
     val url = "${ServerConfig.BASE_URL}/ping"
@@ -317,6 +414,7 @@ private suspend fun pingOrThrow() = withContext(Dispatchers.IO) {
 
 /**
  * Прямой вызов оценщика позиции. Служебная функция.
+ * (ОСТАВЛЕНА ПОДПИСЬ ФУНКЦИИ, НО ВНУТРИ — типизированный DTO вместо Map<String, Any>)
  */
 private fun requestEvaluatePosition(
     fen: String,
@@ -324,7 +422,7 @@ private fun requestEvaluatePosition(
     multiPv: Int
 ): StockfishResponse {
     val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
-    val bodyStr = json.encodeToString(mapOf("fen" to fen, "depth" to depth, "multiPv" to multiPv))
+    val bodyStr = json.encodeToString(EvaluatePositionRequest(fen = fen, depth = depth, multiPv = multiPv))
     val req = Request.Builder()
         .url(url)
         .header("Accept", "application/json")
