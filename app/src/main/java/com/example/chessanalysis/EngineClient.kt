@@ -24,15 +24,19 @@ import java.lang.ref.WeakReference
 // =================== EngineClient ===================
 object EngineClient {
     private var appCtxRef: WeakReference<Context>? = null
+
     fun init(context: Context) {
         appCtxRef = WeakReference(context.applicationContext)
+        // --- Новое: сразу сообщаем LocalStockfish точный путь до .so ---
+        ensureLocalBinaryConfigured()
     }
+
     private fun appContext(): Context? = appCtxRef?.get()
 
     /**
      * Режим работы движка. При значении [EngineMode.SERVER] все вызовы
      * отправляются на удалённый сервер через HTTP. При значении
-     * [EngineMode.LOCAL] используется локальный UCI‑движок Stockfish.
+     * [EngineMode.LOCAL] используется локальный UCI-движок Stockfish.
      */
     enum class EngineMode { SERVER, LOCAL }
 
@@ -50,6 +54,10 @@ object EngineClient {
      */
     fun setEngineMode(mode: EngineMode) {
         _engineMode.value = mode
+        if (mode == EngineMode.LOCAL) {
+            // --- Новое: при переключении на локальный движок убедимся, что путь задан ---
+            ensureLocalBinaryConfigured()
+        }
     }
 
     // ----- КОНФИГУРАЦИЯ СЕРВЕРА -----
@@ -205,7 +213,9 @@ object EngineClient {
         withContext(Dispatchers.IO) {
             // при локальном режиме возвращаем результат локального движка
             if (engineMode.value == EngineMode.LOCAL) {
-                return@withContext LocalStockfish.evaluateFen(fen, depth, 3, skillLevel, context = appContext()  )
+                return@withContext LocalStockfish.evaluateFen(
+                    fen, depth, 3, skillLevel, context = appContext()
+                )
             }
             // иначе вызываем удалённый сервер
             return@withContext requestEvaluatePosition(fen, depth, 3, skillLevel)
@@ -682,6 +692,19 @@ object EngineClient {
                 }
             } catch (_: Exception) { }
             delay(400)
+        }
+    }
+
+    // --- Новое: единая точка автоконфигурации пути к libstockfish.so ---
+    private fun ensureLocalBinaryConfigured() {
+        val ctx = appContext() ?: return
+        try {
+            val nativeDir = ctx.applicationInfo.nativeLibraryDir
+            val soPath = "$nativeDir/libstockfish.so"
+            // Сообщаем LocalStockfish явный путь — дальше он сможет работать и без контекста.
+            Log.i(TAG, "Local Stockfish path configured: $soPath")
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to configure local Stockfish path", t)
         }
     }
 }

@@ -26,10 +26,6 @@ object LocalAnalysisUtils {
      * приводят к вероятности, близкой к 1.0, отрицательные – к 0.0.
      */
     fun evalToWinProb(eval: Float): Double {
-        // коэффициент кривизны логистической функции: чем больше, тем
-        // быстрее вероятность стремится к 0/1. На сервере используется
-        // более сложная модель, но для локального анализа этого
-        // приближения достаточно.
         val k = 1.1f
         val exponent = (-k * eval).toDouble()
         return 1.0 / (1.0 + exp(exponent))
@@ -37,21 +33,11 @@ object LocalAnalysisUtils {
 
     /**
      * Классифицирует ход исходя из разницы между вероятностью
-     * выигрыша при лучшем ходе и после сделанного хода. Чем больше
-     * дельта, тем хуже ход. Также учитываем количество легальных ходов:
-     * если ход единственный, считаем его принудительным (FORCED).
-     * Для первых ходов партии, если потеря ничтожна, классифицируем
-     * как OPENING.
-     *
-     * @param delta Разница в вероятности выигрыша (winBest - winAfter)
-     * @param legalCount Число легальных ходов в позиции до хода
-     * @param moveIndex Порядковый номер хода (0 для первого хода белых)
+     * выигрыша при лучшем ходе и после сделанного хода.
      */
     fun classifyMove(delta: Float, legalCount: Int, moveIndex: Int): MoveClass {
-        // если только один ход, классифицируем как принудительный
         if (legalCount <= 1) return MoveClass.FORCED
         val absDelta = abs(delta)
-        // первые 8 полуходов считаем открытием, если дельта мала
         if (moveIndex < 8 && absDelta < 0.05f) return MoveClass.OPENING
         return when {
             absDelta < 0.02f -> MoveClass.PERFECT
@@ -64,50 +50,33 @@ object LocalAnalysisUtils {
         }
     }
 
-    /**
-     * Штрафные очки за определённый класс хода. Используется для
-     * расчёта точности (accuracy). Чем хуже ход, тем больше штраф.
-     *
-     * @return Значение, которое нужно вычесть из 100, чтобы получить
-     *         итоговую точность хода (от 0 до 100).
-     */
-    fun penaltyForClass(cls: MoveClass): Double {
-        return when (cls) {
-            MoveClass.OPENING, MoveClass.FORCED, MoveClass.PERFECT, MoveClass.BEST -> 0.0
-            MoveClass.SPLENDID -> 0.5
-            MoveClass.EXCELLENT -> 1.0
-            MoveClass.OKAY -> 3.0
-            MoveClass.INACCURACY -> 6.0
-            MoveClass.MISTAKE -> 12.0
-            MoveClass.BLUNDER -> 25.0
-        }
+    /** Штраф за класс хода (для расчёта точности: 100 - penalty). */
+    fun penaltyForClass(cls: MoveClass): Double = when (cls) {
+        MoveClass.OPENING, MoveClass.FORCED, MoveClass.PERFECT, MoveClass.BEST -> 0.0
+        MoveClass.SPLENDID -> 0.5
+        MoveClass.EXCELLENT -> 1.0
+        MoveClass.OKAY -> 3.0
+        MoveClass.INACCURACY -> 6.0
+        MoveClass.MISTAKE -> 12.0
+        MoveClass.BLUNDER -> 25.0
+    }
+
+    /** Грубая оценка рейтинга по среднему ACPL. */
+    fun estimateElo(acpl: Double): Int = when {
+        acpl < 10 -> 2800
+        acpl < 20 -> 2600
+        acpl < 35 -> 2400
+        acpl < 50 -> 2200
+        acpl < 75 -> 2000
+        acpl < 100 -> 1800
+        acpl < 150 -> 1600
+        acpl < 200 -> 1400
+        acpl < 300 -> 1200
+        else -> 1000
     }
 
     /**
-     * Оценка рейтинга по среднему ACPL. Это грубая эвристика,
-     * использующая типичные диапазоны: чем меньше ACPL, тем выше
-     * ожидаемый рейтинг. Функция симметрична для белых и чёрных.
-     */
-    fun estimateElo(acpl: Double): Int {
-        return when {
-            acpl < 10 -> 2800
-            acpl < 20 -> 2600
-            acpl < 35 -> 2400
-            acpl < 50 -> 2200
-            acpl < 75 -> 2000
-            acpl < 100 -> 1800
-            acpl < 150 -> 1600
-            acpl < 200 -> 1400
-            acpl < 300 -> 1200
-            else -> 1000
-        }
-    }
-
-    /**
-     * Расчитывает сводку точности для белых и чёрных. Для каждого
-     * игрока считаются три вида среднего: итеративное (просто среднее
-     * арифметическое), гармоническое и взвешенное (квадратичное). Эти
-     * показатели используются в отчёте для детального анализа.
+     * Сводка точности по цветам: итеративная, гармоническая и взвешенная.
      */
     fun computeAccuracySummary(reports: List<com.example.chessanalysis.MoveReport>): AccuracySummary {
         var whiteItera = 0.0
@@ -148,12 +117,13 @@ object LocalAnalysisUtils {
     }
 
     /**
-     * Вычисляет ACPL (Average CentiPawn Loss) для белых и чёрных. Мы
-     * рассматриваем потери в pawns (разница в оценке, умноженная на 100),
-     * затем берём среднее по количеству ходов каждого цвета. Матовые
-     * значения трактуем как большой проигрыш (1000cp).
+     * ACPL по цветам. Мат трактуем как большую потерю (1000cp).
      */
-    fun computeAcpl(reports: List<com.example.chessanalysis.MoveReport>, bestCpList: List<Int?>, afterCpList: List<Int?>): Acpl {
+    fun computeAcpl(
+        reports: List<com.example.chessanalysis.MoveReport>,
+        bestCpList: List<Int?>,
+        afterCpList: List<Int?>
+    ): Acpl {
         var whiteLoss = 0.0
         var blackLoss = 0.0
         var whiteCount = 0
@@ -161,17 +131,11 @@ object LocalAnalysisUtils {
         reports.forEachIndexed { idx, _ ->
             val best = bestCpList.getOrNull(idx)
             val after = afterCpList.getOrNull(idx)
-            val diffCp = if (best == null || after == null) {
-                1000.0 // если оценка недоступна, считаем большой потерей
-            } else {
-                abs(best - after).toDouble()
-            }
+            val diffCp = if (best == null || after == null) 1000.0 else abs(best - after).toDouble()
             if (idx % 2 == 0) {
-                whiteLoss += diffCp
-                whiteCount++
+                whiteLoss += diffCp; whiteCount++
             } else {
-                blackLoss += diffCp
-                blackCount++
+                blackLoss += diffCp; blackCount++
             }
         }
         return Acpl(
