@@ -115,4 +115,13 @@ dependencies {
     implementation("androidx.room:room-runtime:2.8.1")
     implementation("androidx.room:room-ktx:2.8.1")
     kapt("androidx.room:room-compiler:2.8.1")
+
+    // Vico charts (Compose + Material3) — графики
+    implementation("com.patrykandpatrick.vico:compose:2.0.3")
+    implementation("com.patrykandpatrick.vico:compose-m3:2.0.3")
+
+// Coroutines integration с Google Tasks (для tasks.await() в Firestore/Auth)
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.1")
+    implementation("com.patrykandpatrick.vico:compose-m3:2.1.3")
+    implementation("com.patrykandpatrick.vico:core:2.1.3")
 }

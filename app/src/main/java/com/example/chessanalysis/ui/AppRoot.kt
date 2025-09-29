@@ -1,3 +1,4 @@
+// app/src/main/java/com/example/chessanalysis/ui/AppRoot.kt
 package com.example.chessanalysis.ui
 
 import androidx.compose.foundation.layout.Box
@@ -7,10 +8,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -26,10 +29,15 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+// ★ добавлено: статистика
+import com.example.chessanalysis.ui.navigation.registerStatsScreen
+import com.example.chessanalysis.ui.navigation.ROUTE_STATS
+import com.example.chessanalysis.data.repo.StatsRepository
+
 /**
  * Профиль пользователя — как он используется твоими экранами.
- * Вынес здесь, чтобы GamesListScreen/ProfileScreen могли его импортировать
- * как com.example.chessanalysis.ui.UserProfile (как у тебя было раньше).
+ * Оставлен здесь, чтобы GamesListScreen/ProfileScreen могли его импортировать
+ * как com.example.chessanalysis.ui.UserProfile
  */
 @Serializable
 data class UserProfile(
@@ -42,6 +50,11 @@ data class UserProfile(
 @Composable
 fun AppRoot() {
     val navController = rememberNavController()
+
+    // ★ репозиторий статистики — провайдим внутрь графа
+    val statsRepo = remember {
+        StatsRepository(context = LocalContext.current)
+    }
 
     // Состояния приложения
     var isBootLoading by rememberSaveable { mutableStateOf(false) }
@@ -88,22 +101,19 @@ fun AppRoot() {
             )
         }
 
-        // --------- HOME (нижняя навигация внутри твоего экрана) ----------
+        // --------- HOME ----------
         composable("home") {
             val profile = currentUserProfile
             if (profile == null) {
                 navController.navigate("login") { popUpTo("home") { inclusive = true } }
             } else {
                 /**
-                 * Твой GamesListScreen ожидает:
+                 * GamesListScreen ожидает:
                  * - profile: UserProfile
                  * - games: List<GameHeader>
                  * - openingFens: Set<String>
                  * - onOpenProfile: () -> Unit
                  * - onOpenReport: (FullReport) -> Unit
-                 *
-                 * Если GamesListScreen у тебя внутри HomeWithBottomNav — оставь как есть.
-                 * Здесь мы просто вызываем его напрямую, чтобы не тянуть вкладку «бот».
                  */
                 GamesListScreen(
                     profile = profile,
@@ -161,12 +171,11 @@ fun AppRoot() {
             if (report == null) {
                 navController.popBackStack()
             } else {
-                // Твой ReportScreen ожидает onOpenBoard, а НЕ onOpenFull.
+                // ReportScreen ожидает onOpenBoard
                 ReportScreen(
                     report = report,
                     onBack = { navController.popBackStack() },
                     onOpenBoard = {
-                        // На детальный отчёт: ещё раз кладём JSON и открываем "reportBoard"
                         val packed = json.encodeToString(report)
                         navController.currentBackStackEntry
                             ?.savedStateHandle
@@ -197,6 +206,12 @@ fun AppRoot() {
                 )
             }
         }
+
+        // --------- STATS (регистрация экрана статистики) ----------
+        // Экран и его route добавляются через расширение registerStatsScreen(...)
+        registerStatsScreen(repositoryProvider = { statsRepo })
+        // Теперь можно навигировать на ROUTE_STATS откуда угодно:
+        // navController.navigate(ROUTE_STATS)
     }
 }
 
