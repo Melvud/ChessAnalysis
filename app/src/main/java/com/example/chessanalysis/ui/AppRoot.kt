@@ -1,4 +1,3 @@
-// app/src/main/java/com/example/chessanalysis/ui/AppRoot.kt
 package com.example.chessanalysis.ui
 
 import androidx.compose.foundation.layout.Box
@@ -13,7 +12,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -21,22 +19,17 @@ import androidx.navigation.compose.rememberNavController
 import com.example.chessanalysis.FullReport
 import com.example.chessanalysis.GameHeader
 import com.example.chessanalysis.ui.screens.GameReportScreen
-import com.example.chessanalysis.ui.screens.GamesListScreen
 import com.example.chessanalysis.ui.screens.LoginScreen
 import com.example.chessanalysis.ui.screens.ProfileScreen
 import com.example.chessanalysis.ui.screens.ReportScreen
+import com.example.chessanalysis.ui.HomeWithBottomNav
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-// ★ добавлено: статистика
-import com.example.chessanalysis.ui.navigation.registerStatsScreen
-import com.example.chessanalysis.ui.navigation.ROUTE_STATS
-import com.example.chessanalysis.data.repo.StatsRepository
-
 /**
- * Профиль пользователя — как он используется твоими экранами.
- * Оставлен здесь, чтобы GamesListScreen/ProfileScreen могли его импортировать
+ * Профиль пользователя — как он используется вашими экранами.
+ * Оставлен здесь, чтобы экраны могли его импортировать
  * как com.example.chessanalysis.ui.UserProfile
  */
 @Serializable
@@ -51,20 +44,17 @@ data class UserProfile(
 fun AppRoot() {
     val navController = rememberNavController()
 
-    // ★ репозиторий статистики — провайдим внутрь графа
-    val statsRepo = remember {
-        StatsRepository(context = LocalContext.current)
-    }
-
     // Состояния приложения
     var isBootLoading by rememberSaveable { mutableStateOf(false) }
     var currentUserProfile by rememberSaveable { mutableStateOf<UserProfile?>(null) }
     var games by rememberSaveable { mutableStateOf<List<GameHeader>>(emptyList()) }
     var openingFens by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
 
-    val json = Json {
-        ignoreUnknownKeys = true
-        explicitNulls = false
+    val json = remember {
+        Json {
+            ignoreUnknownKeys = true
+            explicitNulls = false
+        }
     }
 
     // Если нужно что-то асинхронно прогреть — можно показать сплэш.
@@ -101,48 +91,25 @@ fun AppRoot() {
             )
         }
 
-        // --------- HOME ----------
+        // --------- HOME с нижним меню (только «Партии» и «Профиль») ----------
         composable("home") {
             val profile = currentUserProfile
             if (profile == null) {
                 navController.navigate("login") { popUpTo("home") { inclusive = true } }
             } else {
-                /**
-                 * GamesListScreen ожидает:
-                 * - profile: UserProfile
-                 * - games: List<GameHeader>
-                 * - openingFens: Set<String>
-                 * - onOpenProfile: () -> Unit
-                 * - onOpenReport: (FullReport) -> Unit
-                 */
-                GamesListScreen(
+                HomeWithBottomNav(
                     profile = profile,
                     games = games,
                     openingFens = openingFens,
-                    onOpenProfile = { navController.navigate("profile") },
                     onOpenReport = { report ->
-                        // сериализуем отчёт и передаём через savedStateHandle
                         val packed = json.encodeToString(report)
                         navController.currentBackStackEntry
                             ?.savedStateHandle
                             ?.set("reportJson", packed)
                         navController.navigate("reportSummary")
-                    }
-                )
-            }
-        }
-
-        // --------- PROFILE ----------
-        composable("profile") {
-            val profile = currentUserProfile
-            if (profile == null) {
-                navController.popBackStack()
-            } else {
-                ProfileScreen(
-                    profile = profile,
-                    onSave = { updated ->
+                    },
+                    onUpdateProfile = { updated ->
                         currentUserProfile = updated
-                        navController.popBackStack()
                     },
                     onLogout = {
                         currentUserProfile = null
@@ -151,8 +118,7 @@ fun AppRoot() {
                         navController.navigate("login") {
                             popUpTo("home") { inclusive = true }
                         }
-                    },
-                    onBack = { navController.popBackStack() }
+                    }
                 )
             }
         }
@@ -165,13 +131,13 @@ fun AppRoot() {
                 key = "reportJson"
             )
             val report: FullReport? = reportJson?.let {
-                runCatching { json.decodeFromString(FullReport.serializer(), it) }.getOrNull()
+                runCatching { Json { ignoreUnknownKeys = true }.decodeFromString(FullReport.serializer(), it) }
+                    .getOrNull()
             }
 
             if (report == null) {
                 navController.popBackStack()
             } else {
-                // ReportScreen ожидает onOpenBoard
                 ReportScreen(
                     report = report,
                     onBack = { navController.popBackStack() },
@@ -194,7 +160,8 @@ fun AppRoot() {
                 key = "reportJson"
             )
             val report: FullReport? = reportJson?.let {
-                runCatching { json.decodeFromString(FullReport.serializer(), it) }.getOrNull()
+                runCatching { Json { ignoreUnknownKeys = true }.decodeFromString(FullReport.serializer(), it) }
+                    .getOrNull()
             }
 
             if (report == null) {
@@ -206,12 +173,6 @@ fun AppRoot() {
                 )
             }
         }
-
-        // --------- STATS (регистрация экрана статистики) ----------
-        // Экран и его route добавляются через расширение registerStatsScreen(...)
-        registerStatsScreen(repositoryProvider = { statsRepo })
-        // Теперь можно навигировать на ROUTE_STATS откуда угодно:
-        // navController.navigate(ROUTE_STATS)
     }
 }
 
