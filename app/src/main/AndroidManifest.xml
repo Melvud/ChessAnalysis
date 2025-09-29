@@ -12,6 +12,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.ChessAnalyzer"
         android:usesCleartextTraffic="true"
+        android:extractNativeLibs="true"
         android:networkSecurityConfig="@xml/network_security_config">
         <activity
             android:name=".MainActivity"

@@ -15,7 +15,13 @@ class GameRepository(
 
     /* ===================== BOT ===================== */
 
-    suspend fun insertBotGame(pgn: String, white: String, black: String, result: String, dateIso: String): String {
+    suspend fun insertBotGame(
+        pgn: String,
+        white: String,
+        black: String,
+        result: String,
+        dateIso: String
+    ): String {
         val hash = pgnHash(pgn)
         db.gameDao().insertBotGame(
             BotGameEntity(
@@ -69,7 +75,7 @@ class GameRepository(
                 val rowId = db.gameDao().insertExternalIgnore(e)
                 if (rowId != -1L) added++
             } else {
-                // можно мягко обновлять поля (например, если теперь есть pgn)
+                // мягко обновим только улучшенные поля (например, появился полный PGN)
                 if (gh.pgn != null && (existing.pgn == null || existing.pgn!!.length < gh.pgn!!.length)) {
                     db.gameDao().updateExternal(
                         existing.copy(
@@ -79,7 +85,7 @@ class GameRepository(
                             black = gh.black ?: existing.black,
                             opening = gh.opening ?: existing.opening,
                             eco = gh.eco ?: existing.eco,
-                            pgn = gh.pgn // дозаполняем pgn
+                            pgn = gh.pgn
                         )
                     )
                 }
@@ -94,27 +100,30 @@ class GameRepository(
         db.gameDao().updateExternalPgnByKey(key, fullPgn)
     }
 
-    /** Вытаскиваем объединённый список: external + bot, отсортированный по дате. */
+    /**
+     * Единый источник для экрана со списком: новейшие добавленные — в самом начале.
+     * Используем UNION-запрос с сортировкой по addedAt DESC (см. GameDao.getAllForListOrderByAdded()).
+     */
     suspend fun getAllHeaders(): List<GameHeader> {
-        val ex = db.gameDao().getAllExternal().map { e ->
+        val rows = db.gameDao().getAllForListOrderByAdded()
+        return rows.map { r ->
             GameHeader(
-                site = when (e.provider) {
+                site = when (r.provider) {
                     Provider.LICHESS.name -> Provider.LICHESS
                     Provider.CHESSCOM.name -> Provider.CHESSCOM
+                    Provider.BOT.name -> Provider.BOT
                     else -> Provider.LICHESS
                 },
-                pgn = e.pgn,
-                white = e.white,
-                black = e.black,
-                result = e.result,
-                date = e.dateIso,
+                pgn = r.pgn,
+                white = r.white,
+                black = r.black,
+                result = r.result,
+                date = r.dateIso,
                 sideToView = null,
-                opening = e.opening,
-                eco = e.eco
+                opening = r.opening,
+                eco = r.eco
             )
         }
-        val bot = getBotGamesAsHeaders()
-        return (ex + bot).sortedByDescending { it.date ?: "" }
     }
 
 

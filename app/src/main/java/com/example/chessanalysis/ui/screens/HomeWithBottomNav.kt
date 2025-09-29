@@ -1,11 +1,9 @@
-package com.example.chessanalysis.ui
+package com.example.chessanalysis.ui.screens
 
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.List
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -13,116 +11,124 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.navigation.NavHostController
+import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.chessanalysis.FullReport
 import com.example.chessanalysis.GameHeader
-import com.example.chessanalysis.ui.screens.GamesListScreen
-import com.example.chessanalysis.ui.screens.ProfileScreen
+import com.example.chessanalysis.ui.UserProfile
 
 private const val TAB_GAMES = "tab/games"
 private const val TAB_PROFILE = "tab/profile"
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Внутренний граф для нижней навигации «Партии»/«Профиль».
+ * Снаружи (в AppRoot) остаются маршруты отчётов.
+ */
 @Composable
 fun HomeWithBottomNav(
     profile: UserProfile,
     games: List<GameHeader>,
     openingFens: Set<String>,
     onOpenReport: (FullReport) -> Unit,
-    onUpdateProfile: (UserProfile) -> Unit,
-    onLogout: () -> Unit,
+    onSaveProfile: (UserProfile) -> Unit,
+    onLogout: () -> Unit
 ) {
-    val tabs = remember {
-        listOf(
-            BottomItem(route = TAB_GAMES, title = "Партии", icon = { Icon(Icons.Default.List, contentDescription = null) }),
-            BottomItem(route = TAB_PROFILE, title = "Профиль", icon = { Icon(Icons.Default.AccountCircle, contentDescription = null) }),
+    val tabsNav = rememberNavController()
+
+    val items = listOf(
+        BottomItem(
+            route = TAB_GAMES,
+            label = "Партии",
+            icon = { Icon(Icons.Default.List, contentDescription = "Партии") }
+        ),
+        BottomItem(
+            route = TAB_PROFILE,
+            label = "Профиль",
+            icon = { Icon(Icons.Default.AccountCircle, contentDescription = "Профиль") }
         )
-    }
-    val tabNav: NavHostController = rememberNavController()
-    var selectedRoute by remember { mutableStateOf(TAB_GAMES) }
+    )
 
     Scaffold(
         bottomBar = {
+            val backStack by tabsNav.currentBackStackEntryAsState()
+            val currentRoute = backStack?.destination?.route
             NavigationBar {
-                tabs.forEach { item ->
+                items.forEach { item ->
                     NavigationBarItem(
-                        selected = selectedRoute == item.route,
+                        selected = currentRoute == item.route,
                         onClick = {
-                            selectedRoute = item.route
-                            if (tabNav.currentBackStackEntry?.destination?.route != item.route) {
-                                tabNav.navigate(item.route) {
-                                    popUpTo(TAB_GAMES)
+                            if (currentRoute != item.route) {
+                                tabsNav.navigate(item.route) {
+                                    popUpTo(TAB_GAMES) { inclusive = false }
                                     launchSingleTop = true
                                 }
                             }
                         },
                         icon = item.icon,
-                        label = { Text(item.title) }
+                        label = { Text(item.label) }
                     )
                 }
             }
         }
     ) { innerPadding ->
-        TabsNavHost(
-            nav = tabNav,
-            contentPadding = innerPadding,
-            profile = profile,
-            games = games,
-            openingFens = openingFens,
-            onOpenReport = onOpenReport,
-            onUpdateProfile = onUpdateProfile,
-            onLogout = onLogout
-        )
+        NavHost(
+            navController = tabsNav,
+            startDestination = TAB_GAMES,
+            modifier = Modifier.padding(innerPadding)
+        ) {
+            addGamesTab(
+                profile = profile,
+                games = games,
+                openingFens = openingFens,
+                onOpenReport = onOpenReport
+            )
+            addProfileTab(
+                profile = profile,
+                onSave = onSaveProfile,
+                onLogout = onLogout
+            )
+        }
     }
 }
 
 private data class BottomItem(
     val route: String,
-    val title: String,
+    val label: String,
     val icon: @Composable () -> Unit
 )
 
-@Composable
-private fun TabsNavHost(
-    nav: NavHostController,
-    contentPadding: PaddingValues,
+private fun NavGraphBuilder.addGamesTab(
     profile: UserProfile,
     games: List<GameHeader>,
     openingFens: Set<String>,
-    onOpenReport: (FullReport) -> Unit,
-    onUpdateProfile: (UserProfile) -> Unit,
+    onOpenReport: (FullReport) -> Unit
+) {
+    composable(TAB_GAMES) {
+        GamesListScreen(
+            profile = profile,
+            games = games,
+            openingFens = openingFens,
+            onOpenReport = onOpenReport
+        )
+    }
+}
+
+private fun NavGraphBuilder.addProfileTab(
+    profile: UserProfile,
+    onSave: (UserProfile) -> Unit,
     onLogout: () -> Unit
 ) {
-    NavHost(
-        navController = nav,
-        startDestination = TAB_GAMES,
-        modifier = Modifier.fillMaxSize()
-    ) {
-        composable(TAB_GAMES) {
-            GamesListScreen(
-                profile = profile,
-                games = games,
-                openingFens = openingFens,
-                onOpenProfile = { nav.navigate(TAB_PROFILE) },
-                onOpenReport = onOpenReport
-            )
-        }
-        composable(TAB_PROFILE) {
-            ProfileScreen(
-                profile = profile,
-                onSave = { updated ->
-                    onUpdateProfile(updated)
-                },
-                onLogout = onLogout,
-                onBack = { nav.navigate(TAB_GAMES) }
-            )
-        }
+    composable(TAB_PROFILE) {
+        // Вкладка профиля внутри нижнего меню: кнопки «назад» нет.
+        ProfileScreen(
+            profile = profile,
+            onSave = onSave,
+            onLogout = onLogout,
+            onBack = { /* игнорируем, профиль — вкладка */ }
+        )
     }
 }

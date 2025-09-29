@@ -5,6 +5,8 @@ import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import com.example.chessanalysis.local.LocalStockfish
+import com.example.chessanalysis.local.LocalAnalyzer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -16,9 +18,39 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.logging.HttpLoggingInterceptor
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import android.content.Context
+import java.lang.ref.WeakReference
 
 // =================== EngineClient ===================
 object EngineClient {
+    private var appCtxRef: WeakReference<Context>? = null
+    fun init(context: Context) {
+        appCtxRef = WeakReference(context.applicationContext)
+    }
+    private fun appContext(): Context? = appCtxRef?.get()
+
+    /**
+     * Режим работы движка. При значении [EngineMode.SERVER] все вызовы
+     * отправляются на удалённый сервер через HTTP. При значении
+     * [EngineMode.LOCAL] используется локальный UCI‑движок Stockfish.
+     */
+    enum class EngineMode { SERVER, LOCAL }
+
+    /**
+     * StateFlow с текущим режимом работы движка. UI может подписываться
+     * на это состояние, чтобы реагировать на переключение режима.
+     */
+    private val _engineMode = MutableStateFlow(EngineMode.SERVER)
+    val engineMode: StateFlow<EngineMode> = _engineMode
+
+    /**
+     * Задаёт режим работы движка. Если выбран локальный режим, объект
+     * [LocalStockfish] будет автоматически инициализирован при первом
+     * обращении к нему.
+     */
+    fun setEngineMode(mode: EngineMode) {
+        _engineMode.value = mode
+    }
 
     // ----- КОНФИГУРАЦИЯ СЕРВЕРА -----
     object ServerConfig {
@@ -170,7 +202,14 @@ object EngineClient {
         depth: Int = 14,
         skillLevel: Int? = null
     ): StockfishResponse =
-        withContext(Dispatchers.IO) { requestEvaluatePosition(fen, depth, 3, skillLevel) }
+        withContext(Dispatchers.IO) {
+            // при локальном режиме возвращаем результат локального движка
+            if (engineMode.value == EngineMode.LOCAL) {
+                return@withContext LocalStockfish.evaluateFen(fen, depth, 3, skillLevel, context = appContext()  )
+            }
+            // иначе вызываем удалённый сервер
+            return@withContext requestEvaluatePosition(fen, depth, 3, skillLevel)
+        }
 
     /**
      * Анализ партии с прогрессом. Обновляет [percent]/[stage] для UI.
@@ -183,6 +222,25 @@ object EngineClient {
         header: GameHeader? = null,
         onProgress: (ProgressSnapshot) -> Unit = {}
     ): FullReport = coroutineScope {
+        // Если выбран локальный режим, используем локальный анализатор и обновляем прогресс самостоятельно
+        if (engineMode.value == EngineMode.LOCAL) {
+            return@coroutineScope withContext(Dispatchers.IO) {
+                resetProgress()
+                LocalAnalyzer.analyzeGameByPgnWithProgress(
+                    pgn = pgn,
+                    depth = depth,
+                    multiPv = multiPv,
+                    header = header,
+                    onProgress = { snap ->
+                        // обновляем state-потоки и внешний callback
+                        _percent.value = snap.percent
+                        _stage.value = snap.stage
+                        onProgress(snap)
+                    }
+                )
+            }
+        }
+
         val progressId = UUID.randomUUID().toString()
         resetProgress()
         val poller = launch(Dispatchers.IO) { pollProgress(progressId, onProgress) }
@@ -237,6 +295,17 @@ object EngineClient {
         multiPv: Int = 3,
         skillLevel: Int? = null
     ): MoveRealtimeResult = withContext(Dispatchers.IO) {
+        // локальный режим
+        if (engineMode.value == EngineMode.LOCAL) {
+            return@withContext LocalAnalyzer.analyzeMoveRealtimeDetailed(
+                beforeFen = beforeFen,
+                afterFen = afterFen,
+                uciMove = uciMove,
+                depth = depth,
+                multiPv = multiPv,
+                skillLevel = skillLevel
+            )
+        }
         val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
         val payload = json.encodeToString(
             EvaluateMoveRealtimeRequest(
@@ -302,6 +371,15 @@ object EngineClient {
         workersNb: Int = 2,
         header: GameHeader? = null
     ): FullReport = withContext(Dispatchers.IO) {
+        // локальный режим
+        if (engineMode.value == EngineMode.LOCAL) {
+            return@withContext LocalAnalyzer.analyzeGameByPgn(
+                pgn = pgn,
+                depth = depth,
+                multiPv = multiPv,
+                header = header
+            )
+        }
         pingOrThrow()
         val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game"
 
@@ -336,6 +414,17 @@ object EngineClient {
         multiPv: Int = 3,
         skillLevel: Int? = null
     ): Triple<Float, MoveClass, String?> = withContext(Dispatchers.IO) {
+        // локальный режим
+        if (engineMode.value == EngineMode.LOCAL) {
+            return@withContext LocalAnalyzer.analyzeMoveRealtime(
+                beforeFen = beforeFen,
+                afterFen = afterFen,
+                uciMove = uciMove,
+                depth = depth,
+                multiPv = multiPv,
+                skillLevel = skillLevel
+            )
+        }
         val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
         val payload = json.encodeToString(
             EvaluateMoveRealtimeRequest(
@@ -397,6 +486,16 @@ object EngineClient {
         depth: Int = 14,
         multiPv: Int = 3
     ): Triple<Float, MoveClass, String?> = withContext(Dispatchers.IO) {
+        // локальный режим
+        if (engineMode.value == EngineMode.LOCAL) {
+            return@withContext LocalAnalyzer.analyzeMoveByFens(
+                beforeFen = beforeFen,
+                afterFen = afterFen,
+                uciMove = uciMove,
+                depth = depth,
+                multiPv = multiPv
+            )
+        }
         pingOrThrow()
         val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game/by-fens"
         val payload = json.encodeToString(
@@ -432,6 +531,16 @@ object EngineClient {
         multiPv: Int = 3,
         skillLevel: Int? = null
     ): PositionDTO = withContext(Dispatchers.IO) {
+        // локальный режим
+        if (engineMode.value == EngineMode.LOCAL) {
+            return@withContext LocalStockfish.evaluatePositionDetailed(
+                fen = fen,
+                depth = depth,
+                multiPv = multiPv,
+                skillLevel = skillLevel,
+                context = appContext()
+            )
+        }
         val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
         val body = json.encodeToString(EvaluatePositionRequest(fen, depth, multiPv, skillLevel))
         val req = Request.Builder()

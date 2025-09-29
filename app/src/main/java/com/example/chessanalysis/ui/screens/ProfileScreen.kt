@@ -4,12 +4,20 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.Alignment
+import androidx.compose.material3.RadioButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.chessanalysis.ui.UserProfile
+import com.example.chessanalysis.EngineClient
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import androidx.compose.runtime.collectAsState
+import androidx.compose.foundation.clickable
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -25,6 +33,9 @@ fun ProfileScreen(
     var chessName by remember { mutableStateOf(profile.chessUsername) }
     var isSaving by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    // Подписываемся на текущий режим работы движка (сервер/локальный)
+    val engineMode by EngineClient.engineMode.collectAsState()
 
     // Лямбда сохранения в Firestore (объявлена до использования)
     val saveProfileToFirestore: (String) -> Unit = { uid ->
@@ -100,6 +111,34 @@ fun ProfileScreen(
                     .fillMaxWidth()
                     .padding(top = 12.dp)
             )
+
+            // Выбор режима движка (сервер/локальный)
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(text = "Движок анализа", style = MaterialTheme.typography.bodyMedium)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(top = 8.dp)
+            ) {
+                RadioButton(
+                    selected = engineMode == EngineClient.EngineMode.SERVER,
+                    onClick = { EngineClient.setEngineMode(EngineClient.EngineMode.SERVER) }
+                )
+                Text(
+                    text = "Сервер",
+                    modifier = Modifier
+                        .clickable { EngineClient.setEngineMode(EngineClient.EngineMode.SERVER) }
+                        .padding(end = 16.dp)
+                )
+                RadioButton(
+                    selected = engineMode == EngineClient.EngineMode.LOCAL,
+                    onClick = { EngineClient.setEngineMode(EngineClient.EngineMode.LOCAL) }
+                )
+                Text(
+                    text = "Локальный",
+                    modifier = Modifier
+                        .clickable { EngineClient.setEngineMode(EngineClient.EngineMode.LOCAL) }
+                )
+            }
 
             if (errorMessage != null) {
                 Text(

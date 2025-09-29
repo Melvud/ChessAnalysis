@@ -19,19 +19,15 @@ import androidx.navigation.compose.rememberNavController
 import com.example.chessanalysis.FullReport
 import com.example.chessanalysis.GameHeader
 import com.example.chessanalysis.ui.screens.GameReportScreen
+import com.example.chessanalysis.ui.screens.GamesListScreen
+import com.example.chessanalysis.ui.screens.HomeWithBottomNav
 import com.example.chessanalysis.ui.screens.LoginScreen
 import com.example.chessanalysis.ui.screens.ProfileScreen
 import com.example.chessanalysis.ui.screens.ReportScreen
-import com.example.chessanalysis.ui.HomeWithBottomNav
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-/**
- * Профиль пользователя — как он используется вашими экранами.
- * Оставлен здесь, чтобы экраны могли его импортировать
- * как com.example.chessanalysis.ui.UserProfile
- */
 @Serializable
 data class UserProfile(
     val email: String = "",
@@ -42,9 +38,8 @@ data class UserProfile(
 
 @Composable
 fun AppRoot() {
-    val navController = rememberNavController()
+    val rootNav = rememberNavController()
 
-    // Состояния приложения
     var isBootLoading by rememberSaveable { mutableStateOf(false) }
     var currentUserProfile by rememberSaveable { mutableStateOf<UserProfile?>(null) }
     var games by rememberSaveable { mutableStateOf<List<GameHeader>>(emptyList()) }
@@ -57,10 +52,7 @@ fun AppRoot() {
         }
     }
 
-    // Если нужно что-то асинхронно прогреть — можно показать сплэш.
-    LaunchedEffect(Unit) {
-        isBootLoading = false
-    }
+    LaunchedEffect(Unit) { isBootLoading = false }
 
     if (isBootLoading) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -70,32 +62,32 @@ fun AppRoot() {
     }
 
     NavHost(
-        navController = navController,
+        navController = rootNav,
         startDestination = if (currentUserProfile == null) "login" else "home"
     ) {
-        // --------- LOGIN ----------
+        // --- LOGIN ---
         composable("login") {
             LoginScreen(
                 onLoginSuccess = { profile ->
                     currentUserProfile = profile
-                    navController.navigate("home") {
+                    rootNav.navigate("home") {
                         popUpTo("login") { inclusive = true }
                     }
                 },
                 onRegisterSuccess = { profile ->
                     currentUserProfile = profile
-                    navController.navigate("home") {
+                    rootNav.navigate("home") {
                         popUpTo("login") { inclusive = true }
                     }
                 }
             )
         }
 
-        // --------- HOME с нижним меню (только «Партии» и «Профиль») ----------
+        // --- HOME c нижним меню (табами "Партии" и "Профиль") ---
         composable("home") {
             val profile = currentUserProfile
             if (profile == null) {
-                navController.navigate("login") { popUpTo("home") { inclusive = true } }
+                rootNav.navigate("login") { popUpTo("home") { inclusive = true } }
             } else {
                 HomeWithBottomNav(
                     profile = profile,
@@ -103,19 +95,19 @@ fun AppRoot() {
                     openingFens = openingFens,
                     onOpenReport = { report ->
                         val packed = json.encodeToString(report)
-                        navController.currentBackStackEntry
+                        rootNav.currentBackStackEntry
                             ?.savedStateHandle
                             ?.set("reportJson", packed)
-                        navController.navigate("reportSummary")
+                        rootNav.navigate("reportSummary")
                     },
-                    onUpdateProfile = { updated ->
+                    onSaveProfile = { updated ->
                         currentUserProfile = updated
                     },
                     onLogout = {
                         currentUserProfile = null
                         games = emptyList()
                         openingFens = emptySet()
-                        navController.navigate("login") {
+                        rootNav.navigate("login") {
                             popUpTo("home") { inclusive = true }
                         }
                     }
@@ -123,63 +115,82 @@ fun AppRoot() {
             }
         }
 
-        // --------- REPORT (summary) ----------
+        // --- Оставляем отдельный маршрут profile (не используется из UI, но не ломает навигацию) ---
+        composable("profile") {
+            val profile = currentUserProfile
+            if (profile == null) {
+                rootNav.popBackStack()
+            } else {
+                ProfileScreen(
+                    profile = profile,
+                    onSave = { updated ->
+                        currentUserProfile = updated
+                        rootNav.popBackStack()
+                    },
+                    onLogout = {
+                        currentUserProfile = null
+                        games = emptyList()
+                        openingFens = emptySet()
+                        rootNav.navigate("login") {
+                            popUpTo("home") { inclusive = true }
+                        }
+                    },
+                    onBack = { rootNav.popBackStack() }
+                )
+            }
+        }
+
+        // --- REPORT (summary) ---
         composable("reportSummary") {
             val reportJson = readArg(
-                current = navController.currentBackStackEntry,
-                previous = navController.previousBackStackEntry,
+                current = rootNav.currentBackStackEntry,
+                previous = rootNav.previousBackStackEntry,
                 key = "reportJson"
             )
             val report: FullReport? = reportJson?.let {
-                runCatching { Json { ignoreUnknownKeys = true }.decodeFromString(FullReport.serializer(), it) }
-                    .getOrNull()
+                runCatching { Json.decodeFromString(FullReport.serializer(), it) }.getOrNull()
             }
 
             if (report == null) {
-                navController.popBackStack()
+                rootNav.popBackStack()
             } else {
                 ReportScreen(
                     report = report,
-                    onBack = { navController.popBackStack() },
+                    onBack = { rootNav.popBackStack() },
                     onOpenBoard = {
                         val packed = json.encodeToString(report)
-                        navController.currentBackStackEntry
+                        rootNav.currentBackStackEntry
                             ?.savedStateHandle
                             ?.set("reportJson", packed)
-                        navController.navigate("reportBoard")
+                        rootNav.navigate("reportBoard")
                     }
                 )
             }
         }
 
-        // --------- REPORT (board / full) ----------
+        // --- REPORT (full board) ---
         composable("reportBoard") {
             val reportJson = readArg(
-                current = navController.currentBackStackEntry,
-                previous = navController.previousBackStackEntry,
+                current = rootNav.currentBackStackEntry,
+                previous = rootNav.previousBackStackEntry,
                 key = "reportJson"
             )
             val report: FullReport? = reportJson?.let {
-                runCatching { Json { ignoreUnknownKeys = true }.decodeFromString(FullReport.serializer(), it) }
-                    .getOrNull()
+                runCatching { Json.decodeFromString(FullReport.serializer(), it) }.getOrNull()
             }
 
             if (report == null) {
-                navController.popBackStack()
+                rootNav.popBackStack()
             } else {
                 GameReportScreen(
                     report = report,
-                    onBack = { navController.popBackStack() }
+                    onBack = { rootNav.popBackStack() }
                 )
             }
         }
     }
 }
 
-/**
- * Устойчивое чтение аргумента из SavedStateHandle:
- * 1) из текущего, 2) из предыдущего back stack entry.
- */
 private fun readArg(
     current: NavBackStackEntry?,
     previous: NavBackStackEntry?,
