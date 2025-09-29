@@ -1,6 +1,7 @@
 package com.example.chessanalysis.ui.screens
 
 import android.os.Build
+import android.util.Log
 import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
@@ -39,15 +40,14 @@ import java.time.format.DateTimeFormatter
 import kotlinx.serialization.json.Json
 import com.example.chessanalysis.ui.screens.bot.BotConfig
 import com.example.chessanalysis.ui.screens.bot.BotSide
+import kotlin.math.max
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BotPlayScreen(
     config: BotConfig,
     onBack: () -> Unit,
-    onFinish: (BotFinishResult) -> Unit,
-    // Этот коллбэк ожидает AppRoot. Мы принимаем его, чтобы компиляция проходила.
-    // При желании можно вызывать его, если хочешь открывать экран ожидания прогресса.
+    onFinish: (BotFinishResult) -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
@@ -85,6 +85,25 @@ fun BotPlayScreen(
 
     var isWhiteBottom by remember { mutableStateOf(mySide == Side.WHITE) }
     var currentEvalPos by remember { mutableStateOf<PositionEval?>(null) }
+
+    // Состояния для прогресса анализа
+    var showAnalysis by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf(0f) }
+    var stage by remember { mutableStateOf("Подготовка…") }
+    var done by remember { mutableStateOf(0) }
+    var total by remember { mutableStateOf(0) }
+    var etaMs by remember { mutableStateOf<Long?>(null) }
+
+    // Флаг для предотвращения множественных вызовов анализа
+    var isAnalyzing by remember { mutableStateOf(false) }
+
+    fun formatEta(ms: Long?): String {
+        if (ms == null) return "—"
+        val sec = max(0, (ms / 1000).toInt())
+        val mm = sec / 60
+        val ss = sec % 60
+        return "%d:%02d".format(mm, ss)
+    }
 
     val bgColor = Color(0xFF161512)
     val cardColor = Color(0xFF1E1C1A)
@@ -156,7 +175,7 @@ fun BotPlayScreen(
     var legalTargets by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     fun onUserSquareClick(sq: String) {
-        if (isGameOver || isEngineThinking || !userToMove) return
+        if (isGameOver || isEngineThinking || !userToMove || isAnalyzing) return
         if (selected == null) {
             selected = sq
             legalTargets = legalTargetsFrom(board, sq)
@@ -196,6 +215,9 @@ fun BotPlayScreen(
 
     @RequiresApi(Build.VERSION_CODES.O)
     suspend fun openReport() {
+        if (isAnalyzing) return
+        isAnalyzing = true
+
         val headerWhite = if (mySide == Side.WHITE) "You" else "Engine"
         val headerBlack = if (mySide == Side.BLACK) "You" else "Engine"
         val resStr = when (result) {
@@ -218,37 +240,86 @@ fun BotPlayScreen(
         }
 
         val dateIso = OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
-        val cached = repo.getCachedReport(pgn)
-        val header = runCatching { PgnChess_bot.headerFromPgn(pgn) }.getOrNull()
 
-        if (cached != null) {
-            // Сохраняем игру только после успешного/готового отчёта
-            val stored = BotGameSave(pgn, headerWhite, headerBlack, resStr, dateIso)
-            repo.insertBotGame(pgn, headerWhite, headerBlack, resStr, dateIso)
-            onFinish(BotFinishResult(stored, cached))
-            return
-        }
-
-        // Если кэша нет — анализируем синхронно (как у тебя было раньше).
-        // При желании можно отправлять наружу progressId через onOpenReportWhileRunning(progressId),
-        // если твой analyzeGameByPgnWithProgress его предоставляет.
         try {
-            val report = analyzeGameByPgnWithProgress(
-                pgn = pgn, depth = 15, multiPv = 3, header = header
-            ) {snap: EngineClient.ProgressSnapshot ->
-                postProgress(snap) }
+            // Проверяем кэш
+            val cached = repo.getCachedReport(pgn)
+            if (cached != null) {
+                Log.d("BotPlayScreen", "Found cached report")
+                val stored = BotGameSave(pgn, headerWhite, headerBlack, resStr, dateIso)
+                repo.insertBotGame(pgn, headerWhite, headerBlack, resStr, dateIso)
+                isAnalyzing = false
+                onFinish(BotFinishResult(stored, cached))
+                return
+            }
+
+            // Показываем прогресс анализа
+            showAnalysis = true
+            stage = "Подготовка к анализу…"
+            progress = 0.01f
+            done = 0
+            total = 0
+            etaMs = null
+
+            val header = runCatching { PgnChess_bot.headerFromPgn(pgn) }.getOrNull()
+
+            Log.d("BotPlayScreen", "Starting analysis")
+
+            val report = withContext(Dispatchers.IO) {
+                analyzeGameByPgnWithProgress(
+                    pgn = pgn,
+                    depth = 15,
+                    multiPv = 3,
+                    header = header
+                ) { snap: EngineClient.ProgressSnapshot ->
+                    Log.d("BotPlayScreen", "Progress: ${snap.done}/${snap.total} - ${snap.stage}")
+                    total = snap.total
+                    done = snap.done
+                    stage = when (snap.stage) {
+                        "queued"      -> "В очереди…"
+                        "preparing"   -> "Подготовка…"
+                        "evaluating"  -> "Анализ позиций…"
+                        "postprocess" -> "Постобработка…"
+                        "done"        -> "Готово"
+                        else          -> snap.stage ?: "Анализ…"
+                    }
+                    if (snap.total > 0) {
+                        progress = (snap.done.toFloat() / snap.total.toFloat()).coerceIn(0.01f, 0.99f)
+                    }
+                    etaMs = snap.etaMs
+                    postProgress(snap)
+                }
+            }
+
+            Log.d("BotPlayScreen", "Analysis completed, saving report")
+
+            // Сохраняем отчет
             repo.saveReport(pgn, report)
 
+            // Сохраняем партию
             val stored = BotGameSave(pgn, headerWhite, headerBlack, resStr, dateIso)
             repo.insertBotGame(pgn, headerWhite, headerBlack, resStr, dateIso)
+
+            // Скрываем прогресс перед навигацией
+            showAnalysis = false
+            isAnalyzing = false
+
+            // Вызываем навигацию
+            Log.d("BotPlayScreen", "Calling onFinish")
             onFinish(BotFinishResult(stored, report))
+
         } catch (e: Exception) {
-            Toast.makeText(ctx, "Ошибка анализа: ${e.message}", Toast.LENGTH_LONG).show()
+            Log.e("BotPlayScreen", "Analysis failed", e)
+            showAnalysis = false
+            isAnalyzing = false
+            withContext(Dispatchers.Main) {
+                Toast.makeText(ctx, "Ошибка анализа: ${e.message}", Toast.LENGTH_LONG).show()
+            }
         }
     }
 
     fun undo() {
-        if (!allowUndo || moveList.isEmpty() || isEngineThinking) return
+        if (!allowUndo || moveList.isEmpty() || isEngineThinking || isAnalyzing) return
         repeat(2) {
             try {
                 board.undoMove()
@@ -270,6 +341,7 @@ fun BotPlayScreen(
     }
 
     fun onClickPvMove(lineIdx: Int, moveIdx: Int) {
+        if (isAnalyzing) return
         val line = pvLines.getOrNull(lineIdx) ?: return
         val fen0 = board.fen
         if (moveIdx !in line.pv.indices) return
@@ -330,25 +402,37 @@ fun BotPlayScreen(
         topBar = {
             TopAppBar(
                 title = { Text("Игра с ботом") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null, tint = Color.White) } },
+                navigationIcon = {
+                    IconButton(
+                        onClick = onBack,
+                        enabled = !isAnalyzing
+                    ) {
+                        Icon(Icons.Default.ArrowBack, null, tint = if (!isAnalyzing) Color.White else Color.Gray)
+                    }
+                },
                 actions = {
                     if (allowUndo) {
                         IconButton(
                             onClick = { undo() },
-                            enabled = moveList.isNotEmpty() && !isEngineThinking && !isGameOver
+                            enabled = moveList.isNotEmpty() && !isEngineThinking && !isGameOver && !isAnalyzing
                         ) {
                             Icon(
                                 Icons.Default.Undo,
                                 contentDescription = "Вернуть ход",
-                                tint = if (moveList.isNotEmpty() && !isEngineThinking && !isGameOver) Color.White else Color.Gray
+                                tint = if (moveList.isNotEmpty() && !isEngineThinking && !isGameOver && !isAnalyzing)
+                                    Color.White else Color.Gray
                             )
                         }
                     }
                     IconButton(
                         onClick = { isWhiteBottom = !isWhiteBottom },
-                        enabled = !isEngineThinking
+                        enabled = !isEngineThinking && !isAnalyzing
                     ) {
-                        Icon(Icons.Default.ScreenRotation, contentDescription = "Перевернуть", tint = if (!isEngineThinking) Color.White else Color.Gray)
+                        Icon(
+                            Icons.Default.ScreenRotation,
+                            contentDescription = "Перевернуть",
+                            tint = if (!isEngineThinking && !isAnalyzing) Color.White else Color.Gray
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -426,12 +510,12 @@ fun BotPlayScreen(
                             fen = board.fen,
                             lastMove = lastMovePair,
                             moveClass = null,
-                            bestMoveUci = if (config.hints && userToMove) bestMoveHint else null,
-                            showBestArrow = config.hints && userToMove,
+                            bestMoveUci = if (config.hints && userToMove && !isAnalyzing) bestMoveHint else null,
+                            showBestArrow = config.hints && userToMove && !isAnalyzing,
                             isWhiteBottom = isWhiteBottom,
                             selectedSquare = selected,
                             legalMoves = legalTargets,
-                            onSquareClick = { onUserSquareClick(it) },
+                            onSquareClick = { if (!isAnalyzing) onUserSquareClick(it) },
                             modifier = Modifier.fillMaxSize()
                         )
                         if (isEngineThinking) {
@@ -442,7 +526,7 @@ fun BotPlayScreen(
                     }
                 }
 
-                if (showLines && pvLines.isNotEmpty()) {
+                if (showLines && pvLines.isNotEmpty() && !isAnalyzing) {
                     BotEnginePvPanel(
                         baseFen = board.fen,
                         lines = pvLines,
@@ -455,13 +539,15 @@ fun BotPlayScreen(
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
-                        onClick = { if (!isGameOver) resign() },
-                        modifier = Modifier.weight(1f)
+                        onClick = { if (!isGameOver && !isAnalyzing) resign() },
+                        modifier = Modifier.weight(1f),
+                        enabled = !isGameOver && !isAnalyzing
                     ) { Text("Сдаться") }
                 }
             }
 
-            if (isGameOver) {
+            // Оверлей конца игры
+            if (isGameOver && !showAnalysis) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -498,12 +584,61 @@ fun BotPlayScreen(
                             )
                             Button(
                                 onClick = {
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !isAnalyzing) {
                                         scope.launch { openReport() }
                                     }
                                 },
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !isAnalyzing
                             ) { Text("Смотреть отчёт") }
+                        }
+                    }
+                }
+            }
+
+            // Оверлей прогресса анализа
+            if (showAnalysis) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.7f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Surface(
+                        tonalElevation = 6.dp,
+                        shape = RoundedCornerShape(12.dp),
+                        color = cardColor
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .widthIn(min = 300.dp)
+                                .padding(20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                "Анализ партии",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = Color.White
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            LinearProgressIndicator(
+                                progress = { progress.coerceIn(0f, 1f) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(8.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = Color(0xFF3A3936)
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                buildString {
+                                    append(stage)
+                                    if (total > 0) append("  •  $done/$total позиций")
+                                    append("  •  ETA: ${formatEta(etaMs)}")
+                                },
+                                color = Color.White.copy(alpha = 0.9f),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
                         }
                     }
                 }
