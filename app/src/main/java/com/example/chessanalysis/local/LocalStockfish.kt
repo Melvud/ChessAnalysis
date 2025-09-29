@@ -3,73 +3,102 @@ package com.example.chessanalysis.local
 import android.content.Context
 import android.util.Log
 import com.example.chessanalysis.EngineClient
-import com.example.chessanalysis.MoveClass
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * Вариант 2: запускаем libstockfish.so внутри процесса через наш нативный лаунчер (libsflauncher.so).
- * Никаких exec(), никаких внешних бинарников — чисто JNI.
- *
- * JNI-часть предоставляет функции:
- *  - nativeInit(): Long            — создать движок, вернуть handle
- *  - nativeStart(handle, threads)  — старт потока движка; готов принять UCI
- *  - nativeSend(handle, cmd)       — отправить команду (заканчивать \n не нужно)
- *  - nativeReadLine(handle, timeoutMs): String? — читать строку из stdout движка
- *  - nativeStop(handle)            — остановить и освободить ресурсы
- *
- * Мы поверх этого даём удобные методы evaluateFen(..)/evaluatePositionDetailed(..),
- * которые выдают те же DTO, что и сервер (через EngineClient.PositionDTO и др.).
- */
 object LocalStockfish {
 
     private const val TAG = "LocalStockfish"
 
-    // Загружаем наш лоадер (он динамически тянет libstockfish.so)
     init {
         try {
             System.loadLibrary("sflauncher")
-            Log.d(TAG, "libsflauncher loaded")
+            Log.d(TAG, "libsflauncher loaded successfully")
         } catch (e: UnsatisfiedLinkError) {
             Log.e(TAG, "Failed to load libsflauncher.so: ${e.message}", e)
             throw e
         }
     }
 
-    // ---- JNI ----
+    // JNI methods
     @JvmStatic private external fun nativeInit(): Long
     @JvmStatic private external fun nativeStart(handle: Long, threads: Int)
     @JvmStatic private external fun nativeSend(handle: Long, cmd: String)
     @JvmStatic private external fun nativeReadLine(handle: Long, timeoutMs: Long): String?
     @JvmStatic private external fun nativeStop(handle: Long)
 
-    // ---- Состояние ----
     private var handle: Long = 0L
     private val started = AtomicBoolean(false)
+    private var stockfishPath: String? = null
 
-    /**
-     * Инициализация (идемпотентная).
-     * Передавай applicationContext, чтобы в UI было удобно вызывать.
-     */
-    fun ensureStarted(context: Context? = null, threads: Int = Runtime.getRuntime().availableProcessors().coerceAtLeast(2)) {
+    fun ensureStarted(
+        context: Context? = null,
+        threads: Int = Runtime.getRuntime().availableProcessors().coerceAtLeast(2)
+    ) {
         if (started.get()) return
         synchronized(this) {
             if (started.get()) return
+
+            // Extract stockfish binary if needed
+            if (context != null && stockfishPath == null) {
+                extractStockfishBinary(context)
+            }
+
             handle = nativeInit()
+            if (handle == 0L) {
+                throw RuntimeException("Failed to initialize Stockfish engine")
+            }
+
             nativeStart(handle, threads)
-            // стандартный uci-рукопожатие
+
+            // UCI handshake
             nativeSend(handle, "uci")
-            // подождём ID и опции
-            drainUciUntil("uciok", 2000L)
-            // обязательные опции под твой сервер
+            drainUciUntil("uciok", 5000L)
+
+            // Configure engine
             nativeSend(handle, "setoption name Threads value $threads")
+            nativeSend(handle, "setoption name Hash value 256")
             nativeSend(handle, "setoption name MultiPV value 3")
             nativeSend(handle, "isready")
-            drainUciUntil("readyok", 2000L)
+            drainUciUntil("readyok", 5000L)
+
             started.set(true)
-            Log.d(TAG, "Stockfish in-proc started (threads=$threads)")
+            Log.d(TAG, "Stockfish started successfully (threads=$threads)")
+        }
+    }
+
+    private fun extractStockfishBinary(context: Context) {
+        try {
+            val targetFile = File(context.filesDir, "stockfish")
+
+            // Check if already extracted
+            if (targetFile.exists() && targetFile.canExecute()) {
+                stockfishPath = targetFile.absolutePath
+                Log.d(TAG, "Stockfish binary already exists at: $stockfishPath")
+                return
+            }
+
+            // Extract from assets
+            val abi = android.os.Build.SUPPORTED_ABIS[0]
+            val assetPath = "stockfish/$abi/stockfish"
+
+            context.assets.open(assetPath).use { input ->
+                targetFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+
+            // Make executable
+            targetFile.setExecutable(true)
+            stockfishPath = targetFile.absolutePath
+            Log.d(TAG, "Extracted Stockfish binary to: $stockfishPath")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to extract Stockfish binary", e)
+            // Fallback to system paths
+            stockfishPath = "/data/local/tmp/stockfish"
         }
     }
 
@@ -78,15 +107,13 @@ object LocalStockfish {
         while (System.currentTimeMillis() < deadline) {
             val line = nativeReadLine(handle, 100)
             if (line != null) {
+                Log.d(TAG, "UCI: $line")
                 if (line.contains(token, ignoreCase = true)) return
             }
         }
-        // не падаем — движок всё равно может быть готов
+        Log.w(TAG, "Timeout waiting for $token")
     }
 
-    /**
-     * Полный детальный ответ (для /evaluate/position): строки PV, bestmove.
-     */
     suspend fun evaluatePositionDetailed(
         fen: String,
         depth: Int,
@@ -95,37 +122,41 @@ object LocalStockfish {
         context: Context? = null
     ): EngineClient.PositionDTO = withContext(Dispatchers.IO) {
         ensureStarted(context)
-        // подстроим MultiPV/SkillLevel если надо
+
+        // Configure options
         nativeSend(handle, "setoption name MultiPV value $multiPv")
         if (skillLevel != null) {
             nativeSend(handle, "setoption name Skill Level value $skillLevel")
         }
+
+        // Set position and analyze
         nativeSend(handle, "position fen $fen")
         nativeSend(handle, "go depth $depth")
 
         val lines = mutableListOf<EngineClient.LineDTO>()
         var bestMove: String? = null
 
-        val deadline = System.currentTimeMillis() + 60_000 // safety
+        val deadline = System.currentTimeMillis() + 60_000
         while (System.currentTimeMillis() < deadline) {
             val line = nativeReadLine(handle, 500) ?: continue
-            // примеры:
-            // info depth 14 seldepth 22 multipv 1 score cp 16 ... pv e2e4 e7e5 ...
-            // info depth 14 ... score mate -3 ... pv ...
-            // bestmove e2e4 ponder e7e5
+            Log.d(TAG, "Engine: $line")
+
             if (line.startsWith("info ")) {
-                parseInfoLine(line)?.let { upsertMultiPV(lines, it, multiPv) }
+                parseInfoLine(line)?.let { info ->
+                    upsertMultiPV(lines, info, multiPv)
+                }
             } else if (line.startsWith("bestmove ")) {
-                bestMove = line.substringAfter("bestmove ").substringBefore(' ').trim().ifEmpty { null }
+                bestMove = line.substringAfter("bestmove ").substringBefore(' ').trim()
                 break
             }
         }
-        EngineClient.PositionDTO(lines = lines.take(multiPv), bestMove = bestMove)
+
+        EngineClient.PositionDTO(
+            lines = lines.take(multiPv),
+            bestMove = bestMove
+        )
     }
 
-    /**
-     * Упрощённый ответ (для analyzeFen): компактный JSON c evaluation/mate/bestmove/pv.
-     */
     suspend fun evaluateFen(
         fen: String,
         depth: Int,
@@ -135,7 +166,8 @@ object LocalStockfish {
     ): EngineClient.StockfishResponse = withContext(Dispatchers.IO) {
         val pos = evaluatePositionDetailed(fen, depth, multiPv, skillLevel, context)
         val top = pos.lines.firstOrNull()
-        val evaluationPawns: Double? = top?.cp?.let { it / 100.0 }
+        val evaluationPawns = top?.cp?.let { it / 100.0 }
+
         EngineClient.StockfishResponse(
             success = true,
             evaluation = evaluationPawns,
@@ -146,7 +178,6 @@ object LocalStockfish {
         )
     }
 
-    // --- парсер info ---
     private data class ParsedInfo(
         val multiPv: Int,
         val depth: Int?,
@@ -156,28 +187,34 @@ object LocalStockfish {
     )
 
     private fun parseInfoLine(s: String): ParsedInfo? {
-        // очень толерантный парсинг
         var mpv = 1
         var depth: Int? = null
         var cp: Int? = null
         var mate: Int? = null
         val tokens = s.split(' ')
+
         var i = 0
         while (i < tokens.size) {
             when (tokens[i]) {
                 "multipv" -> mpv = tokens.getOrNull(i + 1)?.toIntOrNull() ?: mpv
-                "depth"   -> depth = tokens.getOrNull(i + 1)?.toIntOrNull() ?: depth
-                "score"   -> {
+                "depth" -> depth = tokens.getOrNull(i + 1)?.toIntOrNull()
+                "score" -> {
                     when (tokens.getOrNull(i + 1)) {
-                        "cp"   -> cp = tokens.getOrNull(i + 2)?.toIntOrNull()
+                        "cp" -> cp = tokens.getOrNull(i + 2)?.toIntOrNull()
                         "mate" -> mate = tokens.getOrNull(i + 2)?.toIntOrNull()
                     }
                 }
             }
             i++
         }
+
         val pvIdx = tokens.indexOf("pv")
-        val pv = if (pvIdx >= 0 && pvIdx + 1 < tokens.size) tokens.drop(pvIdx + 1) else emptyList()
+        val pv = if (pvIdx >= 0 && pvIdx + 1 < tokens.size) {
+            tokens.drop(pvIdx + 1)
+        } else {
+            emptyList()
+        }
+
         return ParsedInfo(multiPv = mpv, depth = depth, cp = cp, mate = mate, pv = pv)
     }
 
@@ -187,7 +224,9 @@ object LocalStockfish {
         multiPv: Int
     ) {
         val idx = (p.multiPv - 1).coerceIn(0, multiPv - 1)
-        while (lines.size <= idx) lines += EngineClient.LineDTO()
+        while (lines.size <= idx) {
+            lines.add(EngineClient.LineDTO())
+        }
         lines[idx] = EngineClient.LineDTO(
             pv = p.pv,
             cp = p.cp,
@@ -203,13 +242,11 @@ object LocalStockfish {
             if (!started.get()) return
             try {
                 nativeSend(handle, "quit")
-                // шанс корректно выйти
-                repeat(10) {
-                    if (nativeReadLine(handle, 50) == null) return@repeat
-                }
-            } catch (_: Throwable) {
-            } finally {
+                Thread.sleep(100)
                 nativeStop(handle)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error shutting down", e)
+            } finally {
                 started.set(false)
                 handle = 0L
             }

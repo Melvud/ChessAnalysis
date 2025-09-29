@@ -27,8 +27,17 @@ object EngineClient {
 
     fun init(context: Context) {
         appCtxRef = WeakReference(context.applicationContext)
-        // --- Новое: сразу сообщаем LocalStockfish точный путь до .so ---
-        ensureLocalBinaryConfigured()
+        // Инициализация LocalStockfish при старте приложения
+        if (_engineMode.value == EngineMode.LOCAL) {
+            try {
+                LocalStockfish.ensureStarted(context.applicationContext)
+                Log.i(TAG, "Local Stockfish initialized at startup")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to initialize Local Stockfish", e)
+                // Fallback to server mode if local fails
+                _engineMode.value = EngineMode.SERVER
+            }
+        }
     }
 
     private fun appContext(): Context? = appCtxRef?.get()
