@@ -1,6 +1,7 @@
 package com.example.chessanalysis.ui.screens
 
 import android.os.Build
+import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -29,6 +30,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.example.chessanalysis.*
+import com.example.chessanalysis.EngineClient.analyzeGameByPgnWithProgress
+import com.example.chessanalysis.EngineClient.analyzeMoveRealtime
+import com.example.chessanalysis.EngineClient.evaluateFenDetailed
 import com.example.chessanalysis.data.local.gameRepository
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -41,7 +45,9 @@ import com.example.chessanalysis.ui.screens.bot.BotSide
 fun BotPlayScreen(
     config: BotConfig,
     onBack: () -> Unit,
-    onFinish: (BotFinishResult) -> Unit
+    onFinish: (BotFinishResult) -> Unit,
+    // Этот коллбэк ожидает AppRoot. Мы принимаем его, чтобы компиляция проходила.
+    // При желании можно вызывать его, если хочешь открывать экран ожидания прогресса.
 ) {
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
@@ -60,6 +66,7 @@ fun BotPlayScreen(
     fun skillFromElo(elo: Int): Int =
         (((elo - 800) / 50.0).toInt()).coerceIn(1, 20)
 
+    // читаем тумблеры из BotConfig
     val showLines   = config.showMultiPv
     val showEvalBar = config.showEvalBar
     val allowUndo   = config.allowUndo
@@ -78,10 +85,6 @@ fun BotPlayScreen(
 
     var isWhiteBottom by remember { mutableStateOf(mySide == Side.WHITE) }
     var currentEvalPos by remember { mutableStateOf<PositionEval?>(null) }
-
-    // Сохраняем предыдущие значения, чтобы не исчезали во время анализа
-    var previousEvalPos by remember { mutableStateOf<PositionEval?>(null) }
-    var previousPvLines by remember { mutableStateOf<List<LineEval>>(emptyList()) }
 
     val bgColor = Color(0xFF161512)
     val cardColor = Color(0xFF1E1C1A)
@@ -103,30 +106,19 @@ fun BotPlayScreen(
             evaluateFenDetailed(board.fen, depth = 16, multiPv = multiPvForThink, skillLevel = engineSkill)
         }
         bestMoveHint = pos.bestMove
-
-        val newLines = if (showLines) {
+        pvLines = if (showLines) {
             pos.lines.take(3).map { line ->
                 LineEval(pv = line.pv, cp = line.cp, mate = line.mate, best = line.pv.firstOrNull())
             }
         } else emptyList()
 
-        if (newLines.isNotEmpty()) {
-            pvLines = newLines
-            previousPvLines = newLines
-        }
-
         val firstLine = pos.lines.firstOrNull()
-        val newEvalPos = firstLine?.let {
+        currentEvalPos = firstLine?.let {
             PositionEval(
                 fen = board.fen,
                 idx = 0,
                 lines = listOf(LineEval(pv = it.pv, cp = it.cp, mate = it.mate, best = it.pv.firstOrNull()))
             )
-        }
-
-        if (newEvalPos != null) {
-            currentEvalPos = newEvalPos
-            previousEvalPos = newEvalPos
         }
     }
 
@@ -189,7 +181,8 @@ fun BotPlayScreen(
         legalTargets = emptySet()
         userToMove = false
         bestMoveHint = null
-        // Не обнуляем линии и эвал, оставляем предыдущие значения
+        pvLines = emptyList()
+        currentEvalPos = null
         checkEnd()
         if (!isGameOver) {
             scope.launch { engineThinkAndMove() }
@@ -203,8 +196,8 @@ fun BotPlayScreen(
 
     @RequiresApi(Build.VERSION_CODES.O)
     suspend fun openReport() {
-        val headerWhite = if (mySide == Side.WHITE) "You" else "Bot"
-        val headerBlack = if (mySide == Side.BLACK) "You" else "Bot"
+        val headerWhite = if (mySide == Side.WHITE) "You" else "Engine"
+        val headerBlack = if (mySide == Side.BLACK) "You" else "Engine"
         val resStr = when (result) {
             GameResult.WHITE_WON -> "1-0"
             GameResult.BLACK_WON -> "0-1"
@@ -225,17 +218,33 @@ fun BotPlayScreen(
         }
 
         val dateIso = OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
-        val stored = BotGameSave(pgn, headerWhite, headerBlack, resStr, dateIso)
-
-        repo.insertBotGame(pgn, headerWhite, headerBlack, resStr, dateIso)
-
         val cached = repo.getCachedReport(pgn)
-        val report = cached ?: analyzeGameByPgnWithProgress(
-            pgn = pgn, depth = 15, multiPv = 3,
-            header = runCatching { PgnChess_bot.headerFromPgn(pgn) }.getOrNull()
-        ) { }.also { repo.saveReport(pgn, it) }
+        val header = runCatching { PgnChess_bot.headerFromPgn(pgn) }.getOrNull()
 
-        onFinish(BotFinishResult(stored, report))
+        if (cached != null) {
+            // Сохраняем игру только после успешного/готового отчёта
+            val stored = BotGameSave(pgn, headerWhite, headerBlack, resStr, dateIso)
+            repo.insertBotGame(pgn, headerWhite, headerBlack, resStr, dateIso)
+            onFinish(BotFinishResult(stored, cached))
+            return
+        }
+
+        // Если кэша нет — анализируем синхронно (как у тебя было раньше).
+        // При желании можно отправлять наружу progressId через onOpenReportWhileRunning(progressId),
+        // если твой analyzeGameByPgnWithProgress его предоставляет.
+        try {
+            val report = analyzeGameByPgnWithProgress(
+                pgn = pgn, depth = 15, multiPv = 3, header = header
+            ) {snap: EngineClient.ProgressSnapshot ->
+                postProgress(snap) }
+            repo.saveReport(pgn, report)
+
+            val stored = BotGameSave(pgn, headerWhite, headerBlack, resStr, dateIso)
+            repo.insertBotGame(pgn, headerWhite, headerBlack, resStr, dateIso)
+            onFinish(BotFinishResult(stored, report))
+        } catch (e: Exception) {
+            Toast.makeText(ctx, "Ошибка анализа: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     fun undo() {
@@ -243,7 +252,7 @@ fun BotPlayScreen(
         repeat(2) {
             try {
                 board.undoMove()
-                if (moveList.isNotEmpty()) moveList.removeLast()
+                if (moveList.isNotEmpty()) moveList.removeAt(moveList.lastIndex)
             } catch (_: Exception) {
                 return@repeat
             }
@@ -253,7 +262,8 @@ fun BotPlayScreen(
         result = GameResult.ONGOING
         lastMovePair = null
         bestMoveHint = null
-        // Не обнуляем линии и эвал при отмене хода
+        pvLines = emptyList()
+        currentEvalPos = null
         if ((config.hints || showLines || showEvalBar) && userToMove) {
             scope.launch { updateHints() }
         }
@@ -291,37 +301,29 @@ fun BotPlayScreen(
         lastMovePair = from to to
 
         scope.launch {
+            isEngineThinking = true
             try {
                 val (newEval, _, _) = analyzeMoveRealtime(
                     beforeFen = beforeFen, afterFen = afterFen,
                     uciMove = uciMove, depth = 16, multiPv = 3
                 )
                 val evalCp = (newEval * 100).toInt()
-                val newEvalPos = PositionEval(
+                currentEvalPos = PositionEval(
                     fen = afterFen, idx = 0,
                     lines = listOf(LineEval(pv = emptyList(), cp = evalCp, mate = null, best = null))
                 )
-                currentEvalPos = newEvalPos
-                previousEvalPos = newEvalPos
-
                 val detailed = evaluateFenDetailed(afterFen, depth = 16, multiPv = multiPvForThink, skillLevel = engineSkill)
-                val newLines = if (showLines) {
+                pvLines = if (showLines) {
                     detailed.lines.take(3).map {
                         LineEval(pv = it.pv, cp = it.cp, mate = it.mate, best = it.pv.firstOrNull())
                     }
                 } else emptyList()
-
-                if (newLines.isNotEmpty()) {
-                    pvLines = newLines
-                    previousPvLines = newLines
-                }
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+            } finally {
+                isEngineThinking = false
+            }
         }
     }
-
-    // Используем предыдущие значения, если текущие null
-    val displayEvalPos = currentEvalPos ?: previousEvalPos
-    val displayPvLines = if (pvLines.isNotEmpty()) pvLines else previousPvLines
 
     Scaffold(
         containerColor = bgColor,
@@ -395,9 +397,10 @@ fun BotPlayScreen(
                         .aspectRatio(1f)
                 ) {
                     if (showEvalBar) {
-                        if (displayEvalPos != null) {
+                        val eval = currentEvalPos
+                        if (eval != null) {
                             EvalBar(
-                                positions = listOf(displayEvalPos),
+                                positions = listOf(eval),
                                 currentPlyIndex = 0,
                                 isWhiteBottom = isWhiteBottom,
                                 modifier = Modifier
@@ -431,14 +434,18 @@ fun BotPlayScreen(
                             onSquareClick = { onUserSquareClick(it) },
                             modifier = Modifier.fillMaxSize()
                         )
-                        // Убираем CircularProgressIndicator
+                        if (isEngineThinking) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
                     }
                 }
 
-                if (showLines && displayPvLines.isNotEmpty()) {
+                if (showLines && pvLines.isNotEmpty()) {
                     BotEnginePvPanel(
                         baseFen = board.fen,
-                        lines = displayPvLines,
+                        lines = pvLines,
                         onClickMoveInLine = ::onClickPvMove,
                         modifier = Modifier
                             .fillMaxWidth()

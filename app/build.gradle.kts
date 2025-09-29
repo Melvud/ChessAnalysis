@@ -67,6 +67,7 @@ dependencies {
     // LiveData в Compose
     implementation("androidx.compose.runtime:runtime-livedata")
     implementation(libs.androidx.ui.unit)
+    implementation(libs.androidx.animation.core)
 
     // SVG/изображения
 

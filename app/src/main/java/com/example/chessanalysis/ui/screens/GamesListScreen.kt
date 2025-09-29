@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.chessanalysis.*
+import com.example.chessanalysis.EngineClient.analyzeGameByPgnWithProgress
 import com.example.chessanalysis.data.local.gameRepository
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json

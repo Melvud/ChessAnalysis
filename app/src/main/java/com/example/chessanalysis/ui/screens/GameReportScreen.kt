@@ -27,6 +27,8 @@ import coil.compose.rememberAsyncImagePainter
 import coil.decode.SvgDecoder
 import coil.request.ImageRequest
 import com.example.chessanalysis.*
+import com.example.chessanalysis.EngineClient.analyzeMoveRealtime
+import com.example.chessanalysis.EngineClient.evaluateFenDetailed
 import com.example.chessanalysis.ui.components.BoardCanvas
 import com.example.chessanalysis.ui.components.EvalBar
 import com.example.chessanalysis.ui.components.MovesCarousel
