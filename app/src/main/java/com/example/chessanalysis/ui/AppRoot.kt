@@ -1,35 +1,36 @@
 package com.example.chessanalysis.ui
 
-import androidx.compose.ui.platform.LocalContext
-import com.google.firebase.FirebaseApp
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.example.chessanalysis.*
-import com.example.chessanalysis.ui.screens.*
+import com.example.chessanalysis.FullReport
+import com.example.chessanalysis.GameHeader
+import com.example.chessanalysis.ui.screens.GameReportScreen
+import com.example.chessanalysis.ui.screens.GamesListScreen
+import com.example.chessanalysis.ui.screens.LoginScreen
+import com.example.chessanalysis.ui.screens.ProfileScreen
+import com.example.chessanalysis.ui.screens.ReportScreen
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.FirebaseFirestore
-import com.example.chessanalysis.ui.screens.bot.BotConfig
 
 /**
- * Простое временное хранилище для передачи больших объектов
- * между экранами, чтобы не упираться в savedStateHandle-ограничения.
+ * Профиль пользователя — как он используется твоими экранами.
+ * Вынес здесь, чтобы GamesListScreen/ProfileScreen могли его импортировать
+ * как com.example.chessanalysis.ui.UserProfile (как у тебя было раньше).
  */
-private object NavTempStore {
-    var reportJson: String? = null
-}
-
 @Serializable
 data class UserProfile(
     val email: String = "",
@@ -38,51 +39,27 @@ data class UserProfile(
     val chessUsername: String = ""
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppRoot() {
     val navController = rememberNavController()
 
+    // Состояния приложения
+    var isBootLoading by rememberSaveable { mutableStateOf(false) }
     var currentUserProfile by rememberSaveable { mutableStateOf<UserProfile?>(null) }
-    var games by remember { mutableStateOf<List<GameHeader>>(emptyList()) }
-    var openingFens by remember { mutableStateOf<Set<String>>(emptySet()) }
-    val context = LocalContext.current
-    var authChecked by remember { mutableStateOf(false) }
+    var games by rememberSaveable { mutableStateOf<List<GameHeader>>(emptyList()) }
+    var openingFens by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
 
-    val json = remember {
-        Json {
-            ignoreUnknownKeys = true
-            explicitNulls = false
-        }
+    val json = Json {
+        ignoreUnknownKeys = true
+        explicitNulls = false
     }
 
+    // Если нужно что-то асинхронно прогреть — можно показать сплэш.
     LaunchedEffect(Unit) {
-        if (FirebaseApp.getApps(context).isEmpty()) {
-            FirebaseApp.initializeApp(context.applicationContext)
-        }
-        val firebaseUser = FirebaseAuth.getInstance().currentUser
-        if (firebaseUser != null) {
-            FirebaseFirestore.getInstance().collection("users")
-                .document(firebaseUser.uid).get()
-                .addOnSuccessListener { doc ->
-                    val email = firebaseUser.email ?: ""
-                    val nickname = doc.getString("nickname") ?: ""
-                    val lichessName = doc.getString("lichessUsername") ?: ""
-                    val chessName = doc.getString("chessUsername") ?: ""
-                    currentUserProfile = UserProfile(email, nickname, lichessName, chessName)
-                    authChecked = true
-                }
-                .addOnFailureListener {
-                    FirebaseAuth.getInstance().signOut()
-                    currentUserProfile = null
-                    authChecked = true
-                }
-        } else {
-            authChecked = true
-        }
+        isBootLoading = false
     }
 
-    if (!authChecked) {
+    if (isBootLoading) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator()
         }
@@ -91,155 +68,150 @@ fun AppRoot() {
 
     NavHost(
         navController = navController,
-        startDestination = if (currentUserProfile != null) "home" else "login"
+        startDestination = if (currentUserProfile == null) "login" else "home"
     ) {
+        // --------- LOGIN ----------
         composable("login") {
             LoginScreen(
                 onLoginSuccess = { profile ->
                     currentUserProfile = profile
-                    navController.navigate("home") { popUpTo("login") { inclusive = true } }
+                    navController.navigate("home") {
+                        popUpTo("login") { inclusive = true }
+                    }
                 },
                 onRegisterSuccess = { profile ->
                     currentUserProfile = profile
-                    navController.navigate("home") { popUpTo("login") { inclusive = true } }
+                    navController.navigate("home") {
+                        popUpTo("login") { inclusive = true }
+                    }
                 }
             )
         }
 
+        // --------- HOME (нижняя навигация внутри твоего экрана) ----------
         composable("home") {
-            currentUserProfile?.let { profile ->
-                HomeWithBottomNav(
+            val profile = currentUserProfile
+            if (profile == null) {
+                navController.navigate("login") { popUpTo("home") { inclusive = true } }
+            } else {
+                /**
+                 * Твой GamesListScreen ожидает:
+                 * - profile: UserProfile
+                 * - games: List<GameHeader>
+                 * - openingFens: Set<String>
+                 * - onOpenProfile: () -> Unit
+                 * - onOpenReport: (FullReport) -> Unit
+                 *
+                 * Если GamesListScreen у тебя внутри HomeWithBottomNav — оставь как есть.
+                 * Здесь мы просто вызываем его напрямую, чтобы не тянуть вкладку «бот».
+                 */
+                GamesListScreen(
                     profile = profile,
                     games = games,
                     openingFens = openingFens,
+                    onOpenProfile = { navController.navigate("profile") },
                     onOpenReport = { report ->
-                        val reportJson = json.encodeToString(report)
-                        // Дублируем: и в savedStateHandle, и в временное хранилище
+                        // сериализуем отчёт и передаём через savedStateHandle
+                        val packed = json.encodeToString(report)
                         navController.currentBackStackEntry
                             ?.savedStateHandle
-                            ?.set("reportJson", reportJson)
-                        NavTempStore.reportJson = reportJson
-
+                            ?.set("reportJson", packed)
                         navController.navigate("reportSummary")
-                    },
-                    onOpenProfileEdit = { navController.navigate("profile") },
-                    onOpenBotSetup = { navController.navigate("botSetup") }
+                    }
                 )
             }
         }
 
+        // --------- PROFILE ----------
         composable("profile") {
-            currentUserProfile?.let { profile ->
+            val profile = currentUserProfile
+            if (profile == null) {
+                navController.popBackStack()
+            } else {
                 ProfileScreen(
                     profile = profile,
-                    onSave = { updatedProfile ->
-                        currentUserProfile = updatedProfile
-                        games = emptyList()
+                    onSave = { updated ->
+                        currentUserProfile = updated
                         navController.popBackStack()
                     },
                     onLogout = {
-                        FirebaseAuth.getInstance().signOut()
                         currentUserProfile = null
                         games = emptyList()
-                        navController.navigate("login") { popUpTo("home") { inclusive = true } }
+                        openingFens = emptySet()
+                        navController.navigate("login") {
+                            popUpTo("home") { inclusive = true }
+                        }
                     },
                     onBack = { navController.popBackStack() }
                 )
             }
         }
 
-        composable("botSetup") {
-            BotGameScreen { cfg ->
-                val cfgJson = json.encodeToString(cfg)
-                navController.currentBackStackEntry?.savedStateHandle?.set("bot_cfg", cfgJson)
-                navController.navigate("botPlay")
-            }
-        }
-
-        composable("botPlay") {
-            val cfgJson = navController.previousBackStackEntry?.savedStateHandle?.get<String>("bot_cfg")
-            val cfg: BotConfig? = cfgJson?.let { runCatching { json.decodeFromString<BotConfig>(it) }.getOrNull() }
-            if (cfg == null) {
-                navController.popBackStack()
-            } else {
-                BotPlayScreen(
-                    config = cfg,
-                    onBack = { navController.popBackStack() },
-
-                    // Сохраняем игру и показываем отчёт ТОЛЬКО при успехе анализа
-                    onFinish = { finishResult ->
-                        // finishResult.report гарантируется BotPlayScreen-ом при успехе
-                        BotGamesLocal.append(context, finishResult.stored)
-                        val reportJson = json.encodeToString(finishResult.report)
-                        navController.currentBackStackEntry?.savedStateHandle?.set("reportJson", reportJson)
-                        NavTempStore.reportJson = reportJson
-                        navController.navigate("reportSummary")
-                    }
-                )
-            }
-        }
-
-        // Краткий отчёт
+        // --------- REPORT (summary) ----------
         composable("reportSummary") {
             val reportJson = readArg(
-                navController.currentBackStackEntry,
-                navController.previousBackStackEntry,
-                key = "reportJson",
-                fallback = { NavTempStore.reportJson }
+                current = navController.currentBackStackEntry,
+                previous = navController.previousBackStackEntry,
+                key = "reportJson"
             )
-
             val report: FullReport? = reportJson?.let {
-                runCatching { json.decodeFromString<FullReport>(it) }.getOrNull()
+                runCatching { json.decodeFromString(FullReport.serializer(), it) }.getOrNull()
             }
+
             if (report == null) {
                 navController.popBackStack()
             } else {
+                // Твой ReportScreen ожидает onOpenBoard, а НЕ onOpenFull.
                 ReportScreen(
                     report = report,
-                    onBack = { navController.popBackStack("home", inclusive = false) },
+                    onBack = { navController.popBackStack() },
                     onOpenBoard = {
-                        // Переход к детальному борду
-                        navController.currentBackStackEntry?.savedStateHandle?.set("reportJson", reportJson)
-                        NavTempStore.reportJson = reportJson
+                        // На детальный отчёт: ещё раз кладём JSON и открываем "reportBoard"
+                        val packed = json.encodeToString(report)
+                        navController.currentBackStackEntry
+                            ?.savedStateHandle
+                            ?.set("reportJson", packed)
                         navController.navigate("reportBoard")
                     }
                 )
             }
         }
 
-        // Полный отчёт (борд)
+        // --------- REPORT (board / full) ----------
         composable("reportBoard") {
             val reportJson = readArg(
-                navController.currentBackStackEntry,
-                navController.previousBackStackEntry,
-                key = "reportJson",
-                fallback = { NavTempStore.reportJson }
+                current = navController.currentBackStackEntry,
+                previous = navController.previousBackStackEntry,
+                key = "reportJson"
             )
-
             val report: FullReport? = reportJson?.let {
-                runCatching { json.decodeFromString<FullReport>(it) }.getOrNull()
+                runCatching { json.decodeFromString(FullReport.serializer(), it) }.getOrNull()
             }
-            if (report == null) navController.popBackStack() else {
-                GameReportScreen(report = report, onBack = { navController.popBackStack() })
+
+            if (report == null) {
+                navController.popBackStack()
+            } else {
+                GameReportScreen(
+                    report = report,
+                    onBack = { navController.popBackStack() }
+                )
             }
         }
     }
 }
 
 /**
- * Надёжное чтение аргумента: current -> previous -> fallback
+ * Устойчивое чтение аргумента из SavedStateHandle:
+ * 1) из текущего, 2) из предыдущего back stack entry.
  */
 private fun readArg(
     current: NavBackStackEntry?,
     previous: NavBackStackEntry?,
-    key: String,
-    fallback: () -> String?
+    key: String
 ): String? {
     val fromCurrent = current?.savedStateHandle?.get<String>(key)
     if (!fromCurrent.isNullOrEmpty()) return fromCurrent
-
     val fromPrev = previous?.savedStateHandle?.get<String>(key)
     if (!fromPrev.isNullOrEmpty()) return fromPrev
-
-    return fallback()
+    return null
 }
