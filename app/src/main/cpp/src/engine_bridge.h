@@ -1,202 +1,180 @@
 #pragma once
 
-// --- STL ---
-#include <string>
-#include <queue>
-#include <mutex>
-#include <condition_variable>
-#include <thread>
-#include <atomic>
-#include <chrono>
-#include <vector>
-#include <streambuf>
-#include <istream>
-#include <ostream>
-
-// --- JNI ---
 #include <jni.h>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <queue>
+#include <string>
+#include <thread>
 
-// -------------------------------------------------------------
-// Очередь строк с ожиданием и дренажем
-// -------------------------------------------------------------
-struct LineQueue {
-    std::mutex m;
-    std::condition_variable cv;
-    std::queue<std::string> q;
-
+// Простой потокобезопасный очередь-канал строк
+class StringQueue {
+public:
     void push(std::string s) {
-        { std::lock_guard<std::mutex> lk(m); q.push(std::move(s)); }
-        cv.notify_all();
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            q_.push(std::move(s));
+        }
+        cv_.notify_one();
     }
 
-    // Ждём строку до timeout_ms, если пришла — кладём в out и возвращаем true.
-    bool pop_for(std::string& out, int timeout_ms) {
-        std::unique_lock<std::mutex> lk(m);
-        if (!cv.wait_for(lk, std::chrono::milliseconds(timeout_ms),
-                         [&]{ return !q.empty(); }))
+    // Блокирующее чтение с таймаутом (мс). Возвращает true, если строка получена.
+    bool pop_wait(std::string &out, int timeout_ms) {
+        std::unique_lock<std::mutex> lk(m_);
+        if (timeout_ms < 0) timeout_ms = 0;
+        if (!cv_.wait_for(lk, std::chrono::milliseconds(timeout_ms), [&]{ return !q_.empty() || stopped_; }))
             return false;
-        out = std::move(q.front());
-        q.pop();
+        if (q_.empty()) return false;
+        out = std::move(q_.front());
+        q_.pop();
         return true;
     }
 
-    void drain() {
-        std::lock_guard<std::mutex> lk(m);
-        std::queue<std::string> empty;
-        q.swap(empty);
+    // Неблокирующее чтение
+    bool try_pop(std::string &out) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (q_.empty()) return false;
+        out = std::move(q_.front());
+        q_.pop();
+        return true;
     }
+
+    void stop() {
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            stopped_ = true;
+        }
+        cv_.notify_all();
+    }
+
+    void clear() {
+        std::lock_guard<std::mutex> lk(m_);
+        std::queue<std::string> empty;
+        std::swap(q_, empty);
+    }
+
+private:
+    std::mutex m_;
+    std::condition_variable cv_;
+    std::queue<std::string> q_;
+    bool stopped_ = false;
 };
 
-// -------------------------------------------------------------
-// streambuf, читающий строки из LineQueue как из stdin
-// -------------------------------------------------------------
-class InQueueBuf : public std::streambuf {
+// Собственный streambuf/istream/ostream для общения с UCI::loop
+#include <streambuf>
+#include <istream>
+#include <ostream>
+#include <vector>
+
+class QueueInBuf : public std::streambuf {
 public:
-    explicit InQueueBuf(LineQueue& q) : q_(q) {}
+    explicit QueueInBuf(StringQueue& q) : q_(q) { setg(nullptr, nullptr, nullptr); }
 
 protected:
-    int underflow() override {
-        if (!buf_.empty())
-            return traits_type::to_int_type(buf_[0]);
+    // Загружаем следующую строку как «ввод»
+    int_type underflow() override {
+        if (gptr() < egptr())
+            return traits_type::to_int_type(*gptr());
 
-        if (!q_.pop_for(line_, 3600'000)) // ждать до 1 часа
+        buf_.clear();
+        std::string line;
+        // ждём бесконечно — поток UCI живёт в отдельном треде
+        if (!q_.pop_wait(line, /*timeout*/ 24 * 60 * 60 * 1000)) // 24h
             return traits_type::eof();
 
-        line_.push_back('\n');
-        buf_.assign(line_.begin(), line_.end());
-        setg(reinterpret_cast<char*>(buf_.data()),
-             reinterpret_cast<char*>(buf_.data()),
-             reinterpret_cast<char*>(buf_.data()) + buf_.size());
+        // гарантируем '\n' в конце, как у std::getline от stdin
+        if (line.empty() || line.back() != '\n') line.push_back('\n');
+
+        buf_.assign(line.begin(), line.end());
+        setg(buf_.data(), buf_.data(), buf_.data() + buf_.size());
         return traits_type::to_int_type(*gptr());
     }
 
 private:
-    LineQueue& q_;
-    std::string line_;
+    StringQueue& q_;
     std::vector<char> buf_;
 };
 
-// -------------------------------------------------------------
-// streambuf, складывающий stdout-строки по '\n' в LineQueue
-// -------------------------------------------------------------
-class OutQueueBuf : public std::streambuf {
+class QueueOutBuf : public std::streambuf {
 public:
-    explicit OutQueueBuf(LineQueue& q) : q_(q) {}
+    explicit QueueOutBuf(StringQueue& q) : q_(q) { }
 
 protected:
-    int overflow(int ch) override {
-        if (ch == traits_type::eof()) return 0;
+    int_type overflow(int_type ch) override {
+        if (ch == traits_type::eof()) return traits_type::not_eof(ch);
         char c = static_cast<char>(ch);
-        if (c == '\n') { q_.push(buffer_); buffer_.clear(); }
-        else           { buffer_.push_back(c); }
+        if (c == '\n') {
+            q_.push(current_);
+            current_.clear();
+        } else {
+            current_.push_back(c);
+        }
         return ch;
     }
 
     int sync() override {
-        if (!buffer_.empty()) { q_.push(buffer_); buffer_.clear(); }
+        if (!current_.empty()) {
+            q_.push(current_);
+            current_.clear();
+        }
         return 0;
     }
 
 private:
-    LineQueue& q_;
-    std::string buffer_;
+    StringQueue& q_;
+    std::string current_;
 };
-
-// -------------------------------------------------------------
-// Хэндл движка: очереди, потоки, буферы, состояние
-// -------------------------------------------------------------
-namespace EngineBridge {
-
-// Однократная инициализация глобальных таблиц Stockfish (UCI/Bitboards/PSQT/TT).
-// Реализуется в .cpp и вызывается из EngineHandle::start().
-    void init_once();
-
-// Основной UCI-цикл Stockfish поверх произвольных std::istream/std::ostream.
-// Реализация в .cpp вызывает Stockfish::UCI::loop(in, out) и учитывает флаг running.
-    void uci_loop(std::istream& in, std::ostream& out, std::atomic<bool>& running);
-
-} // namespace EngineBridge
 
 struct EngineHandle {
-    LineQueue   inQ, outQ;
-    InQueueBuf  inBuf;
-    OutQueueBuf outBuf;
+    // Каналы: java → engine, engine → java
+    StringQueue inQueue;
+    StringQueue outQueue;
 
-    // Владеем потоками, т.к. streambuf требует живого iostream
-    std::istream* inStream;
-    std::ostream* outStream;
-
-    std::thread   loopThread;
+    // Поток движка
+    std::thread engineThread;
     std::atomic<bool> running{false};
 
-    // Кол-во потоков для движка (передаётся через UCI setoption name Threads)
-    int threads = 4;
+    // Потоки-обёртки
+    QueueInBuf  inBuf;
+    QueueOutBuf outBuf;
+    std::istream inStream;
+    std::ostream outStream;
 
-    EngineHandle() : inBuf(inQ), outBuf(outQ) {
-        inStream  = new std::istream(&inBuf);
-        outStream = new std::ostream(&outBuf);
-    }
-
-    // Некопируемо
-    EngineHandle(const EngineHandle&) = delete;
-    EngineHandle& operator=(const EngineHandle&) = delete;
-
-    ~EngineHandle() {
-        try { stop(); } catch (...) {}
-        delete inStream;
-        delete outStream;
-    }
-
-    // Запуск фонового UCI-цикла
-    void start();
-
-    // Остановка UCI-цикла и дренаж очередей
-    void stop();
+    EngineHandle()
+            : inBuf(inQueue)
+            , outBuf(outQueue)
+            , inStream(&inBuf)
+            , outStream(&outBuf)
+    {}
 };
 
-// -------------------------------------------------------------
-// JNI-интерфейс (сигнатуры соответствуют вашему Kotlin)
-// Реализация в engine_bridge.cpp
-// -------------------------------------------------------------
+// JNI функции (реализация в engine_bridge.cpp)
 extern "C" {
-
-// Native возвращает указатель (jlong) на EngineHandle
 JNIEXPORT jlong JNICALL
-Java_com_example_chessanalysis_local_LocalStockfish_nativeInit(
-        JNIEnv*, jobject,
-        jstring jStockfishPath,    // путь может игнорироваться при встроенном движке
-        jboolean jPreferBuiltin,   // если true — использовать встроенный Stockfish
-        jint jThreads              // желаемое количество потоков движка
-);
+Java_com_example_chessanalysis_local_LocalStockfish_nativeInit(JNIEnv*, jclass,
+                                                               jstring stockfishPath,
+                                                               jboolean preferBuiltin,
+                                                               jint threads);
 
-// Запускает UCI-цикл (создаёт поток)
 JNIEXPORT void JNICALL
-Java_com_example_chessanalysis_local_LocalStockfish_nativeStart(
-        JNIEnv*, jobject, jlong handle
-);
+Java_com_example_chessanalysis_local_LocalStockfish_nativeStart(JNIEnv*, jclass, jlong handle);
 
-// Передаёт одну UCI-команду в stdin движка
 JNIEXPORT void JNICALL
-Java_com_example_chessanalysis_local_LocalStockfish_nativeWriteLine(
-        JNIEnv*, jobject, jlong handle, jstring jCmd
-);
+Java_com_example_chessanalysis_local_LocalStockfish_nativeWriteLine(JNIEnv*, jclass,
+                                                                    jlong handle, jstring cmd);
 
-// Читает одну строку stdout движка с таймаутом (мс). Возвращает null если таймаут.
 JNIEXPORT jstring JNICALL
-Java_com_example_chessanalysis_local_LocalStockfish_nativeReadLine(
-        JNIEnv*, jobject, jlong handle, jint timeoutMs
-);
+Java_com_example_chessanalysis_local_LocalStockfish_nativeReadLine(JNIEnv*, jclass,
+                                                                   jlong handle, jint timeoutMs);
 
-// Очищает очередь вывода (stdout-буфер), ожидая до timeoutMs (мс)
 JNIEXPORT void JNICALL
-Java_com_example_chessanalysis_local_LocalStockfish_nativeDrain(
-        JNIEnv*, jobject, jlong handle, jint timeoutMs
-);
+Java_com_example_chessanalysis_local_LocalStockfish_nativeDrain(JNIEnv*, jclass,
+                                                                jlong handle, jint timeoutMs);
 
-// Дренаж stdout до появления строки, содержащей token, либо таймаут
 JNIEXPORT void JNICALL
-Java_com_example_chessanalysis_local_LocalStockfish_nativeDrainUntil(
-        JNIEnv*, jobject, jlong handle, jstring jToken, jint timeoutMs
-);
-
-} // extern "C"
+Java_com_example_chessanalysis_local_LocalStockfish_nativeDrainUntil(JNIEnv*, jclass,
+                                                                     jlong handle,
+                                                                     jstring token,
+                                                                     jint timeoutMs);
+}

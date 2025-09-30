@@ -1,3 +1,4 @@
 [submodule "app/src/main/cpp/stockfish"]
 	path = app/src/main/cpp/stockfish
-	url = https://github.com/official-stockfish/Stockfish
+	url = https://github.com/official-stockfish/Stockfish.git
+	branch = master
