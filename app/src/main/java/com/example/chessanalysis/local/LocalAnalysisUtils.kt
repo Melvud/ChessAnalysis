@@ -131,7 +131,7 @@ object LocalAnalysisUtils {
         reports.forEachIndexed { idx, _ ->
             val best = bestCpList.getOrNull(idx)
             val after = afterCpList.getOrNull(idx)
-            val diffCp = if (best == null || after == null) 1000.0 else abs(best - after).toDouble()
+            val diffCp = if (best == null || after == null) 1000.0 else kotlin.math.abs(best - after).toDouble()
             if (idx % 2 == 0) {
                 whiteLoss += diffCp; whiteCount++
             } else {

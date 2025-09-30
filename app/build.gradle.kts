@@ -5,6 +5,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
     id("com.google.gms.google-services")
     id("org.jetbrains.kotlin.kapt")
+    id ("kotlin-parcelize")
 }
 
 android {
@@ -17,8 +18,15 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+        externalNativeBuild {
+            cmake {
+                // При необходимости:  -DBUILTIN_STOCKFISH=ON
+                cppFlags += listOf()
+                arguments += listOf("-DBUILTIN_STOCKFISH=ON")
+            }
+        }
         ndk {
-            abiFilters += listOf("arm64-v8a") // , "x86_64"
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
     }
 

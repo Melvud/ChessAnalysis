@@ -1,0 +1,10 @@
+package com.example.chessanalysis
+
+import android.app.Application
+
+class App : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        EngineClient.init(this)
+    }
+}

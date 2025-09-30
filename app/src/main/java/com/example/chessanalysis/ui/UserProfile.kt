@@ -1,0 +1,18 @@
+package com.example.chessanalysis.ui
+
+import android.annotation.SuppressLint
+import android.os.Parcelable
+import kotlinx.parcelize.Parcelize
+
+/**
+ * Профиль пользователя. Parcelable — чтобы его можно было класть в Bundle,
+ * а значит и хранить в rememberSaveable без кастомных Saver-ов.
+ */
+@SuppressLint("ParcelCreator")
+@Parcelize
+data class UserProfile(
+    val email: String = "",
+    val nickname: String = "",
+    val lichessUsername: String = "",
+    val chessUsername: String = ""
+) : Parcelable

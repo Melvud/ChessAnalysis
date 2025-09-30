@@ -23,8 +23,8 @@ object LocalAnalyzer {
                 fen = fen,
                 depth = depth,
                 multiPv = multiPv,
-                skillLevel = null, // Fixed: removed TODO()
-                context = null     // Fixed: removed TODO()
+                skillLevel = null,
+                context = null
             )
             positionsDto.add(pos)
 
@@ -150,14 +150,14 @@ object LocalAnalyzer {
             depth = depth,
             multiPv = multiPv,
             skillLevel = skillLevel,
-            context = null // Fixed: removed TODO()
+            context = null
         )
         val afterPos = LocalStockfish.evaluatePositionDetailed(
             fen = afterFen,
             depth = depth,
             multiPv = multiPv,
             skillLevel = skillLevel,
-            context = null // Fixed: removed TODO()
+            context = null
         )
 
         val bestLine = beforePos.lines.firstOrNull()

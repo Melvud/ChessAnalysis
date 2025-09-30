@@ -24,17 +24,8 @@ import com.example.chessanalysis.ui.screens.HomeWithBottomNav
 import com.example.chessanalysis.ui.screens.LoginScreen
 import com.example.chessanalysis.ui.screens.ProfileScreen
 import com.example.chessanalysis.ui.screens.ReportScreen
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-
-@Serializable
-data class UserProfile(
-    val email: String = "",
-    val nickname: String = "",
-    val lichessUsername: String = "",
-    val chessUsername: String = ""
-)
 
 @Composable
 fun AppRoot() {
@@ -83,7 +74,7 @@ fun AppRoot() {
             )
         }
 
-        // --- HOME c нижним меню (табами "Партии" и "Профиль") ---
+        // --- HOME c нижним меню ---
         composable("home") {
             val profile = currentUserProfile
             if (profile == null) {
@@ -115,7 +106,7 @@ fun AppRoot() {
             }
         }
 
-        // --- Оставляем отдельный маршрут profile (не используется из UI, но не ломает навигацию) ---
+        // --- profile (в обход нижнего меню; оставляем на всякий случай) ---
         composable("profile") {
             val profile = currentUserProfile
             if (profile == null) {
