@@ -5,8 +5,6 @@ import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import com.example.chessanalysis.local.LocalStockfish
-import com.example.chessanalysis.local.LocalAnalyzer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -18,58 +16,26 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.logging.HttpLoggingInterceptor
 import java.util.UUID
 import java.util.concurrent.TimeUnit
-import android.content.Context
-import java.lang.ref.WeakReference
 
 // =================== EngineClient ===================
 object EngineClient {
-    private var appCtxRef: WeakReference<Context>? = null
 
-    fun init(context: Context) {
-        appCtxRef = WeakReference(context.applicationContext)
-        if (_engineMode.value == EngineMode.LOCAL) {
-            runCatching { LocalStockfish.ensureStarted(context.applicationContext) }
-                .onSuccess { android.util.Log.i(TAG, "Local Stockfish ready") }
-                .onFailure {
-                    android.util.Log.e(TAG, "Local Stockfish not available: ${it.message}")
-                    _engineMode.value = EngineMode.SERVER
-                }
-        }
-    }
-
-    private fun appContext(): Context? = appCtxRef?.get()
-
-    enum class EngineMode { SERVER, LOCAL }
-
-    // по умолчанию — ЛОКАЛЬНЫЙ режим (если не взлетит, упадём в SERVER)
-    private val _engineMode = MutableStateFlow(EngineMode.LOCAL)
-    val engineMode: StateFlow<EngineMode> = _engineMode
-
-    fun setEngineMode(mode: EngineMode) {
-        _engineMode.value = mode
-        if (mode == EngineMode.LOCAL) {
-            appContext()?.let { ctx ->
-                runCatching { LocalStockfish.ensureStarted(ctx) }
-                    .onFailure { e ->
-                        android.util.Log.e(TAG, "Local engine start failed (${e.message}), fallback to SERVER")
-                        _engineMode.value = EngineMode.SERVER
-                    }
-            }
-        }
-    }
-
-    // ----- СЕРВЕР -----
+    // ----- КОНФИГУРАЦИЯ СЕРВЕРА -----
     object ServerConfig {
         private const val EMULATOR_URL = "http://10.0.2.2:8080"
         private const val PRODUCTION_URL = "https://your-chess-backend.com"
         private const val IS_PRODUCTION = false
-        val BASE_URL: String get() = if (IS_PRODUCTION) PRODUCTION_URL else EMULATOR_URL
+
+        val BASE_URL: String
+            get() = if (IS_PRODUCTION) PRODUCTION_URL else EMULATOR_URL
     }
 
+    // ----- Логирование HTTP -----
     private const val TAG = "EngineClient"
     private val httpLogger = HttpLoggingInterceptor { msg -> Log.d("HTTP", msg) }
         .apply { level = HttpLoggingInterceptor.Level.BODY }
 
+    // ----- OkHttp с длинными таймаутами для анализа -----
     private val client = OkHttpClient.Builder()
         .addInterceptor(httpLogger)
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -79,15 +45,25 @@ object EngineClient {
         .retryOnConnectionFailure(true)
         .build()
 
-    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
+    // ----- JSON -----
+    private val json = Json {
+        ignoreUnknownKeys = true
+        explicitNulls = false
+    }
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     private const val UA = "ChessAnalysis/1.5 (+android; local-server)"
 
+    // ----- Публичные state-потоки прогресса для UI -----
     private val _percent = MutableStateFlow<Double?>(null)
     val percent: StateFlow<Double?> = _percent
+
     private val _stage = MutableStateFlow<String?>(null)
     val stage: StateFlow<String?> = _stage
-    fun resetProgress() { _percent.value = null; _stage.value = null }
+
+    fun resetProgress() {
+        _percent.value = null
+        _stage.value = null
+    }
 
     // ---------- DTO ----------
     @SuppressLint("UnsafeOptInUsageError")
@@ -193,15 +169,12 @@ object EngineClient {
         fen: String,
         depth: Int = 14,
         skillLevel: Int? = null
-    ): StockfishResponse = withContext(Dispatchers.IO) {
-        if (engineMode.value == EngineMode.LOCAL) {
-            return@withContext LocalStockfish.evaluateFen(
-                fen, depth, 3, skillLevel, context = appContext()
-            )
-        }
-        return@withContext requestEvaluatePosition(fen, depth, 3, skillLevel)
-    }
+    ): StockfishResponse =
+        withContext(Dispatchers.IO) { requestEvaluatePosition(fen, depth, 3, skillLevel) }
 
+    /**
+     * Анализ партии с прогрессом. Обновляет [percent]/[stage] для UI.
+     */
     suspend fun analyzeGameByPgnWithProgress(
         pgn: String,
         depth: Int = 16,
@@ -210,23 +183,6 @@ object EngineClient {
         header: GameHeader? = null,
         onProgress: (ProgressSnapshot) -> Unit = {}
     ): FullReport = coroutineScope {
-        if (engineMode.value == EngineMode.LOCAL) {
-            return@coroutineScope withContext(Dispatchers.IO) {
-                resetProgress()
-                LocalAnalyzer.analyzeGameByPgnWithProgress(
-                    pgn = pgn,
-                    depth = depth,
-                    multiPv = multiPv,
-                    header = header,
-                    onProgress = { snap ->
-                        _percent.value = snap.percent
-                        _stage.value = snap.stage
-                        onProgress(snap)
-                    }
-                )
-            }
-        }
-
         val progressId = UUID.randomUUID().toString()
         resetProgress()
         val poller = launch(Dispatchers.IO) { pollProgress(progressId, onProgress) }
@@ -236,6 +192,7 @@ object EngineClient {
                 val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game?progressId=$progressId"
                 val normalized = normalizePgn(pgn)
 
+                // Мягкая валидация: не рушим для партий с ботом
                 val validationResult = runCatching { PgnChess.validatePgn(normalized) }
                 if (validationResult.isFailure) {
                     Log.w(TAG, "PGN validation warning: ${validationResult.exceptionOrNull()?.message}")
@@ -266,7 +223,9 @@ object EngineClient {
                 }
             }
         } finally {
-            poller.cancel(); poller.join()
+            poller.cancel()
+            poller.join()
+            // Оставим последние значения в потоках — UI может показать "100% / done"
         }
     }
 
@@ -278,8 +237,9 @@ object EngineClient {
         multiPv: Int = 3,
         skillLevel: Int? = null
     ): MoveRealtimeResult = withContext(Dispatchers.IO) {
-        if (engineMode.value == EngineMode.LOCAL) {
-            return@withContext LocalAnalyzer.analyzeMoveRealtimeDetailed(
+        val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
+        val payload = json.encodeToString(
+            EvaluateMoveRealtimeRequest(
                 beforeFen = beforeFen,
                 afterFen = afterFen,
                 uciMove = uciMove,
@@ -287,12 +247,9 @@ object EngineClient {
                 multiPv = multiPv,
                 skillLevel = skillLevel
             )
-        }
-        val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
-        val payload = json.encodeToString(
-            EvaluateMoveRealtimeRequest(beforeFen, afterFen, uciMove, depth, multiPv, skillLevel)
         )
-        val req = Request.Builder().url(url)
+        val req = Request.Builder()
+            .url(url)
             .header("Accept", "application/json")
             .header("User-Agent", UA)
             .post(payload.toRequestBody(JSON_MEDIA))
@@ -345,13 +302,9 @@ object EngineClient {
         workersNb: Int = 2,
         header: GameHeader? = null
     ): FullReport = withContext(Dispatchers.IO) {
-        if (engineMode.value == EngineMode.LOCAL) {
-            return@withContext LocalAnalyzer.analyzeGameByPgn(
-                pgn = pgn, depth = depth, multiPv = multiPv, header = header
-            )
-        }
         pingOrThrow()
         val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game"
+
         val normalized = normalizePgn(pgn)
 
         val validationResult = runCatching { PgnChess.validatePgn(normalized) }
@@ -361,7 +314,8 @@ object EngineClient {
 
         val headerSanitized = header
         val payload = json.encodeToString(GamePgnRequest(normalized, depth, multiPv, workersNb, headerSanitized))
-        val req = Request.Builder().url(url)
+        val req = Request.Builder()
+            .url(url)
             .header("Accept", "application/json")
             .header("User-Agent", UA)
             .post(payload.toRequestBody(JSON_MEDIA))
@@ -374,37 +328,6 @@ object EngineClient {
         }
     }
 
-    suspend fun evaluateFenDetailed(
-        fen: String,
-        depth: Int = 14,
-        multiPv: Int = 3,
-        skillLevel: Int? = null
-    ): PositionDTO = withContext(Dispatchers.IO) {
-        // локальный режим
-        if (engineMode.value == EngineMode.LOCAL) {
-            return@withContext LocalStockfish.evaluatePositionDetailed(
-                fen = fen,
-                depth = depth,
-                multiPv = multiPv,
-                skillLevel = skillLevel,
-                context = appContext()
-            )
-        }
-        val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
-        val body = json.encodeToString(EvaluatePositionRequest(fen, depth, multiPv, skillLevel))
-        val req = Request.Builder()
-            .url(url)
-            .header("Accept", "application/json")
-            .header("User-Agent", UA)
-            .post(body.toRequestBody(JSON_MEDIA))
-            .build()
-        client.newCall(req).execute().use { resp ->
-            val text = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful) throw IllegalStateException("http_${resp.code}: ${text.take(300)}")
-            json.decodeFromString(text)
-        }
-    }
-
     suspend fun analyzeMoveRealtime(
         beforeFen: String,
         afterFen: String,
@@ -413,8 +336,9 @@ object EngineClient {
         multiPv: Int = 3,
         skillLevel: Int? = null
     ): Triple<Float, MoveClass, String?> = withContext(Dispatchers.IO) {
-        if (engineMode.value == EngineMode.LOCAL) {
-            return@withContext LocalAnalyzer.analyzeMoveRealtime(
+        val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
+        val payload = json.encodeToString(
+            EvaluateMoveRealtimeRequest(
                 beforeFen = beforeFen,
                 afterFen = afterFen,
                 uciMove = uciMove,
@@ -422,12 +346,9 @@ object EngineClient {
                 multiPv = multiPv,
                 skillLevel = skillLevel
             )
-        }
-        val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
-        val payload = json.encodeToString(
-            EvaluateMoveRealtimeRequest(beforeFen, afterFen, uciMove, depth, multiPv, skillLevel)
         )
-        val req = Request.Builder().url(url)
+        val req = Request.Builder()
+            .url(url)
             .header("Accept", "application/json")
             .header("User-Agent", UA)
             .post(payload.toRequestBody(JSON_MEDIA))
@@ -476,17 +397,18 @@ object EngineClient {
         depth: Int = 14,
         multiPv: Int = 3
     ): Triple<Float, MoveClass, String?> = withContext(Dispatchers.IO) {
-        if (engineMode.value == EngineMode.LOCAL) {
-            return@withContext LocalAnalyzer.analyzeMoveByFens(
-                beforeFen = beforeFen, afterFen = afterFen, uciMove = uciMove, depth = depth, multiPv = multiPv
-            )
-        }
         pingOrThrow()
         val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game/by-fens"
         val payload = json.encodeToString(
-            FensUciRequest(listOf(beforeFen, afterFen), listOf(uciMove), depth, multiPv)
+            FensUciRequest(
+                fens = listOf(beforeFen, afterFen),
+                uciMoves = listOf(uciMove),
+                depth = depth,
+                multiPv = multiPv
+            )
         )
-        val req = Request.Builder().url(url)
+        val req = Request.Builder()
+            .url(url)
             .header("Accept", "application/json")
             .header("User-Agent", UA)
             .post(payload.toRequestBody(JSON_MEDIA))
@@ -500,24 +422,67 @@ object EngineClient {
             } ?: 0f
             val cls = report.moves.firstOrNull()?.classification ?: MoveClass.OKAY
             val best = report.positions.getOrNull(0)?.lines?.firstOrNull()?.pv?.firstOrNull()
-            Triple(evalAfter, cls, best)
+            return@use Triple(evalAfter, cls, best)
         }
     }
 
-    // --- helpers ---
-    private fun normalizePgn(src: String): String { /* как было */
-        var s = src.replace("\uFEFF","").replace("\r\n","\n").replace("\r","\n")
-        s = s.replace("0-0-0","O-O-O").replace("0-0","O-O")
-        s = s.replace("1–0","1-0").replace("0–1","0-1").replace("½–½","1/2-1/2").replace("½-½","1/2-1/2")
-        s = s.replace(Regex("""\{\[%clk [^}]+\]\}"""), "").replace(Regex("""\s\$\d+"""), "")
-        s = buildString(s.length){ for(ch in s){ if(ch=='\n'||ch=='\t'||ch.code>=32) append(ch)}}
+    suspend fun evaluateFenDetailed(
+        fen: String,
+        depth: Int = 14,
+        multiPv: Int = 3,
+        skillLevel: Int? = null
+    ): PositionDTO = withContext(Dispatchers.IO) {
+        val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
+        val body = json.encodeToString(EvaluatePositionRequest(fen, depth, multiPv, skillLevel))
+        val req = Request.Builder()
+            .url(url)
+            .header("Accept", "application/json")
+            .header("User-Agent", UA)
+            .post(body.toRequestBody(JSON_MEDIA))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw IllegalStateException("http_${resp.code}: ${text.take(300)}")
+            json.decodeFromString(text)
+        }
+    }
+
+    // --- внутренние помощники ---
+
+    private fun normalizePgn(src: String): String {
+        var s = src
+            .replace("\uFEFF", "")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+
+        s = s.replace("0-0-0", "O-O-O").replace("0-0", "O-O")
+        s = s.replace("1–0", "1-0").replace("0–1", "0-1")
+            .replace("½–½", "1/2-1/2").replace("½-½", "1/2-1/2")
+
+        s = s.replace(Regex("""\{\[%clk [^}]+\]\}"""), "")
+        s = s.replace(Regex("""\s\$\d+"""), "")
+
+        s = buildString(s.length) {
+            for (ch in s) {
+                if (ch == '\n' || ch == '\t' || ch.code >= 32) append(ch)
+            }
+        }
+
         val tagBlockRegex = Regex("""\A(?:\[[^\]\n]+\]\s*\n)+""")
         val tagMatch = tagBlockRegex.find(s)
+
         val rebuilt = if (tagMatch != null) {
-            val tagBlock = tagMatch.value.trimEnd('\n'); val rest = s.substring(tagMatch.range.last + 1)
-            val movetext = rest.trimStart('\n',' ','\t'); tagBlock + "\n\n" + movetext
-        } else s.trimStart('\n',' ','\t')
-        var out = rebuilt.trimEnd(); if (!out.endsWith("\n")) out += "\n"; return out
+            val tagBlock = tagMatch.value.trimEnd('\n')
+            val rest = s.substring(tagMatch.range.last + 1)
+            val movetext = rest.trimStart('\n', ' ', '\t')
+            tagBlock + "\n\n" + movetext
+        } else {
+            s.trimStart('\n', ' ', '\t')
+        }
+
+        var out = rebuilt.trimEnd()
+        if (!out.endsWith("\n")) out += "\n"
+        return out
     }
 
     private suspend fun pingOrThrow() = withContext(Dispatchers.IO) {
@@ -525,21 +490,38 @@ object EngineClient {
         try {
             val getReq = Request.Builder().url(url).header("User-Agent", UA).get().build()
             client.newCall(getReq).execute().use { resp ->
-                if (resp.isSuccessful) return@use else throw IllegalStateException("Ping failed with HTTP ${resp.code}")
+                if (resp.isSuccessful) {
+                    return@withContext
+                } else {
+                    throw IllegalStateException("Ping failed with HTTP ${resp.code}")
+                }
             }
-        } catch (e: Exception) { throw IllegalStateException("Cannot reach server at ${ServerConfig.BASE_URL}", e) }
+        } catch (e: Exception) {
+            throw IllegalStateException("Cannot reach server at ${ServerConfig.BASE_URL}", e)
+        }
     }
 
     private fun requestEvaluatePosition(
-        fen: String, depth: Int, multiPv: Int, skillLevel: Int? = null
+        fen: String,
+        depth: Int,
+        multiPv: Int,
+        skillLevel: Int? = null
     ): StockfishResponse {
         val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
         val bodyStr = json.encodeToString(
-            EvaluatePositionRequest(fen = fen, depth = depth, multiPv = multiPv, skillLevel = skillLevel)
+            EvaluatePositionRequest(
+                fen = fen,
+                depth = depth,
+                multiPv = multiPv,
+                skillLevel = skillLevel
+            )
         )
-        val req = Request.Builder().url(url)
-            .header("Accept", "application/json").header("User-Agent", UA)
-            .post(bodyStr.toRequestBody(JSON_MEDIA)).build()
+        val req = Request.Builder()
+            .url(url)
+            .header("Accept", "application/json")
+            .header("User-Agent", UA)
+            .post(bodyStr.toRequestBody(JSON_MEDIA))
+            .build()
 
         client.newCall(req).execute().use { resp ->
             val text = resp.body?.string().orEmpty()
@@ -558,12 +540,15 @@ object EngineClient {
                     continuation = top?.pv?.joinToString(" "),
                     error = null
                 )
-            } catch (e: Exception) { StockfishResponse(false, error = "json_parse_failed: ${e.message}") }
+            } catch (e: Exception) {
+                StockfishResponse(false, error = "json_parse_failed: ${e.message}")
+            }
         }
     }
 
     private suspend fun pollProgress(
-        progressId: String, onUpdate: (ProgressSnapshot) -> Unit
+        progressId: String,
+        onUpdate: (ProgressSnapshot) -> Unit
     ) {
         while (currentCoroutineContext().isActive) {
             try {
@@ -571,18 +556,22 @@ object EngineClient {
                     .url("${ServerConfig.BASE_URL}/api/v1/progress/$progressId")
                     .header("Accept", "application/json")
                     .header("User-Agent", UA)
-                    .get().build()
+                    .get()
+                    .build()
                 client.newCall(req).execute().use { resp ->
                     if (resp.isSuccessful) {
                         val body = resp.body?.string().orEmpty()
                         if (body.isNotBlank()) {
                             val snap = json.decodeFromString<ProgressSnapshot>(body)
-                            _percent.value = snap.percent; _stage.value = snap.stage; onUpdate(snap)
+                            // обновляем публичные state-потоки
+                            _percent.value = snap.percent
+                            _stage.value = snap.stage
+                            onUpdate(snap)
                             if (snap.stage == "done" || (snap.total > 0 && snap.done >= snap.total)) return
                         }
                     }
                 }
-            } catch (_: Exception) {}
+            } catch (_: Exception) { }
             delay(400)
         }
     }
