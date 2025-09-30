@@ -30,7 +30,6 @@ import com.example.chessanalysis.FullReport
 import com.example.chessanalysis.MoveClass
 import com.example.chessanalysis.R
 import com.example.chessanalysis.net.AvatarRepository
-import kotlinx.coroutines.launch
 
 private val ScreenBg = Color(0xFF121212)
 private val CardBg   = Color(0xFF2B2A27)

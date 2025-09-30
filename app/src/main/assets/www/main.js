@@ -22,25 +22,42 @@ function sendToAndroid(line) {
     if (window.Android && typeof window.Android.onEngineLine === 'function') {
       window.Android.onEngineLine(line);
     } else if (window.Android && window.Android.onEngineLine) {
-      // Интерфейс через addJavascriptInterface
       window.Android.onEngineLine(line);
     }
   } catch (e) {
-    // глушим любые ошибки канала
     console.log('Android callback error:', e);
   }
 }
 
-// Загружаем wasm-движок (stockfish.js создает Worker-подобный интерфейс)
+// Загружаем wasm‑движок (stockfish.js создаёт Worker‑подобный интерфейс).
+// В версии 17+ функция Stockfish может синхронно возвращать объект
+// либо Promise, поэтому поддерживаем обе формы.
 function boot() {
   try {
-    engine = Stockfish(); // Для wasm-glue это возвращает объект с postMessage/onmessage
+    const maybeEngine = Stockfish();
+    if (maybeEngine && typeof maybeEngine.then === 'function') {
+      // Асинхронная инициализация
+      maybeEngine.then((inst) => {
+        engine = inst;
+        setupEngine();
+      }).catch((err) => {
+        console.error('Stockfish init error:', err);
+        sendToAndroid('info string stockfish init error: ' + ('' + err));
+      });
+    } else {
+      // Синхронная версия
+      engine = maybeEngine;
+      setupEngine();
+    }
   } catch (e) {
     console.error('Stockfish init error:', e);
     sendToAndroid('info string stockfish init error: ' + ('' + e));
-    return;
   }
+}
 
+// Настройка слушателей и отправка первичных команд UCI
+function setupEngine() {
+  if (!engine) return;
   engine.onmessage = function (e) {
     const line = (typeof e === 'string') ? e : (e && e.data ? e.data : '');
     if (!line) return;
@@ -65,7 +82,7 @@ function boot() {
 
 boot();
 
-// На всякий случай: прием log’ов из движка, если glue их пишет в stdout
+// На всякий случай: приём log’ов из движка, если glue их пишет в stdout
 if (typeof console !== 'undefined') {
   const origLog = console.log;
   console.log = function () {
@@ -76,4 +93,3 @@ if (typeof console !== 'undefined') {
     origLog.apply(console, arguments);
   };
 }
-

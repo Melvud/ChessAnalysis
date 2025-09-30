@@ -18,31 +18,8 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
-        externalNativeBuild {
-            cmake {
-                // При необходимости:  -DBUILTIN_STOCKFISH=ON
-                cppFlags += listOf()
-                arguments += listOf("-DBUILTIN_STOCKFISH=ON")
-            }
-        }
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
-        }
     }
 
-
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
-    packaging {
-        jniLibs {
-            useLegacyPackaging = false
-        }
-    }
-    sourceSets["main"].jniLibs.srcDirs("src/main/jniLibs")
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -87,7 +64,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.1")
 
     // PGN/FEN
-    implementation("com.github.bhlangonijr:chesslib:1.3.1")
+    implementation("com.github.bhlangonijr:chesslib:1.3.4")
 
     // LiveData в Compose
     implementation("androidx.compose.runtime:runtime-livedata")
@@ -97,7 +74,6 @@ dependencies {
     // SVG/изображения
 
     debugImplementation("androidx.compose.ui:ui-tooling")
-
     implementation("com.google.android.material:material:1.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor")
     implementation(platform("com.squareup.okhttp3:okhttp-bom:4.12.0"))

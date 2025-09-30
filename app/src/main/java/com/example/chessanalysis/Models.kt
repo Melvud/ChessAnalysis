@@ -116,6 +116,7 @@ data class EstimatedElo(
 @Serializable
 data class FullReport(
     val header: GameHeader,
+    val positions1: List<EngineClient.PositionDTO>,
     val positions: List<PositionEval>,
     val moves: List<MoveReport>,
     val accuracy: AccuracySummary,
