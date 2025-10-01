@@ -23,8 +23,9 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.regex.Pattern
 
-// =================== EngineClient ===================
 object EngineClient {
+
+    private const val TAG = "EngineClient"
 
     // ====== Режим работы движка ======
     enum class EngineMode { SERVER, LOCAL }
@@ -32,15 +33,21 @@ object EngineClient {
     private val _engineMode = MutableStateFlow(EngineMode.SERVER)
     val engineMode: StateFlow<EngineMode> = _engineMode
 
-    /** Вызовите один раз (например, в Application.onCreate или при первом переходе в LOCAL) */
     fun setAndroidContext(ctx: Context) {
+        Log.d(TAG, "Setting Android context")
         LocalEngine.setContext(ctx.applicationContext)
     }
 
     fun setEngineMode(mode: EngineMode) {
+        Log.d(TAG, "Setting engine mode to: $mode")
         _engineMode.value = mode
         if (mode == EngineMode.LOCAL) {
-            runCatching { LocalEngine.ensureStarted() }
+            runCatching {
+                LocalEngine.ensureStarted()
+            }.onFailure { e ->
+                Log.e(TAG, "Failed to start local engine", e)
+                throw e
+            }
         } else {
             LocalEngine.stop()
         }
@@ -55,11 +62,10 @@ object EngineClient {
     }
 
     // ----- Логирование HTTP -----
-    private const val TAG = "EngineClient"
     private val httpLogger = HttpLoggingInterceptor { msg -> Log.d("HTTP", msg) }
         .apply { level = HttpLoggingInterceptor.Level.BODY }
 
-    // ----- OkHttp с длинными таймаутами для анализа -----
+    // ----- OkHttp с длинными таймаутами -----
     private val client = OkHttpClient.Builder()
         .addInterceptor(httpLogger)
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -74,16 +80,19 @@ object EngineClient {
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     private const val UA = "ChessAnalysis/1.5 (+android; local-server)"
 
-    // ----- Публичные state-потоки прогресса для UI -----
+    // ----- Публичные state-потоки прогресса -----
     private val _percent = MutableStateFlow<Double?>(null)
     val percent: StateFlow<Double?> = _percent
 
     private val _stage = MutableStateFlow<String?>(null)
     val stage: StateFlow<String?> = _stage
 
-    fun resetProgress() { _percent.value = null; _stage.value = null }
+    fun resetProgress() {
+        _percent.value = null
+        _stage.value = null
+    }
 
-    // ---------- DTO ТОЛЬКО ТЕ, КОТОРЫХ НЕТ СНАРУЖИ ----------
+    // ---------- DTO ----------
 
     @Serializable
     data class LineDTO(
@@ -189,7 +198,6 @@ object EngineClient {
         }
     }
 
-    /** Полный отчёт по PGN с прогрессом — локально или через сервер (в зависимости от режима). */
     suspend fun analyzeGameByPgnWithProgress(
         pgn: String,
         depth: Int = 16,
@@ -228,7 +236,6 @@ object EngineClient {
         } finally { poller.cancel(); poller.join() }
     }
 
-    /** Полный отчёт по PGN — локально или через сервер. */
     suspend fun analyzeGameByPgn(
         pgn: String,
         depth: Int = 16,
@@ -252,7 +259,6 @@ object EngineClient {
         }
     }
 
-    /** Реалтайм-анализ одного хода (с классификацией) — локально или через сервер. */
     suspend fun analyzeMoveRealtimeDetailed(
         beforeFen: String,
         afterFen: String,
@@ -308,7 +314,6 @@ object EngineClient {
         }
     }
 
-    /** Упрощённый реалтайм-анализ (Triple) — совместим с UI. */
     suspend fun analyzeMoveRealtime(
         beforeFen: String,
         afterFen: String,
@@ -368,7 +373,6 @@ object EngineClient {
         }
     }
 
-    /** by-fens (локально считаем afterFen, сервер — как раньше). */
     suspend fun analyzeMoveByFens(
         beforeFen: String,
         afterFen: String,
@@ -407,7 +411,6 @@ object EngineClient {
         }
     }
 
-    /** Детальная оценка позиции — локально или сервером. */
     suspend fun evaluateFenDetailed(
         fen: String,
         depth: Int = 14,
@@ -523,25 +526,55 @@ object EngineClient {
     // ====== Локальная реализация через WebView + UCI ======
     @SuppressLint("StaticFieldLeak")
     private object LocalEngine {
+        private const val LOCAL_TAG = "LocalEngine"
+
         private var appCtx: Context? = null
         private var web: EngineWebView? = null
         private val started = AtomicBoolean(false)
 
-        fun setContext(ctx: Context) { appCtx = ctx }
-        fun ensureStarted() {
-            if (started.get()) return
-            val ctx = appCtx ?: error("EngineClient: context is not set. Call setAndroidContext(context) before LOCAL mode.")
-            web = EngineWebView(ctx) { line ->
-                synchronized(listeners) { for (l in listeners) l(line) }
-            }.also { it.start() }
-            started.set(true)
+        fun setContext(ctx: Context) {
+            Log.d(LOCAL_TAG, "Context set")
+            appCtx = ctx
         }
-        fun stop() { started.set(false); runCatching { web?.stop() }; web = null }
+
+        fun ensureStarted() {
+            if (started.get()) {
+                Log.d(LOCAL_TAG, "Already started")
+                return
+            }
+            val ctx = appCtx ?: throw IllegalStateException(
+                "EngineClient: context is not set. Call setAndroidContext(context) before LOCAL mode."
+            )
+            Log.d(LOCAL_TAG, "Creating EngineWebView...")
+            web = EngineWebView(ctx) { line ->
+                Log.d(LOCAL_TAG, "Engine line: $line")
+                synchronized(listeners) {
+                    for (l in listeners) l(line)
+                }
+            }.also {
+                it.start()
+            }
+            started.set(true)
+            Log.d(LOCAL_TAG, "Engine started successfully")
+        }
+
+        fun stop() {
+            Log.d(LOCAL_TAG, "Stopping engine...")
+            started.set(false)
+            runCatching { web?.stop() }
+            web = null
+        }
 
         // ----- простая шина событий -----
         private val listeners = mutableListOf<(String) -> Unit>()
-        private fun addListener(l: (String) -> Unit) { synchronized(listeners) { listeners.add(l) } }
-        private fun removeListener(l: (String) -> Unit) { synchronized(listeners) { listeners.remove(l) } }
+
+        private fun addListener(l: (String) -> Unit) {
+            synchronized(listeners) { listeners.add(l) }
+        }
+
+        private fun removeListener(l: (String) -> Unit) {
+            synchronized(listeners) { listeners.remove(l) }
+        }
 
         // ----- UCI regex -----
         private val rxInfo = Pattern.compile("""^info\b.*""")
@@ -561,7 +594,8 @@ object EngineClient {
 
         private suspend fun send(cmd: String) {
             withContext(Dispatchers.Main) {
-                web?.send(cmd) ?: error("Local engine is not started")
+                val w = web ?: throw IllegalStateException("Local engine is not started")
+                w.send(cmd)
             }
         }
 
@@ -571,6 +605,7 @@ object EngineClient {
             multiPv: Int,
             skillLevel: Int?
         ): PositionDTO = withTimeout(60_000) {
+            Log.d(LOCAL_TAG, "Evaluating FEN: $fen (depth=$depth, multiPv=$multiPv)")
             ensureStarted()
 
             val acc = mutableMapOf<Int, AccLine>()
@@ -632,6 +667,8 @@ object EngineClient {
                         multiPv = mp
                     )
                 }
+
+            Log.d(LOCAL_TAG, "Evaluation complete. Lines: ${lines.size}, BestMove: $bestMove")
 
             PositionDTO(
                 lines = lines.ifEmpty { listOf(LineDTO(pv = emptyList(), cp = 0)) },

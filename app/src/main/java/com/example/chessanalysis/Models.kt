@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 
-// Провайдер игр
 @Serializable
 enum class Provider {
     LICHESS,
@@ -12,7 +11,6 @@ enum class Provider {
     BOT
 }
 
-// Классы ходов - синхронизированы с сервером
 @Serializable
 enum class MoveClass {
     @SerialName("OPENING") OPENING,
@@ -27,7 +25,6 @@ enum class MoveClass {
     @SerialName("BLUNDER") BLUNDER
 }
 
-// Заголовок партии
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class GameHeader(
@@ -41,29 +38,30 @@ data class GameHeader(
     val pgn: String? = null,
     val whiteElo: Int? = null,
     val blackElo: Int? = null,
-    val sideToView: Boolean? = null  // true = white bottom, false = black bottom, null = auto-detect
+    val sideToView: Boolean? = null
 )
 
-// Линия оценки
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class LineEval(
     val pv: List<String> = emptyList(),
     val cp: Int? = null,
     val mate: Int? = null,
-    val best: String? = null
+    val best: String? = null,
+    val depth: Int? = null,
+    val multiPv: Int? = null
 )
 
-// Оценка позиции
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class PositionEval(
     val fen: String,
     val idx: Int,
-    val lines: List<LineEval>
+    val lines: List<LineEval>,
+    val bestMove: String? = null,
+    val evaluation: Float? = null
 )
 
-// Отчёт по одному ходу
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class MoveReport(
@@ -78,7 +76,6 @@ data class MoveReport(
     val tags: List<String> = emptyList()
 )
 
-// Точность по цветам
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class AccByColor(
@@ -87,7 +84,6 @@ data class AccByColor(
     val weighted: Double
 )
 
-// Сводка точности
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class AccuracySummary(
@@ -95,7 +91,6 @@ data class AccuracySummary(
     val blackMovesAcc: AccByColor
 )
 
-// ACPL
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class Acpl(
@@ -103,7 +98,6 @@ data class Acpl(
     val black: Int
 )
 
-// Оценка перфоманса по ACPL/рейтингу
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class EstimatedElo(
@@ -111,7 +105,6 @@ data class EstimatedElo(
     val blackEst: Int? = null
 )
 
-// Полный отчёт, который отдаёт сервер и который рисует ReportScreen
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class FullReport(

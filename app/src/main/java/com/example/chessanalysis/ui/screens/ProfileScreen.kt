@@ -11,6 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.material3.RadioButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.chessanalysis.ui.UserProfile
 import com.example.chessanalysis.EngineClient
@@ -27,6 +28,7 @@ fun ProfileScreen(
     onLogout: () -> Unit,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     var email by remember { mutableStateOf(profile.email) }
     var nickname by remember { mutableStateOf(profile.nickname) }
     var lichessName by remember { mutableStateOf(profile.lichessUsername) }
@@ -36,6 +38,11 @@ fun ProfileScreen(
 
     // Подписываемся на текущий режим работы движка (сервер/локальный)
     val engineMode by EngineClient.engineMode.collectAsState()
+
+    // ВАЖНО: устанавливаем контекст при первом запуске экрана
+    LaunchedEffect(Unit) {
+        EngineClient.setAndroidContext(context.applicationContext)
+    }
 
     // Лямбда сохранения в Firestore (объявлена до использования)
     val saveProfileToFirestore: (String) -> Unit = { uid ->
@@ -121,22 +128,50 @@ fun ProfileScreen(
             ) {
                 RadioButton(
                     selected = engineMode == EngineClient.EngineMode.SERVER,
-                    onClick = { EngineClient.setEngineMode(EngineClient.EngineMode.SERVER) }
+                    onClick = {
+                        // Безопасное переключение
+                        try {
+                            EngineClient.setEngineMode(EngineClient.EngineMode.SERVER)
+                        } catch (e: Exception) {
+                            errorMessage = "Ошибка переключения: ${e.message}"
+                        }
+                    }
                 )
                 Text(
                     text = "Сервер",
                     modifier = Modifier
-                        .clickable { EngineClient.setEngineMode(EngineClient.EngineMode.SERVER) }
+                        .clickable {
+                            try {
+                                EngineClient.setEngineMode(EngineClient.EngineMode.SERVER)
+                            } catch (e: Exception) {
+                                errorMessage = "Ошибка переключения: ${e.message}"
+                            }
+                        }
                         .padding(end = 16.dp)
                 )
                 RadioButton(
                     selected = engineMode == EngineClient.EngineMode.LOCAL,
-                    onClick = { EngineClient.setEngineMode(EngineClient.EngineMode.LOCAL) }
+                    onClick = {
+                        // Безопасное переключение с проверкой контекста
+                        try {
+                            EngineClient.setAndroidContext(context.applicationContext)
+                            EngineClient.setEngineMode(EngineClient.EngineMode.LOCAL)
+                        } catch (e: Exception) {
+                            errorMessage = "Ошибка переключения на локальный режим: ${e.message}"
+                        }
+                    }
                 )
                 Text(
                     text = "Локальный",
                     modifier = Modifier
-                        .clickable { EngineClient.setEngineMode(EngineClient.EngineMode.LOCAL) }
+                        .clickable {
+                            try {
+                                EngineClient.setAndroidContext(context.applicationContext)
+                                EngineClient.setEngineMode(EngineClient.EngineMode.LOCAL)
+                            } catch (e: Exception) {
+                                errorMessage = "Ошибка переключения на локальный режим: ${e.message}"
+                            }
+                        }
                 )
             }
 
@@ -166,16 +201,13 @@ fun ProfileScreen(
                                         errorMessage = "Не удалось обновить Email: ${task.exception?.message ?: ""}"
                                         isSaving = false
                                     } else {
-                                        // Email обновлён — сохраняем профиль
                                         saveProfileToFirestore(uid)
                                     }
                                 }
                             } else {
-                                // Email не менялся — сразу сохраняем профиль
                                 saveProfileToFirestore(uid)
                             }
                         } else {
-                            // Пользователь не определён
                             errorMessage = "Не удалось определить пользователя"
                             isSaving = false
                         }

@@ -4,11 +4,74 @@
   <meta charset="utf-8">
   <title>Engine WASM</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <!-- Никаких сетевых загрузок — всё локально из assets -->
 </head>
 <body>
-<!-- Сначала движок, затем наш код -->
-<script src="stockfish.js"></script>
-<script src="main.js"></script>
+<script>
+  console.log('[HTML] Loading...');
+
+  // Загружаем WASM через XMLHttpRequest (работает с file://)
+  function loadWasmBinary(callback) {
+    console.log('[WASM] Loading stockfish.wasm...');
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', 'stockfish.wasm', true);
+    xhr.responseType = 'arraybuffer';
+
+    xhr.onload = function() {
+      if (xhr.status === 200) {
+        console.log('[WASM] Loaded successfully, size:', xhr.response.byteLength);
+        callback(null, new Uint8Array(xhr.response));
+      } else {
+        console.error('[WASM] Failed to load:', xhr.status);
+        callback(new Error('Failed to load WASM: ' + xhr.status));
+      }
+    };
+
+    xhr.onerror = function() {
+      console.error('[WASM] Network error');
+      callback(new Error('Network error loading WASM'));
+    };
+
+    xhr.send();
+  }
+
+  // Глобальная переменная для WASM
+  window.wasmBinary = null;
+
+  // Загружаем WASM перед загрузкой stockfish.js
+  loadWasmBinary(function(err, binary) {
+    if (err) {
+      console.error('[WASM] Load error:', err);
+      if (window.Android) {
+        window.Android.onEngineLine('info string wasm_load_error: ' + err.message);
+      }
+      return;
+    }
+
+    window.wasmBinary = binary;
+    console.log('[WASM] Binary ready, loading stockfish.js...');
+
+    // Теперь загружаем stockfish.js
+    var script = document.createElement('script');
+    script.src = 'stockfish.js';
+    script.onload = function() {
+      console.log('[SF] stockfish.js loaded');
+
+      // Загружаем main.js после stockfish.js
+      var mainScript = document.createElement('script');
+      mainScript.src = 'main.js';
+      mainScript.onload = function() {
+        console.log('[MAIN] main.js loaded');
+      };
+      mainScript.onerror = function() {
+        console.error('[MAIN] Failed to load main.js');
+      };
+      document.body.appendChild(mainScript);
+    };
+    script.onerror = function() {
+      console.error('[SF] Failed to load stockfish.js');
+    };
+    document.body.appendChild(script);
+  });
+</script>
 </body>
 </html>
