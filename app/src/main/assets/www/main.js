@@ -1,130 +1,108 @@
-console.log('[MAIN] main.js loading...');
+(function() {
+  'use strict';
 
-const inQueue = [];
-let engine = null;
-let engineReady = false;
+  var engine = null;
+  var ready = false;
+  var queue = [];
 
-window.EngineBridge = {
-  push: (cmd) => {
-    console.log('[BRIDGE] Command:', cmd);
-    if (!cmd || typeof cmd !== 'string') return;
-    if (engineReady && engine) {
-      engine.postMessage(cmd);
-    } else {
-      console.log('[BRIDGE] Queuing command');
-      inQueue.push(cmd);
+  function log(msg) {
+    console.log('[ENGINE] ' + msg);
+    if (window.Android) {
+      try {
+        window.Android.onEngineLine('info string [JS] ' + msg);
+      } catch(e) {}
     }
   }
-};
 
-function sendToAndroid(line) {
-  console.log('[ANDROID] →', line);
-  try {
-    if (window.Android && typeof window.Android.onEngineLine === 'function') {
-      window.Android.onEngineLine(line);
-    }
-  } catch (e) {
-    console.error('[ANDROID] Error:', e);
+  function send(line) {
+    try {
+      if (window.Android) {
+        window.Android.onEngineLine(line);
+      }
+    } catch(e) {}
   }
-}
 
-function boot() {
-  console.log('[BOOT] Starting...');
-
-  try {
-    // Проверяем наличие Stockfish
-    if (typeof Stockfish === 'undefined') {
-      console.error('[BOOT] Stockfish not found!');
-      sendToAndroid('info string ERROR: Stockfish not found');
+  function cmd(text) {
+    if (!engine) {
+      log('Queue: ' + text);
+      queue.push(text);
       return;
     }
 
-    console.log('[BOOT] Creating Stockfish with preloaded WASM...');
+    if (!ready) {
+      queue.push(text);
+      return;
+    }
 
-    // КРИТИЧНО: передаём готовый WASM бинарник
-    const config = {
-      wasmBinary: window.wasmBinary,
-      locateFile: function(file) {
-        console.log('[BOOT] locateFile called for:', file);
-        // Для WASM файлов возвращаем пустую строку, т.к. уже загружено
-        if (file.endsWith('.wasm')) {
-          return '';
-        }
-        return file;
-      }
-    };
+    log('→ ' + text);
+    try {
+      engine.ccall('command', null, ['string'], [text]);
+    } catch(e) {
+      log('Error: ' + e);
+    }
+  }
 
-    const maybeEngine = Stockfish(config);
+  window.EngineBridge = { push: cmd };
 
-    if (maybeEngine && typeof maybeEngine.then === 'function') {
-      console.log('[BOOT] Async init');
-      maybeEngine.then((inst) => {
-        console.log('[BOOT] Engine ready (async)');
-        engine = inst;
-        setupEngine();
-      }).catch((err) => {
-        console.error('[BOOT] Async error:', err);
-        sendToAndroid('info string ERROR: ' + err);
+  // Инициализация
+  setTimeout(function() {
+    log('Init');
+
+    if (typeof Stockfish === 'undefined') {
+      log('ERROR: Stockfish not found');
+      return;
+    }
+
+    try {
+      var sf = Stockfish({
+        wasmBinary: window.wasmBinary,
+        locateFile: function(f) { return f.endsWith('.wasm') ? '' : f; },
+        print: function(line) {
+          log('← ' + line);
+          send(line);
+
+          if (line.indexOf('readyok') !== -1) {
+            if (!ready) {
+              ready = true;
+              log('READY! Queue: ' + queue.length);
+
+              setTimeout(function() {
+                while (queue.length > 0) {
+                  cmd(queue.shift());
+                }
+              }, 10);
+            }
+          }
+        },
+        printErr: function(e) { log('ERR: ' + e); }
       });
-    } else {
-      console.log('[BOOT] Sync init');
-      engine = maybeEngine;
-      setupEngine();
-    }
-  } catch (e) {
-    console.error('[BOOT] Exception:', e);
-    sendToAndroid('info string ERROR: ' + e);
-  }
-}
 
-function setupEngine() {
-  console.log('[SETUP] Configuring engine...');
+      if (sf && typeof sf.then === 'function') {
+        log('Async');
+        sf.then(function(e) {
+          log('Ready');
+          engine = e;
 
-  if (!engine) {
-    console.error('[SETUP] Engine is null!');
-    return;
-  }
+          setTimeout(function() {
+            log('Init UCI');
+            cmd('uci');
+            cmd('isready');
+          }, 100);
+        });
+      } else {
+        log('Sync');
+        engine = sf;
 
-  engine.onmessage = function (e) {
-    const line = (typeof e === 'string') ? e : (e && e.data ? e.data : '');
-    if (!line) return;
-
-    console.log('[ENGINE]', line);
-
-    if (!engineReady && (line.indexOf('uciok') !== -1 || line.indexOf('readyok') !== -1)) {
-      engineReady = true;
-      console.log('[SETUP] Engine ready!');
-
-      // Отправляем очередь
-      console.log('[SETUP] Processing queue, length:', inQueue.length);
-      while (inQueue.length) {
-        const cmd = inQueue.shift();
-        console.log('[SETUP] Queued:', cmd);
-        engine.postMessage(cmd);
+        setTimeout(function() {
+          log('Init UCI');
+          cmd('uci');
+          cmd('isready');
+        }, 100);
       }
+    } catch(e) {
+      log('CRASH: ' + e);
     }
+  }, 200);
 
-    sendToAndroid(line);
-  };
-
-  console.log('[SETUP] Sending uci...');
-  engine.postMessage('uci');
-
-  console.log('[SETUP] Sending isready...');
-  engine.postMessage('isready');
-}
-
-// Запуск после загрузки
-console.log('[MAIN] Document state:', document.readyState);
-
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', function() {
-    console.log('[MAIN] DOM ready, booting in 100ms...');
-    setTimeout(boot, 100);
-  });
-} else {
-  console.log('[MAIN] Already loaded, booting in 100ms...');
-  setTimeout(boot, 100);
-}
-
-console.log('[MAIN] main.js loaded');
+  log('Loaded');
+})();

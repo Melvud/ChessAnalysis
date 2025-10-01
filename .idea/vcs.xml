@@ -2,7 +2,6 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/app/src/main/assets/www/stockfis" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/app/src/main/assets/www/stockfish.js" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/app/src/main/assets/stockfish.js" vcs="Git" />
   </component>
 </project>

@@ -38,9 +38,12 @@ class LocalGameAnalyzer(
         val startFen = parsed.firstOrNull()?.beforeFen
             ?: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
+        notify(progressId, 0, total, "preparing", startedAt, onProgress)
+
         val pos0 = EngineClient.evaluateFenDetailed(startFen, depth, multiPv, null)
         reportPositions += toPositionEval(fen = startFen, idx = 0, src = pos0)
-        notify(progressId, 0, total, "init", startedAt, onProgress)
+
+        notify(progressId, 0, total, "evaluating", startedAt, onProgress)
 
         // Анализ ходов
         for (i in 0 until total) {
@@ -81,8 +84,10 @@ class LocalGameAnalyzer(
 
             reportPositions += toPositionEval(fen = afterFen, idx = i + 1, src = posAfter)
 
-            notify(progressId, i + 1, total, "analyzing", startedAt, onProgress)
+            notify(progressId, i + 1, total, "evaluating", startedAt, onProgress)
         }
+
+        notify(progressId, total, total, "postprocess", startedAt, onProgress)
 
         val tagsHeader = PgnChess.headerFromPgn(pgn)
         val hdr = header ?: tagsHeader
@@ -120,6 +125,8 @@ class LocalGameAnalyzer(
 
         // Estimated Elo
         val est = EstimateElo.computeEstimatedElo(positions1, hdr.whiteElo, hdr.blackElo)
+
+        notify(progressId, total, total, "done", startedAt, onProgress)
 
         FullReport(
             header = hdr,

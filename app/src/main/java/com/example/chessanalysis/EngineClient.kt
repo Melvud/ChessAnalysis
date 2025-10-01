@@ -604,7 +604,7 @@ object EngineClient {
             depth: Int,
             multiPv: Int,
             skillLevel: Int?
-        ): PositionDTO = withTimeout(60_000) {
+        ): PositionDTO = withTimeout(120_000) { // ← 120 секунд вместо 60
             Log.d(LOCAL_TAG, "Evaluating FEN: $fen (depth=$depth, multiPv=$multiPv)")
             ensureStarted()
 
@@ -613,7 +613,10 @@ object EngineClient {
             val done = CompletableDeferred<Unit>()
 
             val listener: (String) -> Unit = { line ->
-                when {
+                // Пропускаем info string логи
+                if (line.startsWith("info string")) {
+                    // не обрабатываем
+                } else when {
                     rxInfo.matcher(line).find() -> {
                         val mMp = rxMultiPv.matcher(line)
                         val mp = if (mMp.find()) mMp.group(1).toIntOrNull() ?: 1 else 1
@@ -650,6 +653,7 @@ object EngineClient {
                 if (multiPv > 1) send("setoption name MultiPV value $multiPv")
                 send("position fen $fen")
                 send("go depth $depth${if (multiPv > 1) " multipv $multiPv" else ""}")
+
                 done.await()
             } finally {
                 removeListener(listener)
@@ -668,7 +672,7 @@ object EngineClient {
                     )
                 }
 
-            Log.d(LOCAL_TAG, "Evaluation complete. Lines: ${lines.size}, BestMove: $bestMove")
+            Log.d(LOCAL_TAG, "Complete. Lines: ${lines.size}, BestMove: $bestMove")
 
             PositionDTO(
                 lines = lines.ifEmpty { listOf(LineDTO(pv = emptyList(), cp = 0)) },
