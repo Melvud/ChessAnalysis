@@ -1,40 +1,22 @@
 package com.example.chessanalysis.local
 
-import com.example.chessanalysis.EngineClient
+import com.example.chessanalysis.*
 import com.example.chessanalysis.EngineClient.LineDTO
 import com.example.chessanalysis.EngineClient.PositionDTO
 import com.example.chessanalysis.EngineClient.ProgressSnapshot
-import com.example.chessanalysis.FullReport
-import com.example.chessanalysis.GameHeader
-import com.example.chessanalysis.MoveClass
+import com.example.chessanalysis.EngineClient.MoveRealtimeResult
+import kotlinx.coroutines.*
+import java.util.UUID
+import kotlin.math.abs
+
+// ВАЖНО: используем ТОП-УРОВНЕВЫЕ модели проекта.
+import com.example.chessanalysis.LineEval
 import com.example.chessanalysis.MoveEval
 import com.example.chessanalysis.PositionEval
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
-import kotlin.math.roundToInt
-import java.util.UUID
 
-/**
- * Локальная сборка отчёта, совместимая со структурой FullReport, как на сервере.
- * Никаких extension-свойств без accessors — всё обычные функции/классы.
- */
 class LocalGameAnalyzer(
-    private val sendHook: (String) -> Unit = {},                 // на будущее (если надо проксировать команды в движок)
     private val progressHook: (id: String, percent: Double?, stage: String?) -> Unit = { _, _, _ -> }
 ) {
-
-    // Небольшой контейнер для «прогресса»
-    data class LocalProgress(
-        val id: String,
-        val total: Int,
-        val done: Int,
-        val percent: Double?,
-        val etaMs: Long?,
-        val stage: String?,
-        val startedAt: Long?,
-        val updatedAt: Long?
-    )
 
     suspend fun evaluateGameByPgn(
         pgn: String,
@@ -50,101 +32,163 @@ class LocalGameAnalyzer(
         multiPv: Int,
         workersNb: Int,
         header: GameHeader?,
-        onProgress: (LocalProgress) -> Unit
+        onProgress: (ProgressSnapshot) -> Unit
     ): FullReport = withContext(Dispatchers.IO) {
-        val parsed = parsePgnToUciAndFens(pgn)
+        val parsed = PgnChess.movesWithFens(pgn)
+        val total = parsed.size
 
-        val total = parsed.movesUci.size
         val reportPositions = ArrayList<PositionEval>(total + 1)
         val reportMoves = ArrayList<MoveEval>(total)
 
         val progressId = UUID.randomUUID().toString()
         val startedAt = System.currentTimeMillis()
 
-        // Начальная позиция — до первого хода
-        run {
-            val startFen = parsed.fensBefore.firstOrNull() ?: "startpos"
-            val pos = EngineClient.evaluateFenDetailed(
-                fen = startFen,
-                depth = depth,
-                multiPv = multiPv,
-                skillLevel = null
-            )
-            reportPositions += pos.toPositionEval()
-            notify(progressId, 0, total, "init", startedAt, onProgress)
-        }
+        // Стартовая позиция
+        val startFen = parsed.firstOrNull()?.beforeFen
+            ?: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        val pos0 = EngineClient.evaluateFenDetailed(startFen, depth, multiPv, null)
+        reportPositions += toPositionEval(
+            fen = startFen,
+            idx = 0,
+            src = pos0
+        )
+        notify(progressId, 0, total, "init", startedAt, onProgress)
 
-        // Для каждого хода: считаем позицию «после хода», классифицируем, записываем PV/лучший ход
+        // Анализ ходов
         for (i in 0 until total) {
-            val afterFen = parsed.fensAfter[i]
-            val uciPlayed = parsed.movesUci[i]
+            val beforeFen = parsed[i].beforeFen
+            val afterFen = parsed[i].afterFen
+            val uciPlayed = parsed[i].uci
 
-            val posAfter: PositionDTO = EngineClient.evaluateFenDetailed(
-                fen = afterFen,
-                depth = depth,
-                multiPv = multiPv,
-                skillLevel = null
-            )
+            val posBefore = EngineClient.evaluateFenDetailed(beforeFen, depth, multiPv, null)
+            val posAfter = EngineClient.evaluateFenDetailed(afterFen, depth, multiPv, null)
 
-            val bestLine: LineDTO? = posAfter.lines.firstOrNull()
-            val bestEval: Float? = when {
-                bestLine?.mate != null -> if (bestLine.mate!! > 0) 30f else -30f
-                bestLine?.cp != null -> bestLine.cp!!.toFloat() / 100f
-                else -> null
-            }
-            val playedEval: Float? = bestEval // т.к. posAfter — это уже позиция ПОСЛЕ сыгранного хода
-            val bestIsMate = bestLine?.mate
-            val playedIsMate = bestLine?.mate // тот же mate (позиция после хода)
+            val bestMove = posBefore.bestMove ?: posBefore.lines.firstOrNull()?.pv?.firstOrNull()
+            val cls = classifyMove(posBefore, posAfter, bestMove, uciPlayed)
 
-            val cls = MoveClassifier.classify(
-                MoveClassifier.EvalPair(
-                    best = bestEval,
-                    played = playedEval,
-                    bestIsMate = bestIsMate,
-                    playedIsMate = playedIsMate
-                )
-            )
-
-            // MoveEval: как на сервере — classification + bestMove (из первой линии PV)
-            val bestMoveFromPv = bestLine?.pv?.firstOrNull()
             reportMoves += MoveEval(
                 played = uciPlayed,
-                best = bestMoveFromPv,
+                bestMove = bestMove,
                 classification = cls
             )
 
-            reportPositions += posAfter.toPositionEval()
+            reportPositions += toPositionEval(
+                fen = afterFen,
+                idx = i + 1,
+                src = posAfter
+            )
 
             notify(progressId, i + 1, total, "analyzing", startedAt, onProgress)
         }
 
-        // Соберём хедеры (если переданы пользователем — используем их, иначе из PGN)
-        val hdr = header ?: GameHeader(
-            event = parsed.header["Event"],
-            site = parsed.header["Site"],
-            date = parsed.header["Date"],
-            round = parsed.header["Round"],
-            white = parsed.header["White"],
-            black = parsed.header["Black"],
-            result = parsed.header["Result"],
-            eco = parsed.header["ECO"]
+        val tagsHeader = PgnChess.headerFromPgn(pgn)
+        val hdr = header ?: tagsHeader
+
+        // Win% → per-move accuracy
+        val winPercents: List<Double> = reportPositions.map { p ->
+            val top = p.lines.firstOrNull()
+            if (top == null) 50.0 else WinPercentage.getLineWinPercentage(top.cp, top.mate).toDouble()
+        }
+        val movesAccuracy = Accuracy.perMoveAccFromWin(winPercents)
+        val whiteAcc = movesAccuracy.filterIndexed { idx, _ -> idx % 2 == 0 }.average()
+        val blackAcc = movesAccuracy.filterIndexed { idx, _ -> idx % 2 == 1 }.average()
+
+        // ACPL: требуется white/black acc и weighted
+        val acplByColor = Accuracy.calculateACPL(
+            positions = reportPositions,
+            whiteMovesAcc = whiteAcc,
+            blackMovesAcc = blackAcc,
+            weighted = true
         )
 
-        // Итоги/«accuracy» (ACPL и т.п.) — простая заглушка 1-в-1 по полям;
-        // Если у вас уже есть классы AccuracySummary/Acpl/EstimatedElo — оставляем их формирование нулевым/пустым.
-        val accuracy = com.example.chessanalysis.AccuracySummary(emptyMap())
-        val acpl = com.example.chessanalysis.Acpl(emptyMap())
-        val estimatedElo = com.example.chessanalysis.EstimatedElo(emptyMap())
+        // Estimated Elo
+        val est = EstimateElo.computeEstimatedElo(
+            positions = reportPositions,
+            whiteElo = hdr.whiteElo,
+            blackElo = hdr.blackElo
+        )
 
-        // Финальный отчёт
         FullReport(
             header = hdr,
             moves = reportMoves,
             positions = reportPositions,
-            accuracy = accuracy,
-            acpl = acpl,
-            estimatedElo = estimatedElo
+            accuracy = AccuracySummary(AccByColor(whiteAcc, blackAcc)),
+            acpl = Acpl(acplByColor.white, acplByColor.black),
+            estimatedElo = EstimatedElo(est.white, est.black)
         )
+    }
+
+    suspend fun analyzeMoveRealtimeDetailed(
+        beforeFen: String,
+        afterFen: String,
+        uciMove: String,
+        depth: Int,
+        multiPv: Int,
+        skillLevel: Int?
+    ): MoveRealtimeResult = withContext(Dispatchers.IO) {
+        val posBefore = EngineClient.evaluateFenDetailed(beforeFen, depth, multiPv, skillLevel)
+        val posAfter = EngineClient.evaluateFenDetailed(afterFen, depth, multiPv, skillLevel)
+
+        val evalAfter = posAfter.lines.firstOrNull()?.let { line ->
+            when {
+                line.mate != null -> if (line.mate > 0) 30f else -30f
+                line.cp != null -> line.cp.toFloat() / 100f
+                else -> 0f
+            }
+        } ?: 0f
+
+        val bestMove = posBefore.bestMove ?: posBefore.lines.firstOrNull()?.pv?.firstOrNull()
+        val cls = classifyMove(posBefore, posAfter, bestMove, uciMove)
+
+        MoveRealtimeResult(
+            evalAfter = evalAfter,
+            moveClass = cls,
+            bestMove = bestMove,
+            lines = posAfter.lines
+        )
+    }
+
+    // ===== helpers =====
+
+    private fun classifyMove(
+        posBefore: PositionDTO,
+        posAfter: PositionDTO,
+        bestMove: String?,
+        played: String
+    ): MoveClass {
+        if (bestMove != null && bestMove == played) return MoveClass.BEST
+
+        val beforeTop = posBefore.lines.firstOrNull()
+        val afterTop = posAfter.lines.firstOrNull()
+
+        if (afterTop?.mate != null) {
+            return if (afterTop.mate > 0) MoveClass.FORCED else MoveClass.BLUNDER
+        }
+        if (beforeTop?.mate != null) {
+            return MoveClass.BLUNDER
+        }
+
+        val beforeEval = cpOrMateAsCp(beforeTop)
+        val afterEval = cpOrMateAsCp(afterTop)
+        val deltaCpPawns = abs(beforeEval - afterEval).toFloat() / 100f
+
+        return when {
+            deltaCpPawns == 0f -> MoveClass.BEST
+            deltaCpPawns <= 0.20f -> MoveClass.EXCELLENT
+            deltaCpPawns <= 0.50f -> MoveClass.OKAY
+            deltaCpPawns <= 1.00f -> MoveClass.INACCURACY
+            deltaCpPawns <= 2.00f -> MoveClass.MISTAKE
+            else -> MoveClass.BLUNDER
+        }
+    }
+
+    private fun cpOrMateAsCp(line: LineDTO?): Int {
+        line ?: return 0
+        return when {
+            line.mate != null -> if (line.mate > 0) 3000 else -3000
+            line.cp != null -> line.cp
+            else -> 0
+        }
     }
 
     private suspend fun notify(
@@ -153,10 +197,10 @@ class LocalGameAnalyzer(
         total: Int,
         stage: String,
         startedAt: Long,
-        onProgress: (LocalProgress) -> Unit
+        onProgress: (ProgressSnapshot) -> Unit
     ) {
         val percent = if (total > 0) done.toDouble() * 100.0 / total else null
-        val snap = LocalProgress(
+        val snap = ProgressSnapshot(
             id = id,
             total = total,
             done = done,
@@ -168,24 +212,39 @@ class LocalGameAnalyzer(
         )
         onProgress(snap)
         progressHook(id, percent, stage)
-        // Чуть разгрузим UI
         delay(1)
     }
 
-    // --- маппинги в ваши DTO отчёта ---
-
-    private fun PositionDTO.toPositionEval(): PositionEval {
-        // Берём top-line
-        val top = lines.firstOrNull()
-        val evalAfter: Float? = when {
-            top?.mate != null -> if (top.mate!! > 0) 30f else -30f
-            top?.cp != null -> top.cp!!.toFloat() / 100f
+    private fun toPositionEval(
+        fen: String,
+        idx: Int,
+        src: PositionDTO
+    ): PositionEval {
+        val top = src.lines.firstOrNull()
+        val evaluation = when {
+            top?.mate != null -> if (top.mate > 0) 30f else -30f
+            top?.cp != null -> top.cp.toFloat() / 100f
             else -> null
         }
+        val bestMove = src.bestMove ?: src.lines.firstOrNull()?.pv?.firstOrNull()
+
+        // преобразование LineDTO -> LineEval
+        val linesEval: List<LineEval> = src.lines.map { l ->
+            LineEval(
+                pv = l.pv,
+                cp = l.cp,
+                mate = l.mate,
+                depth = l.depth,
+                multiPv = l.multiPv
+            )
+        }
+
         return PositionEval(
-            best = top?.pv?.firstOrNull(),
-            lines = lines,
-            eval = evalAfter
+            fen = fen,
+            idx = idx,
+            lines = linesEval,
+            bestMove = bestMove,
+            evaluation = evaluation
         )
     }
 }

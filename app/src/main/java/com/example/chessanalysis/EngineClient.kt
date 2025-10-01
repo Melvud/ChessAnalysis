@@ -83,8 +83,8 @@ object EngineClient {
 
     fun resetProgress() { _percent.value = null; _stage.value = null }
 
-    // ---------- DTO ----------
-    @SuppressLint("UnsafeOptInUsageError")
+    // ---------- DTO ТОЛЬКО ТЕ, КОТОРЫХ НЕТ СНАРУЖИ ----------
+
     @Serializable
     data class LineDTO(
         val pv: List<String> = emptyList(),
@@ -94,8 +94,13 @@ object EngineClient {
         val multiPv: Int? = null
     )
 
-    @SuppressLint("UnsafeOptInUsageError")
-    @kotlinx.serialization.Serializable
+    @Serializable
+    data class PositionDTO(
+        val lines: List<LineDTO> = emptyList(),
+        val bestMove: String? = null
+    )
+
+    @Serializable
     data class MoveRealtimeResult(
         val evalAfter: Float,
         val moveClass: MoveClass,
@@ -103,22 +108,13 @@ object EngineClient {
         val lines: List<LineDTO>
     )
 
-    @SuppressLint("UnsafeOptInUsageError")
     @Serializable
-    data class PositionDTO(
-        val lines: List<LineDTO> = emptyList(),
-        val bestMove: String? = null
-    )
-
-    @SuppressLint("UnsafeOptInUsageError")
-    @kotlinx.serialization.Serializable
     private data class MoveEvalDTO(
         val lines: List<LineDTO> = emptyList(),
         val bestMove: String? = null,
         val moveClassification: String? = null
     )
 
-    @SuppressLint("UnsafeOptInUsageError")
     @Serializable
     data class StockfishResponse(
         val success: Boolean,
@@ -129,7 +125,6 @@ object EngineClient {
         val error: String? = null
     )
 
-    @SuppressLint("UnsafeOptInUsageError")
     @Serializable
     data class GamePgnRequest(
         val pgn: String,
@@ -139,7 +134,6 @@ object EngineClient {
         val header: GameHeader? = null
     )
 
-    @SuppressLint("UnsafeOptInUsageError")
     @Serializable
     data class FensUciRequest(
         val fens: List<String>,
@@ -148,7 +142,6 @@ object EngineClient {
         val multiPv: Int = 3
     )
 
-    @SuppressLint("UnsafeOptInUsageError")
     @Serializable
     data class ProgressSnapshot(
         val id: String,
@@ -161,7 +154,6 @@ object EngineClient {
         val updatedAt: Long? = null
     )
 
-    @SuppressLint("UnsafeOptInUsageError")
     @Serializable
     private data class EvaluatePositionRequest(
         val fen: String,
@@ -170,7 +162,6 @@ object EngineClient {
         val skillLevel: Int? = null
     )
 
-    @SuppressLint("UnsafeOptInUsageError")
     @Serializable
     private data class EvaluateMoveRealtimeRequest(
         val beforeFen: String,
@@ -181,7 +172,7 @@ object EngineClient {
         val skillLevel: Int? = null
     )
 
-    // ================= Публичное API (идентичные сигнатуры) =================
+    // ================= Публичное API =================
 
     suspend fun analyzeFen(
         fen: String,
@@ -192,7 +183,7 @@ object EngineClient {
             val pos = LocalEngine.evaluateFenDetailedLocal(fen, depth, 3, skillLevel)
             val top = pos.lines.firstOrNull()
             val eval = top?.cp?.let { it / 100.0 }
-            return@withContext StockfishResponse(true, eval, top?.mate, pos.bestMove, top?.pv?.joinToString(" "))
+            StockfishResponse(true, eval, top?.mate, pos.bestMove, top?.pv?.joinToString(" "))
         } else {
             requestEvaluatePosition(fen, depth, 3, skillLevel)
         }
@@ -208,26 +199,15 @@ object EngineClient {
         onProgress: (ProgressSnapshot) -> Unit = {}
     ): FullReport = coroutineScope {
         if (engineMode.value == EngineMode.LOCAL) {
-            val analyzer = LocalGameAnalyzer(::localSend) { id, percent, stage ->
+            val analyzer = LocalGameAnalyzer { _, percent, stage ->
                 _percent.value = percent
                 _stage.value = stage
-                onProgress(ProgressSnapshot(id, 0, 0, percent, null, stage, null, System.currentTimeMillis()))
             }
             return@coroutineScope analyzer.evaluateGameByPgnWithProgress(
                 pgn = pgn, depth = depth, multiPv = multiPv, workersNb = workersNb, header = header
-            ) { prog ->
-                _percent.value = prog.percent
-                _stage.value = prog.stage
-                onProgress(
-                    ProgressSnapshot(
-                        id = prog.id, total = prog.total, done = prog.done, percent = prog.percent,
-                        etaMs = prog.etaMs, stage = prog.stage, startedAt = prog.startedAt, updatedAt = prog.updatedAt
-                    )
-                )
-            }
+            ) { snap -> onProgress(snap) }
         }
 
-        // серверный путь (как было)
         val progressId = UUID.randomUUID().toString()
         resetProgress()
         val poller = launch(Dispatchers.IO) { pollProgress(progressId, onProgress) }
@@ -245,9 +225,7 @@ object EngineClient {
                     json.decodeFromString<FullReport>(body)
                 }
             }
-        } finally {
-            poller.cancel(); poller.join()
-        }
+        } finally { poller.cancel(); poller.join() }
     }
 
     /** Полный отчёт по PGN — локально или через сервер. */
@@ -259,12 +237,9 @@ object EngineClient {
         header: GameHeader? = null
     ): FullReport = withContext(Dispatchers.IO) {
         if (engineMode.value == EngineMode.LOCAL) {
-            val analyzer = LocalGameAnalyzer(::localSend) { id, percent, stage ->
-                _percent.value = percent; _stage.value = stage
-            }
+            val analyzer = LocalGameAnalyzer()
             return@withContext analyzer.evaluateGameByPgn(pgn, depth, multiPv, workersNb, header)
         }
-        // серверный путь
         pingOrThrow()
         val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game"
         val payload = json.encodeToString(GamePgnRequest(normalizePgn(pgn), depth, multiPv, workersNb, header))
@@ -287,13 +262,10 @@ object EngineClient {
         skillLevel: Int? = null
     ): MoveRealtimeResult = withContext(Dispatchers.IO) {
         if (engineMode.value == EngineMode.LOCAL) {
-            val analyzer = LocalGameAnalyzer(::localSend) { id, pct, stage ->
-                _percent.value = pct; _stage.value = stage
-            }
+            val analyzer = LocalGameAnalyzer()
             return@withContext analyzer.analyzeMoveRealtimeDetailed(beforeFen, afterFen, uciMove, depth, multiPv, skillLevel)
         }
 
-        // серверный путь (как было)
         val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
         val payload = json.encodeToString(
             EvaluateMoveRealtimeRequest(beforeFen, afterFen, uciMove, depth, multiPv, skillLevel)
@@ -336,7 +308,67 @@ object EngineClient {
         }
     }
 
-    /** Совместимая ветка by-fens (локально считаем afterFen, сервер — как раньше). */
+    /** Упрощённый реалтайм-анализ (Triple) — совместим с UI. */
+    suspend fun analyzeMoveRealtime(
+        beforeFen: String,
+        afterFen: String,
+        uciMove: String,
+        depth: Int = 14,
+        multiPv: Int = 3,
+        skillLevel: Int? = null
+    ): Triple<Float, MoveClass, String?> = withContext(Dispatchers.IO) {
+        if (engineMode.value == EngineMode.LOCAL) {
+            val detailed = analyzeMoveRealtimeDetailed(beforeFen, afterFen, uciMove, depth, multiPv, skillLevel)
+            Triple(detailed.evalAfter, detailed.moveClass, detailed.bestMove)
+        } else {
+            val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
+            val payload = json.encodeToString(
+                EvaluateMoveRealtimeRequest(beforeFen, afterFen, uciMove, depth, multiPv, skillLevel)
+            )
+            val req = Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                .header("User-Agent", UA)
+                .post(payload.toRequestBody(JSON_MEDIA))
+                .build()
+
+            client.newCall(req).execute().use { resp ->
+                val text = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) error("http_${resp.code}: ${text.take(300)}")
+
+                val parsed = runCatching { json.decodeFromString<MoveEvalDTO>(text) }.getOrNull()
+                    ?: run {
+                        val pos = json.decodeFromString<PositionDTO>(text)
+                        MoveEvalDTO(lines = pos.lines, bestMove = pos.bestMove, moveClassification = null)
+                    }
+
+                val top = parsed.lines.firstOrNull()
+                val evalAfter: Float = when {
+                    top?.mate != null -> if (top.mate!! > 0) 30f else -30f
+                    top?.cp != null -> top.cp!! / 100f
+                    else -> 0f
+                }
+
+                val cls = when (parsed.moveClassification?.uppercase()) {
+                    "BEST" -> MoveClass.BEST
+                    "PERFECT" -> MoveClass.PERFECT
+                    "SPLENDID" -> MoveClass.SPLENDID
+                    "EXCELLENT" -> MoveClass.EXCELLENT
+                    "FORCED" -> MoveClass.FORCED
+                    "OPENING" -> MoveClass.OPENING
+                    "OKAY", "GOOD" -> MoveClass.OKAY
+                    "INACCURACY" -> MoveClass.INACCURACY
+                    "MISTAKE" -> MoveClass.MISTAKE
+                    "BLUNDER" -> MoveClass.BLUNDER
+                    else -> MoveClass.OKAY
+                }
+
+                Triple(evalAfter, cls, parsed.bestMove)
+            }
+        }
+    }
+
+    /** by-fens (локально считаем afterFen, сервер — как раньше). */
     suspend fun analyzeMoveByFens(
         beforeFen: String,
         afterFen: String,
@@ -576,7 +608,6 @@ object EngineClient {
 
             addListener(listener)
             try {
-                // Инициализация сеанса
                 send("uci")
                 send("isready")
                 send("ucinewgame")
@@ -602,11 +633,10 @@ object EngineClient {
                     )
                 }
 
-            PositionDTO(lines = lines.ifEmpty { listOf(LineDTO(pv = emptyList(), cp = 0)) },
-                bestMove = bestMove ?: lines.firstOrNull()?.pv?.firstOrNull())
+            PositionDTO(
+                lines = lines.ifEmpty { listOf(LineDTO(pv = emptyList(), cp = 0)) },
+                bestMove = bestMove ?: lines.firstOrNull()?.pv?.firstOrNull()
+            )
         }
     }
-
-    // хук для LocalGameAnalyzer (сейчас не используется, но оставлен для совместимости)
-    private fun localSend(cmd: String) { /* no-op */ }
 }
