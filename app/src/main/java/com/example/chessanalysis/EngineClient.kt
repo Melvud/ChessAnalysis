@@ -647,11 +647,21 @@ object EngineClient {
             addListener(listener)
             try {
                 send("uci")
+                delay(50)
                 send("isready")
+                delay(50)
                 send("ucinewgame")
-                if (skillLevel != null) send("setoption name Skill Level value $skillLevel")
-                if (multiPv > 1) send("setoption name MultiPV value $multiPv")
+                delay(20)
+                if (skillLevel != null) {
+                    send("setoption name Skill Level value $skillLevel")
+                    delay(20)
+                }
+                if (multiPv > 1) {
+                    send("setoption name MultiPV value $multiPv")
+                    delay(20)
+                }
                 send("position fen $fen")
+                delay(20)
                 send("go depth $depth${if (multiPv > 1) " multipv $multiPv" else ""}")
 
                 done.await()

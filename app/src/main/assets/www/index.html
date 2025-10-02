@@ -2,44 +2,54 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Stockfish 17</title>
+  <title>Stockfish 17.1 (manual WASM load)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
 <body>
 <script>
+  // ==== Логгер в Android ====
   function log(msg) {
     console.log(msg);
-    if (window.Android) {
-      try {
-        window.Android.onEngineLine('info string [HTML] ' + msg);
-      } catch(e) {}
+    if (window.Android && typeof window.Android.onEngineLine === 'function') {
+      try { window.Android.onEngineLine('info string [HTML] ' + msg); } catch(_) {}
     }
   }
 
   log('=== INIT SF17 ===');
 
-  // Fake module для перехвата UMD
+  // ==== РАННИЙ СТАБ МОСТА ====
+  // Буферизуем команды до момента, когда движок будет готов.
+  window.EngineBridge = window.EngineBridge || (function () {
+    const queue = [];
+    return {
+      _q: queue,
+      push: function (cmd) { queue.push(String(cmd || '')); }
+    };
+  })();
+
+  // ==== UMD-хук для stockfish.js ====
+  // nmrugg-сборки часто кладут фабрику в module.exports.
   window.module = { exports: {} };
   window.exports = window.module.exports;
 
+  // ==== Ручная подгрузка WASM ====
   log('Loading WASM...');
   var xhr = new XMLHttpRequest();
   xhr.open('GET', 'stockfish.wasm', true);
   xhr.responseType = 'arraybuffer';
-
-  xhr.onload = function() {
+  xhr.onload = function () {
     if (xhr.status === 200 || xhr.status === 0) {
-      log('WASM: ' + xhr.response.byteLength + ' bytes');
       window.wasmBinary = new Uint8Array(xhr.response);
+      log('WASM: ' + window.wasmBinary.byteLength + ' bytes');
 
+      // Загружаем stockfish.js после WASM
       log('Loading stockfish.js...');
-      var script = document.createElement('script');
-      script.src = 'stockfish.js';
-
-      script.onload = function() {
+      var s = document.createElement('script');
+      s.src = 'stockfish.js';
+      s.onload = function () {
         log('stockfish.js loaded');
 
-        // Перехватываем экспорт
+        // Достаём фабрику Stockfish
         if (typeof module !== 'undefined' && module.exports && typeof module.exports === 'function') {
           window.Stockfish = module.exports;
           log('Stockfish found in module.exports');
@@ -52,26 +62,18 @@
 
         log('typeof Stockfish: ' + typeof Stockfish);
 
-        // Загружаем main.js
-        var mainScript = document.createElement('script');
-        mainScript.src = 'main.js';
-        document.body.appendChild(mainScript);
+        // Инициализация основной логики (создание инстанса, мост и т.д.)
+        var main = document.createElement('script');
+        main.src = 'main.js';
+        document.body.appendChild(main);
       };
-
-      script.onerror = function() {
-        log('ERROR: Failed to load stockfish.js');
-      };
-
-      document.body.appendChild(script);
+      s.onerror = function () { log('ERROR: Failed to load stockfish.js'); };
+      document.body.appendChild(s);
     } else {
       log('ERROR: WASM failed: ' + xhr.status);
     }
   };
-
-  xhr.onerror = function() {
-    log('ERROR: WASM network error');
-  };
-
+  xhr.onerror = function () { log('ERROR: WASM network error'); };
   xhr.send();
 </script>
 </body>
