@@ -196,7 +196,8 @@ object EngineClient {
         // ---- Новые поля для «живой» доски ----
         val fen: String? = null,
         val currentSan: String? = null,
-        val currentClass: String? = null
+        val currentClass: String? = null,
+        val currentUci: String? = null  // UCI хода для отображения на доске
     )
 
     @Serializable

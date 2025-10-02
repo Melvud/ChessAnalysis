@@ -4,7 +4,6 @@ import com.example.chessanalysis.*
 import com.example.chessanalysis.analysis.*
 import kotlinx.coroutines.*
 import java.util.UUID
-import kotlin.math.abs
 import android.util.Log
 
 class LocalGameAnalyzer(
@@ -44,7 +43,7 @@ class LocalGameAnalyzer(
         val startFen = parsed.firstOrNull()?.beforeFen
             ?: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
-        notify(progressId, 0, total, "preparing", startedAt, onProgress, null, null, null, null)
+        notify(progressId, 0, total, "preparing", startedAt, onProgress, null, null, null, null, null)
 
         // 1) Evaluate all positions (including start)
         val positions = mutableListOf<EngineClient.PositionDTO>()
@@ -53,7 +52,7 @@ class LocalGameAnalyzer(
         val pos0 = EngineClient.evaluateFenDetailed(startFen, depth, multiPv, null)
         positions.add(pos0)
 
-        notify(progressId, 0, total, "evaluating", startedAt, onProgress, null, null, null, null)
+        notify(progressId, 0, total, "evaluating", startedAt, onProgress, null, null, null, null, null)
 
         // Evaluate each move's resulting position
         for (i in 0 until total) {
@@ -66,12 +65,13 @@ class LocalGameAnalyzer(
             val posAfter = EngineClient.evaluateFenDetailed(afterFen, depth, multiPv, null)
             positions.add(posAfter)
 
-            // Классификация текущего хода (упрощённо, но стабильно)
-            val cls = classifyMove(
+            // ИСПОЛЬЗУЕМ MoveClassification для получения правильной классификации
+            val cls = classifyMoveUsingMoveClassifier(
+                beforeFen = beforeFen,
+                afterFen = afterFen,
                 posBefore = posBefore,
                 posAfter = posAfter,
-                bestMove = posBefore.bestMove,
-                played = uci
+                uciMove = uci
             )
 
             // Обновляем прогресс + живые поля для доски
@@ -92,11 +92,12 @@ class LocalGameAnalyzer(
                 etaMs = eta,
                 fen = afterFen,
                 san = san,
-                cls = cls.name
+                cls = cls.name,
+                uci = uci
             )
         }
 
-        notify(progressId, total, total, "postprocess", startedAt, onProgress, 0L, null, null, null)
+        notify(progressId, total, total, "postprocess", startedAt, onProgress, 0L, null, null, null, null)
 
         // 2) Build PositionEval list with PROPER CP/MATE INVERSION
         val fens = listOf(startFen) + parsed.map { it.afterFen }
@@ -106,7 +107,6 @@ class LocalGameAnalyzer(
             val currentFen = fens[idx]
             val whiteToPlay = currentFen.split(" ").getOrNull(1) == "w"
 
-            // КРИТИЧНО: Инвертируем оценки если ход черных (как на сервере)
             val linesEval = pos.lines.map { line ->
                 val invertedCp = if (!whiteToPlay && line.cp != null) -line.cp else line.cp
                 val invertedMate = if (!whiteToPlay && line.mate != null) -line.mate else line.mate
@@ -153,7 +153,7 @@ class LocalGameAnalyzer(
         val whiteAcc = computePlayerAccuracy(movesAccuracy, weightsAcc, "white")
         val blackAcc = computePlayerAccuracy(movesAccuracy, weightsAcc, "black")
 
-        // 8) Move classification
+        // 8) Move classification - ИСПОЛЬЗУЕМ ПОЛНЫЙ MoveClassification
         val classifiedPositions = MoveClassification.getMovesClassification(
             positionEvals,
             uciMoves,
@@ -175,7 +175,7 @@ class LocalGameAnalyzer(
         val hdr = header ?: tagsHeader
         val est = EstimateElo.computeEstimatedElo(positionEvals, hdr.whiteElo, hdr.blackElo)
 
-        notify(progressId, total, total, "done", startedAt, onProgress, 0L, null, null, null)
+        notify(progressId, total, total, "done", startedAt, onProgress, 0L, null, null, null, null)
 
         FullReport(
             header = hdr,
@@ -202,10 +202,8 @@ class LocalGameAnalyzer(
         val posBefore = EngineClient.evaluateFenDetailed(beforeFen, depth, multiPv, skillLevel)
         val posAfter = EngineClient.evaluateFenDetailed(afterFen, depth, multiPv, skillLevel)
 
-        // КРИТИЧНО: Проверяем чей ход в позиции ПОСЛЕ
         val whiteToPlayAfter = afterFen.split(" ").getOrNull(1) == "w"
 
-        // Инвертируем оценку если в позиции ПОСЛЕ ход черных
         val topLine = posAfter.lines.firstOrNull()
         val cpAfter = if (!whiteToPlayAfter && topLine?.cp != null) -topLine.cp else topLine?.cp
         val mateAfter = if (!whiteToPlayAfter && topLine?.mate != null) -topLine.mate else topLine?.mate
@@ -216,7 +214,6 @@ class LocalGameAnalyzer(
             else -> 0f
         }
 
-        // Инвертируем lines для позиции ПОСЛЕ если там ход черных
         val linesAfter = posAfter.lines.map { line ->
             if (!whiteToPlayAfter) {
                 EngineClient.LineDTO(
@@ -231,7 +228,6 @@ class LocalGameAnalyzer(
             }
         }
 
-        // Для классификации создаем PositionEval с правильными оценками
         val whiteToPlayBefore = beforeFen.split(" ").getOrNull(1) == "w"
 
         val posEvalBefore = PositionEval(
@@ -256,6 +252,7 @@ class LocalGameAnalyzer(
             bestMove = null
         )
 
+        // ИСПОЛЬЗУЕМ MoveClassification
         val classified = MoveClassification.getMovesClassification(
             listOf(posEvalBefore, posEvalAfter),
             listOf(uciMove),
@@ -272,51 +269,65 @@ class LocalGameAnalyzer(
         )
     }
 
-    // Helper: simplified move classification for single move
-    private fun classifyMove(
+    // НОВАЯ функция: использует MoveClassification для получения правильной классификации
+    private fun classifyMoveUsingMoveClassifier(
+        beforeFen: String,
+        afterFen: String,
         posBefore: EngineClient.PositionDTO,
         posAfter: EngineClient.PositionDTO,
-        bestMove: String?,
-        played: String
+        uciMove: String
     ): MoveClass {
-        if (bestMove != null && normUci(bestMove) == normUci(played)) return MoveClass.BEST
+        try {
+            // Создаём PositionEval с правильной инвертацией
+            val whiteToPlayBefore = beforeFen.split(" ").getOrNull(1) == "w"
+            val whiteToPlayAfter = afterFen.split(" ").getOrNull(1) == "w"
 
-        val beforeTop = posBefore.lines.firstOrNull()
-        val afterTop = posAfter.lines.firstOrNull()
+            val posEvalBefore = PositionEval(
+                fen = beforeFen,
+                idx = 0,
+                lines = posBefore.lines.map { line ->
+                    val cp = if (!whiteToPlayBefore && line.cp != null) -line.cp else line.cp
+                    val mate = if (!whiteToPlayBefore && line.mate != null) -line.mate else line.mate
+                    LineEval(
+                        pv = line.pv,
+                        cp = cp,
+                        mate = mate,
+                        depth = line.depth,
+                        best = line.pv.firstOrNull()
+                    )
+                },
+                bestMove = posBefore.bestMove
+            )
 
-        if (afterTop?.mate != null) {
-            return if (afterTop.mate > 0) MoveClass.FORCED else MoveClass.BLUNDER
+            val posEvalAfter = PositionEval(
+                fen = afterFen,
+                idx = 1,
+                lines = posAfter.lines.map { line ->
+                    val cp = if (!whiteToPlayAfter && line.cp != null) -line.cp else line.cp
+                    val mate = if (!whiteToPlayAfter && line.mate != null) -line.mate else line.mate
+                    LineEval(
+                        pv = line.pv,
+                        cp = cp,
+                        mate = mate,
+                        depth = line.depth,
+                        best = null
+                    )
+                },
+                bestMove = null
+            )
+
+            // ИСПОЛЬЗУЕМ полный MoveClassification
+            val classified = MoveClassification.getMovesClassification(
+                listOf(posEvalBefore, posEvalAfter),
+                listOf(uciMove),
+                listOf(beforeFen, afterFen)
+            )
+
+            return classified.getOrNull(1)?.moveClassification ?: MoveClass.OKAY
+        } catch (e: Exception) {
+            Log.e(TAG, "Error classifying move: ${e.message}", e)
+            return MoveClass.OKAY
         }
-        if (beforeTop?.mate != null) {
-            return MoveClass.BLUNDER
-        }
-
-        val beforeEval = cpOrMateAsCp(beforeTop)
-        val afterEval = cpOrMateAsCp(afterTop)
-        val deltaCpPawns = abs(beforeEval - afterEval).toFloat() / 100f
-
-        return when {
-            deltaCpPawns == 0f -> MoveClass.BEST
-            deltaCpPawns <= 0.20f -> MoveClass.EXCELLENT
-            deltaCpPawns <= 0.50f -> MoveClass.OKAY
-            deltaCpPawns <= 1.00f -> MoveClass.INACCURACY
-            deltaCpPawns <= 2.00f -> MoveClass.MISTAKE
-            else -> MoveClass.BLUNDER
-        }
-    }
-
-    private fun cpOrMateAsCp(line: EngineClient.LineDTO?): Int {
-        line ?: return 0
-        return when {
-            line.mate != null -> if (line.mate > 0) 3000 else -3000
-            line.cp != null -> line.cp
-            else -> 0
-        }
-    }
-
-    private fun normUci(u: String): String {
-        val s = u.trim().lowercase()
-        return if (s.length == 4) s + "q" else s
     }
 
     private suspend fun notify(
@@ -329,7 +340,8 @@ class LocalGameAnalyzer(
         etaMs: Long? = null,
         fen: String? = null,
         san: String? = null,
-        cls: String? = null
+        cls: String? = null,
+        uci: String? = null
     ) {
         val percent = if (total > 0) done.toDouble() * 100.0 / total else null
         val snap = EngineClient.ProgressSnapshot(
@@ -343,7 +355,8 @@ class LocalGameAnalyzer(
             updatedAt = System.currentTimeMillis(),
             fen = fen,
             currentSan = san,
-            currentClass = cls
+            currentClass = cls,
+            currentUci = uci
         )
         onProgress(snap)
         progressHook(id, percent, stage)
@@ -409,13 +422,7 @@ class LocalGameAnalyzer(
             val afterFen = fens[i + 1]
             val san = sanMoves[i]
 
-            var cls = classifiedPositions[i + 1].moveClassification?.name ?: "OKAY"
-
-            // Forced BEST if played move matches engine best
-            val bestFromPos = classifiedPositions[i].bestMove ?: ""
-            val playedUci = normUci(uci)
-            val bestUci = normUci(bestFromPos)
-            if (bestFromPos.isNotEmpty() && playedUci == bestUci) cls = "BEST"
+            val cls = classifiedPositions[i + 1].moveClassification ?: MoveClass.OKAY
 
             MoveReport(
                 san = san,
@@ -425,7 +432,7 @@ class LocalGameAnalyzer(
                 winBefore = winPercents[i],
                 winAfter = winPercents[i + 1],
                 accuracy = perMoveAcc.getOrNull(i) ?: 0.0,
-                classification = MoveClass.valueOf(cls),
+                classification = cls,
                 tags = emptyList()
             )
         }

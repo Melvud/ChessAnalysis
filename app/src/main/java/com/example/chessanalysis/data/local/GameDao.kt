@@ -51,6 +51,8 @@ interface GameDao {
         val addedTimestamp: Long
     )
 
+    // ИСПРАВЛЕНО: сортировка сначала по addedTimestamp DESC (вручную добавленные наверху),
+    // затем по gameTimestamp DESC (самые новые игры наверху)
     @Query(
         """
         SELECT 
@@ -78,7 +80,7 @@ interface GameDao {
             gameTimestamp AS gameTimestamp,
             addedTimestamp AS addedTimestamp
         FROM bot_games
-        ORDER BY gameTimestamp DESC
+        ORDER BY addedTimestamp DESC, gameTimestamp DESC
         """
     )
     suspend fun getAllForListByGameTime(): List<ListRow>

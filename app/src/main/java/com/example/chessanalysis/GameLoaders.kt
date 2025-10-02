@@ -76,7 +76,7 @@ object GameLoaders {
 
     suspend fun loadLichess(username: String, max: Int = 20): List<GameHeader> =
         withContext(Dispatchers.IO) {
-            Log.d(TAG, "Loading Lichess games for user: $username")
+            Log.d(TAG, "Loading $max latest Lichess games for user: $username")
 
             // Попытка NDJSON (pgnInJson)
             val ndUrl =
@@ -161,7 +161,7 @@ object GameLoaders {
 
     suspend fun loadChessCom(username: String, max: Int = 20): List<GameHeader> =
         withContext(Dispatchers.IO) {
-            Log.d(TAG, "Loading Chess.com games for user: $username")
+            Log.d(TAG, "Loading $max latest Chess.com games for user: $username")
 
             try {
                 val archReq = Request.Builder()
@@ -178,7 +178,6 @@ object GameLoaders {
                         return@withContext emptyList<GameHeader>()
                     }
 
-                    // Парсим JSON с архивами
                     val archivesJson = runCatching {
                         json.parseToJsonElement(archivesBody).jsonObject
                     }.getOrNull()
@@ -189,67 +188,70 @@ object GameLoaders {
                         return@withContext emptyList()
                     }
 
-                    // Берем последний архив (самые новые игры)
-                    val lastArchiveUrl = archives.lastOrNull()?.jsonPrimitive?.contentOrNull
-                    if (lastArchiveUrl == null) {
-                        Log.e(TAG, "No valid archive URL found")
-                        return@withContext emptyList()
-                    }
+                    // Берём последние несколько архивов, чтобы точно получить max игр
+                    val allGames = mutableListOf<GameHeader>()
+                    val archivesToFetch = archives.takeLast(3) // Берём последние 3 месяца
 
-                    Log.d(TAG, "Fetching games from archive: $lastArchiveUrl")
+                    Log.d(TAG, "Fetching ${archivesToFetch.size} Chess.com archives")
 
-                    val monthReq = Request.Builder()
-                        .url(lastArchiveUrl)
-                        .header("User-Agent", UA)
-                        .build()
+                    for (archiveElement in archivesToFetch.reversed()) { // От новых к старым
+                        val archiveUrl = archiveElement.jsonPrimitive.contentOrNull ?: continue
 
-                    client.newCall(monthReq).execute().use { mr ->
-                        val monthBody = mr.body?.string().orEmpty()
+                        Log.d(TAG, "Fetching archive: $archiveUrl")
 
-                        if (!mr.isSuccessful) {
-                            Log.e(TAG, "Failed to load Chess.com games from archive: ${mr.code}")
-                            return@withContext emptyList<GameHeader>()
-                        }
+                        val monthReq = Request.Builder()
+                            .url(archiveUrl)
+                            .header("User-Agent", UA)
+                            .build()
 
-                        // Парсим JSON с играми
-                        val monthJson = runCatching {
-                            json.parseToJsonElement(monthBody).jsonObject
-                        }.getOrNull()
+                        client.newCall(monthReq).execute().use { mr ->
+                            val monthBody = mr.body?.string().orEmpty()
 
-                        val gamesArray = monthJson?.get("games")?.jsonArray
-                        if (gamesArray == null) {
-                            Log.e(TAG, "No games found in archive response")
-                            return@withContext emptyList()
-                        }
 
-                        Log.d(TAG, "Found ${gamesArray.size} games in Chess.com archive")
 
-                        val gamesList = mutableListOf<GameHeader>()
+                            val monthJson = runCatching {
+                                json.parseToJsonElement(monthBody).jsonObject
+                            }.getOrNull()
 
-                        gamesArray.takeLast(max).forEach { gameElement ->
-                            runCatching {
-                                val gameObj = gameElement.jsonObject
-                                val pgn = gameObj["pgn"]?.jsonPrimitive?.contentOrNull
+                            val gamesArray = monthJson?.get("games")?.jsonArray
 
-                                if (!pgn.isNullOrBlank()) {
-                                    val header = PgnChess.headerFromPgn(pgn)
-                                    val sideToView = determineUserSide(pgn, username)
-                                    gamesList.add(
-                                        header.copy(
-                                            site = Provider.CHESSCOM,
-                                            pgn = pgn,
-                                            sideToView = sideToView
+
+                            Log.d(TAG, "Found ${gamesArray?.size} games in archive")
+
+                            // Добавляем игры из этого архива (от новых к старым)
+                            gamesArray?.reversed()?.forEach { gameElement ->
+                                if (allGames.size >= max) return@forEach // Достигли лимита
+
+                                runCatching {
+                                    val gameObj = gameElement.jsonObject
+                                    val pgn = gameObj["pgn"]?.jsonPrimitive?.contentOrNull
+
+                                    if (!pgn.isNullOrBlank()) {
+                                        val header = PgnChess.headerFromPgn(pgn)
+                                        val sideToView = determineUserSide(pgn, username)
+                                        allGames.add(
+                                            header.copy(
+                                                site = Provider.CHESSCOM,
+                                                pgn = pgn,
+                                                sideToView = sideToView
+                                            )
                                         )
-                                    )
+                                    }
+                                }.onFailure { e ->
+                                    Log.e(TAG, "Error parsing Chess.com game: ${e.message}")
                                 }
-                            }.onFailure { e ->
-                                Log.e(TAG, "Error parsing Chess.com game: ${e.message}")
                             }
                         }
 
-                        Log.d(TAG, "Successfully parsed ${gamesList.size} Chess.com games")
-                        gamesList
+                        // Если уже набрали достаточно игр, можно остановиться
+                        if (allGames.size >= max) {
+                            Log.d(TAG, "Reached max games limit: $max")
+                            break
+                        }
                     }
+
+                    Log.d(TAG, "Successfully loaded ${allGames.size} Chess.com games")
+                    allGames
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Exception loading Chess.com games: ${e.message}", e)

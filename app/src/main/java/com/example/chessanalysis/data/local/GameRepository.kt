@@ -3,6 +3,7 @@
 package com.example.chessanalysis.data.local
 
 import android.content.Context
+import android.util.Log
 import com.example.chessanalysis.FullReport
 import com.example.chessanalysis.GameHeader
 import com.example.chessanalysis.Provider
@@ -16,6 +17,9 @@ class GameRepository(
     private val db: AppDatabase,
     private val json: Json
 ) {
+    companion object {
+        private const val TAG = "GameRepository"
+    }
 
     // ---------------- BOT-игры ----------------
 
@@ -28,6 +32,7 @@ class GameRepository(
     ): String {
         val hash = pgnHash(pgn)
         val timestamp = parseGameTimestamp(pgn, dateIso)
+        Log.d(TAG, "Inserting bot game: $white vs $black, timestamp=$timestamp")
         db.gameDao().insertBotGame(
             BotGameEntity(
                 pgnHash = hash,
@@ -61,10 +66,13 @@ class GameRepository(
     // --------------- Внешние игры (Lichess/Chess.com) ----------------
 
     suspend fun mergeExternal(provider: Provider, incoming: List<GameHeader>): Int {
+        Log.d(TAG, "mergeExternal: provider=$provider, incoming size=${incoming.size}")
+
         var added = 0
         for (gh in incoming) {
             val key = headerKeyFor(provider, gh)
             val existing = db.gameDao().getExternalByKey(key)
+
             if (existing == null) {
                 val gameTimestamp = parseGameTimestamp(gh.pgn ?: "", gh.date)
                 val e = ExternalGameEntity(
@@ -81,7 +89,12 @@ class GameRepository(
                     addedTimestamp = System.currentTimeMillis()
                 )
                 val rowId = db.gameDao().insertExternalIgnore(e)
-                if (rowId != -1L) added++
+                if (rowId != -1L) {
+                    added++
+                    Log.d(TAG, "Added new game: ${gh.white} vs ${gh.black}, date=${gh.date}")
+                } else {
+                    Log.w(TAG, "Failed to insert game (duplicate?): ${gh.white} vs ${gh.black}")
+                }
             } else {
                 // Обновляем до более полного PGN, если он короче/пустой в БД
                 if (gh.pgn != null && (existing.pgn == null || existing.pgn!!.length < gh.pgn!!.length)) {
@@ -98,19 +111,35 @@ class GameRepository(
                             gameTimestamp = gameTimestamp
                         )
                     )
+                    Log.d(TAG, "Updated existing game PGN: ${gh.white} vs ${gh.black}")
+                } else {
+                    Log.d(TAG, "Game already exists (skipped): ${gh.white} vs ${gh.black}")
                 }
             }
         }
+
+        Log.d(TAG, "mergeExternal: added $added new games")
         return added
     }
 
     suspend fun updateExternalPgn(provider: Provider, gh: GameHeader, fullPgn: String) {
         val key = headerKeyFor(provider, gh)
         db.gameDao().updateExternalPgnByKey(key, fullPgn)
+        Log.d(TAG, "Updated PGN for game: ${gh.white} vs ${gh.black}")
     }
 
     suspend fun getAllHeaders(): List<GameHeader> {
         val rows = db.gameDao().getAllForListByGameTime()
+        Log.d(TAG, "getAllHeaders: loaded ${rows.size} games from DB")
+
+        if (rows.isEmpty()) {
+            Log.w(TAG, "No games found in database!")
+            // Проверяем что вообще есть в таблицах
+            val externalCount = db.gameDao().getAllExternal().size
+            val botCount = db.gameDao().getAllBotGames().size
+            Log.d(TAG, "Direct query shows: external=$externalCount, bot=$botCount")
+        }
+
         return rows.map { r ->
             GameHeader(
                 site = when (r.provider) {
@@ -148,19 +177,13 @@ class GameRepository(
                 createdAtMillis = System.currentTimeMillis()
             )
         )
+        Log.d(TAG, "Saved analysis report for game")
     }
 
     // --------------- Ключи и хэши ----------------
 
     fun pgnHash(pgn: String): String = sha256Hex(pgn)
 
-    /**
-     * УНИКАЛЬНЫЙ ключ заголовка для внешних игр.
-     * Раньше использовались только date/white/black/result/eco/opening (что давало коллизии) :contentReference[oaicite:1]{index=1}
-     * Теперь:
-     * 1) Если в PGN есть стабильный внешний ID (lichess/chess.com) — используем его.
-     * 2) Иначе добавляем отпечаток ходов (hash по телу PGN без тегов/результата).
-     */
     fun headerKeyFor(provider: Provider, gh: GameHeader): String {
         val extId = gh.pgn?.let { extractExternalIdFromPgn(it) }
 
@@ -187,7 +210,6 @@ class GameRepository(
         return bytes.joinToString("") { "%02x".format(it) }
     }
 
-    // Ищем внешний ID партии в PGN
     private fun extractExternalIdFromPgn(pgn: String): String? {
         // lichess: ...lichess.org/abcdefgh
         Regex("""\[(?:Site|Link)\s+"[^"]*lichess\.org/([a-zA-Z0-9]{8})""")
@@ -204,7 +226,6 @@ class GameRepository(
         return null
     }
 
-    // Отпечаток ходов: тело PGN без тегов и финального результата, нормализация пробелов
     private fun movesFingerprint(pgn: String?): String {
         if (pgn.isNullOrBlank()) return ""
         val body = pgn
