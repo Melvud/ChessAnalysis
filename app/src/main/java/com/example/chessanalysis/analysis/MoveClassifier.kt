@@ -85,7 +85,12 @@ object MoveClassification {
 
             val lastPositionWinPercentage = positionsWinPercentage[index - 1]
             val positionWinPercentage = positionsWinPercentage[index]
-            val isWhiteMove = index % 2 == 1
+
+            // ФИКС: определяем, кто сделал ход, по FEN позиции ДО хода
+            // fens[index-1] -> "<board> <side> ..."
+            val prevFenParts = fens[index - 1].split(" ")
+            val moverIsWhite = prevFenParts.getOrNull(1) == "w"
+            val isWhiteMove = moverIsWhite
 
             if (isSplendidMove(
                     lastPositionWinPercentage,
@@ -319,14 +324,21 @@ object MoveClassification {
             // Делаем ход
             board.doMove(move)
 
-            // Смотрим есть ли атака на нашу фигуру
-            val isAttacked = board.squareAttackedBy(to, board.sideToMove)
-
-            if (isAttacked == null) return false
+            // Смотрим, есть ли реальные атакующие на нашу фигуру после хода
+            val attackedBy: Any? = board.squareAttackedBy(to, board.sideToMove)
+            val hasAttackers = when (attackedBy) {
+                null -> false
+                is Collection<*> -> attackedBy.isNotEmpty()
+                is Array<*> -> attackedBy.isNotEmpty()
+                is Long -> attackedBy != 0L
+                is Int -> attackedBy != 0
+                else -> true
+            }
+            if (!hasAttackers) return false
 
             // bestLinePvToPlay[0] - это лучший ответ противника (первый ход в PV)
             if (bestLinePvToPlay.isNotEmpty()) {
-                val opponentResponse = bestLinePvToPlay[0]  // <-- ИСПРАВЛЕНО! [0] вместо [1]
+                val opponentResponse = bestLinePvToPlay[0]
                 val responseTo = Square.fromValue(opponentResponse.substring(2, 4).uppercase())
 
                 // Если противник берет нашу фигуру
