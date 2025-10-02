@@ -1,3 +1,5 @@
+// app/src/main/java/com/example/chessanalysis/ui/screens/GamesListScreen.kt
+
 package com.example.chessanalysis.ui.screens
 
 import android.net.Uri
@@ -27,13 +29,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -115,7 +117,6 @@ fun GamesListScreen(
         } catch (_: Throwable) { }
     }
 
-    // Фильтрация
     val filteredItems = remember(items, analyzedGames, selectedFilter, profile) {
         filterGames(items, analyzedGames, selectedFilter, profile, repo)
     }
@@ -172,12 +173,12 @@ fun GamesListScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            // Горизонтальная полоса быстрых фильтров
+            // Быстрые фильтры
             LazyRow(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 items(listOf(
                     GameFilter.ALL,
@@ -189,15 +190,15 @@ fun GamesListScreen(
                     FilterChip(
                         selected = selectedFilter == filter,
                         onClick = { selectedFilter = filter },
-                        label = { Text(filter.label, fontSize = 12.sp) },
+                        label = { Text(filter.label, fontSize = 11.sp) },
                         leadingIcon = if (selectedFilter == filter) {
-                            { Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(16.dp)) }
+                            { Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(14.dp)) }
                         } else null
                     )
                 }
             }
 
-            Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+            Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
 
             PullToRefreshBox(
                 modifier = Modifier.fillMaxSize(),
@@ -240,18 +241,18 @@ fun GamesListScreen(
                             LazyColumn(Modifier.fillMaxSize()) {
                                 itemsIndexed(
                                     filteredItems,
-                                    key = { _, game ->
-                                        "${game.site}_${game.date}_${game.white}_${game.black}"
+                                    key = { idx, game ->
+                                        "${game.site}_${game.date}_${game.white}_${game.black}_$idx"
                                     }
                                 ) { index, game ->
-                                    AnimatedGameCard(
+                                    CompactGameCard(
                                         game = game,
                                         profile = profile,
                                         analyzedReport = analyzedGames[repo.pgnHash(game.pgn.orEmpty())],
                                         index = index,
                                         isAnalyzing = showAnalysis,
                                         onClick = {
-                                            if (showAnalysis) return@AnimatedGameCard
+                                            if (showAnalysis) return@CompactGameCard
                                             scope.launch {
                                                 try {
                                                     val fullPgn = com.example.chessanalysis.GameLoaders
@@ -362,7 +363,6 @@ fun GamesListScreen(
         }
     }
 
-    // Диалог фильтров
     if (showFilterDialog) {
         AlertDialog(
             onDismissRequest = { showFilterDialog = false },
@@ -401,7 +401,6 @@ fun GamesListScreen(
         )
     }
 
-    // Диалог добавления партии
     if (showAddDialog) {
         val contextLocal = LocalContext.current
         val repoLocal = repo
@@ -454,6 +453,287 @@ fun GamesListScreen(
             dismissButton = {
                 TextButton(onClick = { showAddDialog = false }) { Text("Отмена") }
             }
+        )
+    }
+}
+
+@Composable
+private fun CompactGameCard(
+    game: GameHeader,
+    profile: UserProfile,
+    analyzedReport: FullReport?,
+    index: Int,
+    isAnalyzing: Boolean,
+    onClick: () -> Unit
+) {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(index * 30L)
+        visible = true
+    }
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(200)) + slideInVertically(tween(300)) { it / 4 }
+    ) {
+        val mySide: Boolean? = guessMySide(profile, game)
+        val userWon = mySide != null && (
+                (mySide && game.result == "1-0") ||
+                        (!mySide && game.result == "0-1")
+                )
+        val userLost = mySide != null && (
+                (mySide && game.result == "0-1") ||
+                        (!mySide && game.result == "1-0")
+                )
+
+        val isAnalyzed = analyzedReport != null
+
+        var pressed by remember { mutableStateOf(false) }
+        val scale by animateFloatAsState(
+            targetValue = if (pressed) 0.98f else 1f,
+            animationSpec = spring(stiffness = Spring.StiffnessMedium)
+        )
+
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = when {
+                    userWon -> Color(0xFFDFF0D8)
+                    userLost -> Color(0xFFF2DEDE)
+                    else -> MaterialTheme.colorScheme.surface
+                }
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 4.dp)
+                .scale(scale)
+                .clickable(enabled = !isAnalyzing) {
+                    pressed = true
+                    onClick()
+                    pressed = false
+                }
+        ) {
+            val siteName = when (game.site) {
+                Provider.LICHESS -> "Lichess"
+                Provider.CHESSCOM -> "Chess.com"
+                Provider.BOT -> "Bot"
+                null -> ""
+            }
+            val (modeLabel, openingLine) = deriveModeAndOpening(game)
+
+            Column(Modifier.padding(10.dp)) {
+                // Верхняя строка: инфо + бейдж
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        buildAnnotatedString {
+                            withStyle(SpanStyle(fontWeight = FontWeight.Medium, fontSize = 11.sp)) {
+                                append(siteName)
+                            }
+                            if (!game.date.isNullOrBlank()) {
+                                append(" • ")
+                                append(game.date!!)
+                            }
+                            if (modeLabel.isNotBlank()) {
+                                append(" • ")
+                                append(modeLabel)
+                            }
+                        },
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    if (isAnalyzed) {
+                        Box(
+                            modifier = Modifier
+                                .background(
+                                    color = Color(0xFF4CAF50),
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Text(
+                                    "Анализировано",
+                                    color = Color.White,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(6.dp))
+
+                // Игроки
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        UserBubble(name = game.white ?: "W", size = 22.dp)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = playerWithTitle(game.white, game.pgn, isWhite = true),
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Text(
+                        game.result.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        ),
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    )
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        Text(
+                            text = playerWithTitle(game.black, game.pgn, isWhite = false),
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.End
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        UserBubble(name = game.black ?: "B", size = 22.dp)
+                    }
+                }
+
+                if (openingLine.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        openingLine,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                // Статистика (только для анализированных)
+                if (isAnalyzed && analyzedReport != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Divider(
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                        thickness = 0.5.dp
+                    )
+                    Spacer(Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        // Белые
+                        StatColumn(
+                            accuracy = analyzedReport.accuracy.whiteMovesAcc.itera,
+                            performance = analyzedReport.estimatedElo.whiteEst
+                        )
+
+                        Box(
+                            modifier = Modifier
+                                .width(0.5.dp)
+                                .height(40.dp)
+                                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                        )
+
+                        // Черные
+                        StatColumn(
+                            accuracy = analyzedReport.accuracy.blackMovesAcc.itera,
+                            performance = analyzedReport.estimatedElo.blackEst
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatColumn(
+    accuracy: Double,
+    performance: Int?
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "%.1f%%".format(accuracy),
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp
+                ),
+                color = getAccuracyColor(accuracy)
+            )
+            if (performance != null) {
+                Text(
+                    " • %d".format(performance),
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+private fun getAccuracyColor(accuracy: Double): Color {
+    return when {
+        accuracy >= 90 -> Color(0xFF4CAF50)
+        accuracy >= 80 -> Color(0xFF8BC34A)
+        accuracy >= 70 -> Color(0xFFFFC107)
+        accuracy >= 60 -> Color(0xFFFF9800)
+        else -> Color(0xFFF44336)
+    }
+}
+
+@Composable
+private fun UserBubble(
+    name: String,
+    size: androidx.compose.ui.unit.Dp,
+    bg: Color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+    fg: Color = MaterialTheme.colorScheme.primary
+) {
+    val letter = name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(bg),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = letter,
+            color = fg,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+            fontWeight = FontWeight.SemiBold
         )
     }
 }
@@ -556,367 +836,6 @@ private fun filterGames(
     }
 }
 
-// Остальной код AnimatedGameCard, AnimatedAnalyzedBadge и т.д. остается без изменений
-// (используйте код из предыдущего ответа)
-
-@Composable
-private fun AnimatedGameCard(
-    game: GameHeader,
-    profile: UserProfile,
-    analyzedReport: FullReport?,
-    index: Int,
-    isAnalyzing: Boolean,
-    onClick: () -> Unit
-) {
-    // Анимация появления карточки
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(index * 50L)
-        visible = true
-    }
-
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(tween(300)) + slideInVertically(tween(400)) { it / 4 }
-    ) {
-        val mySide: Boolean? = guessMySide(profile, game)
-        val userWon = mySide != null && (
-                (mySide && game.result == "1-0") ||
-                        (!mySide && game.result == "0-1")
-                )
-        val userLost = mySide != null && (
-                (mySide && game.result == "0-1") ||
-                        (!mySide && game.result == "1-0")
-                )
-
-        val isAnalyzed = analyzedReport != null
-
-        // Анимация масштаба при клике
-        var pressed by remember { mutableStateOf(false) }
-        val scale by animateFloatAsState(
-            targetValue = if (pressed) 0.97f else 1f,
-            animationSpec = spring(stiffness = Spring.StiffnessMedium)
-        )
-
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = when {
-                    userWon -> Color(0xFFDFF0D8)
-                    userLost -> Color(0xFFF2DEDE)
-                    else -> MaterialTheme.colorScheme.surface
-                }
-            ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-                .scale(scale)
-                .clickable(enabled = !isAnalyzing) {
-                    pressed = true
-                    onClick()
-                    pressed = false
-                }
-        ) {
-            Box {
-                Column(Modifier.padding(14.dp)) {
-                    // Верхняя строка с информацией о партии
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        val siteName = when (game.site) {
-                            Provider.LICHESS -> "Lichess"
-                            Provider.CHESSCOM -> "Chess.com"
-                            Provider.BOT -> "Bot"
-                            null -> ""
-                        }
-
-                        val (modeLabel, openingLine) = deriveModeAndOpening(game)
-
-                        Text(
-                            buildAnnotatedString {
-                                withStyle(SpanStyle(fontWeight = FontWeight.Medium)) {
-                                    append(siteName)
-                                }
-                                if (!game.date.isNullOrBlank()) {
-                                    append("  •  ")
-                                    append(game.date!!)
-                                }
-                                if (modeLabel.isNotBlank()) {
-                                    append("  •  ")
-                                    append(modeLabel)
-                                }
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f)
-                        )
-
-                        // Индикатор анализа
-                        if (isAnalyzed) {
-                            AnimatedAnalyzedBadge()
-                        }
-                    }
-
-                    Spacer(Modifier.height(10.dp))
-
-                    // Игроки
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            UserBubble(name = game.white ?: "W", size = 28.dp)
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                text = playerWithTitle(game.white, game.pgn, isWhite = true),
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-                        Text(
-                            game.result.orEmpty(),
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                        )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = playerWithTitle(game.black, game.pgn, isWhite = false),
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            UserBubble(name = game.black ?: "B", size = 28.dp)
-                        }
-                    }
-
-                    // Статистика анализа
-                    if (isAnalyzed && analyzedReport != null) {
-                        Spacer(Modifier.height(12.dp))
-                        Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-                        Spacer(Modifier.height(12.dp))
-
-                        AnimatedAnalysisStats(
-                            whiteAccuracy = analyzedReport.accuracy.whiteMovesAcc.itera,
-                            blackAccuracy = analyzedReport.accuracy.blackMovesAcc.itera,
-                            whitePerformance = analyzedReport.estimatedElo.whiteEst,
-                            blackPerformance = analyzedReport.estimatedElo.blackEst
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AnimatedAnalyzedBadge() {
-    val infiniteTransition = rememberInfiniteTransition(label = "badge")
-    val alpha by infiniteTransition.animateFloat(
-        initialValue = 0.7f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "alpha"
-    )
-
-    Box(
-        modifier = Modifier
-            .background(
-                brush = Brush.horizontalGradient(
-                    colors = listOf(
-                        Color(0xFF4CAF50).copy(alpha = alpha),
-                        Color(0xFF66BB6A).copy(alpha = alpha)
-                    )
-                ),
-                shape = RoundedCornerShape(12.dp)
-            )
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Icon(
-                Icons.Default.CheckCircle,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(16.dp)
-            )
-            Text(
-                "Анализ",
-                color = Color.White,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-        }
-    }
-}
-
-@Composable
-private fun AnimatedAnalysisStats(
-    whiteAccuracy: Double,
-    blackAccuracy: Double,
-    whitePerformance: Int?,
-    blackPerformance: Int?
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceEvenly
-    ) {
-        // Белые
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.weight(1f)
-        ) {
-            Text(
-                "Точность",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-            )
-            Spacer(Modifier.height(4.dp))
-            AnimatedCounter(
-                value = whiteAccuracy,
-                suffix = "%",
-                color = getAccuracyColor(whiteAccuracy)
-            )
-
-            if (whitePerformance != null) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Перформанс",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                )
-                Spacer(Modifier.height(4.dp))
-                AnimatedCounter(
-                    value = whitePerformance.toDouble(),
-                    suffix = "",
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-        }
-
-        // Разделитель
-        Box(
-            modifier = Modifier
-                .width(1.dp)
-                .height(80.dp)
-                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-        )
-
-        // Черные
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.weight(1f)
-        ) {
-            Text(
-                "Точность",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-            )
-            Spacer(Modifier.height(4.dp))
-            AnimatedCounter(
-                value = blackAccuracy,
-                suffix = "%",
-                color = getAccuracyColor(blackAccuracy)
-            )
-
-            if (blackPerformance != null) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Перформанс",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                )
-                Spacer(Modifier.height(4.dp))
-                AnimatedCounter(
-                    value = blackPerformance.toDouble(),
-                    suffix = "",
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun AnimatedCounter(
-    value: Double,
-    suffix: String,
-    color: Color
-) {
-    var displayValue by remember { mutableStateOf(0.0) }
-
-    LaunchedEffect(value) {
-        val start = displayValue
-        val duration = 800
-        val startTime = System.currentTimeMillis()
-
-        while (displayValue != value) {
-            val elapsed = System.currentTimeMillis() - startTime
-            val progress = (elapsed.toFloat() / duration).coerceIn(0f, 1f)
-
-            displayValue = start + (value - start) * progress
-
-            if (progress >= 1f) {
-                displayValue = value
-                break
-            }
-
-            kotlinx.coroutines.delay(16)
-        }
-    }
-
-    Text(
-        text = if (suffix == "%") {
-            "%.1f$suffix".format(displayValue)
-        } else {
-            "%.0f$suffix".format(displayValue)
-        },
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold,
-        color = color
-    )
-}
-
-private fun getAccuracyColor(accuracy: Double): Color {
-    return when {
-        accuracy >= 90 -> Color(0xFF4CAF50) // Зеленый
-        accuracy >= 80 -> Color(0xFF8BC34A) // Светло-зеленый
-        accuracy >= 70 -> Color(0xFFFFC107) // Желтый
-        accuracy >= 60 -> Color(0xFFFF9800) // Оранжевый
-        else -> Color(0xFFF44336) // Красный
-    }
-}
-
-/* ======================== ВСПОМОГАТЕЛЬНОЕ ======================== */
-
-@Composable
-private fun UserBubble(
-    name: String,
-    size: androidx.compose.ui.unit.Dp,
-    bg: Color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-    fg: Color = MaterialTheme.colorScheme.primary
-) {
-    val letter = name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
-    Box(
-        modifier = Modifier
-            .size(size)
-            .clip(CircleShape)
-            .background(bg),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = letter,
-            color = fg,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold
-        )
-    }
-}
-
 private fun guessMySide(profile: UserProfile, game: GameHeader): Boolean? {
     val me = listOf(
         profile.nickname.trim(),
@@ -947,16 +866,16 @@ private fun playerWithTitle(name: String?, pgn: String?, isWhite: Boolean): Stri
 private fun deriveModeAndOpening(game: GameHeader): Pair<String, String> {
     val pgn = game.pgn
     var mode = ""
-    var openingStr = game.opening ?: game.eco ?: ""
+    var openingLine = game.opening ?: game.eco ?: ""
 
     if (!pgn.isNullOrBlank()) {
         val tc = Regex("""\[TimeControl\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
         mode = tc?.let { mapTimeControlToMode(it) } ?: ""
 
-        if (openingStr.isBlank()) {
+        if (openingLine.isBlank()) {
             val op = Regex("""\[Opening\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
             val eco = Regex("""\[ECO\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
-            openingStr = when {
+            openingLine = when {
                 !op.isNullOrBlank() && !eco.isNullOrBlank() -> "$op ($eco)"
                 !op.isNullOrBlank() -> op
                 !eco.isNullOrBlank() -> eco
@@ -965,7 +884,7 @@ private fun deriveModeAndOpening(game: GameHeader): Pair<String, String> {
         }
     }
 
-    return mode to (openingStr ?: "")
+    return mode to (openingLine ?: "")
 }
 
 private fun mapTimeControlToMode(tc: String): String {

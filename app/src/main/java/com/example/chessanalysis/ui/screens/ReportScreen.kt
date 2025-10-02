@@ -289,7 +289,7 @@ private fun ClassificationTable(report: FullReport) {
                     Text(" ", modifier = Modifier.width(36.dp))
                 }
             }
-            Divider(color = DividerC)
+            HorizontalDivider(Modifier, DividerDefaults.Thickness, color = DividerC)
 
             rows.forEach { (label, icon, moveClass) ->
                 Row(
@@ -323,7 +323,7 @@ private fun ClassificationTable(report: FullReport) {
                         modifier = Modifier.width(36.dp)
                     )
                 }
-                Divider(color = DividerC)
+                HorizontalDivider(Modifier, DividerDefaults.Thickness, color = DividerC)
             }
         }
     }
