@@ -1,3 +1,5 @@
+// app/src/main/java/com/example/chessanalysis/data/local/GameRepository.kt
+
 package com.example.chessanalysis.data.local
 
 import android.content.Context
@@ -7,13 +9,13 @@ import com.example.chessanalysis.Provider
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.security.MessageDigest
+import java.text.SimpleDateFormat
+import java.util.*
 
 class GameRepository(
     private val db: AppDatabase,
     private val json: Json
 ) {
-
-    /* ===================== BOT ===================== */
 
     suspend fun insertBotGame(
         pgn: String,
@@ -23,6 +25,7 @@ class GameRepository(
         dateIso: String
     ): String {
         val hash = pgnHash(pgn)
+        val timestamp = parseGameTimestamp(pgn, dateIso)
         db.gameDao().insertBotGame(
             BotGameEntity(
                 pgnHash = hash,
@@ -30,7 +33,9 @@ class GameRepository(
                 white = white,
                 black = black,
                 result = result,
-                dateIso = dateIso
+                dateIso = dateIso,
+                gameTimestamp = timestamp,
+                addedTimestamp = System.currentTimeMillis()
             )
         )
         return hash
@@ -51,16 +56,13 @@ class GameRepository(
             )
         }
 
-
-    /* ===================== EXTERNAL (LICHESS/CHESSCOM) ===================== */
-
-    /** Добавляем только новые внешние партии. Ничего не удаляем. Возвращаем число добавленных. */
     suspend fun mergeExternal(provider: Provider, incoming: List<GameHeader>): Int {
         var added = 0
         for (gh in incoming) {
             val key = headerKeyFor(provider, gh)
             val existing = db.gameDao().getExternalByKey(key)
             if (existing == null) {
+                val gameTimestamp = parseGameTimestamp(gh.pgn ?: "", gh.date)
                 val e = ExternalGameEntity(
                     headerKey = key,
                     provider = provider.name,
@@ -70,13 +72,15 @@ class GameRepository(
                     black = gh.black,
                     opening = gh.opening,
                     eco = gh.eco,
-                    pgn = gh.pgn // если уже полный — запишется, если усечён — потом дозакачаем
+                    pgn = gh.pgn,
+                    gameTimestamp = gameTimestamp,
+                    addedTimestamp = System.currentTimeMillis()
                 )
                 val rowId = db.gameDao().insertExternalIgnore(e)
                 if (rowId != -1L) added++
             } else {
-                // мягко обновим только улучшенные поля (например, появился полный PGN)
                 if (gh.pgn != null && (existing.pgn == null || existing.pgn!!.length < gh.pgn!!.length)) {
+                    val gameTimestamp = parseGameTimestamp(gh.pgn!!, gh.date)
                     db.gameDao().updateExternal(
                         existing.copy(
                             dateIso = gh.date ?: existing.dateIso,
@@ -85,7 +89,8 @@ class GameRepository(
                             black = gh.black ?: existing.black,
                             opening = gh.opening ?: existing.opening,
                             eco = gh.eco ?: existing.eco,
-                            pgn = gh.pgn
+                            pgn = gh.pgn,
+                            gameTimestamp = gameTimestamp
                         )
                     )
                 }
@@ -94,18 +99,13 @@ class GameRepository(
         return added
     }
 
-    /** Когда получили полный PGN при открытии партии — сохраняем. */
     suspend fun updateExternalPgn(provider: Provider, gh: GameHeader, fullPgn: String) {
         val key = headerKeyFor(provider, gh)
         db.gameDao().updateExternalPgnByKey(key, fullPgn)
     }
 
-    /**
-     * Единый источник для экрана со списком: новейшие добавленные — в самом начале.
-     * Используем UNION-запрос с сортировкой по addedAt DESC (см. GameDao.getAllForListOrderByAdded()).
-     */
     suspend fun getAllHeaders(): List<GameHeader> {
-        val rows = db.gameDao().getAllForListOrderByAdded()
+        val rows = db.gameDao().getAllForListByGameTime()
         return rows.map { r ->
             GameHeader(
                 site = when (r.provider) {
@@ -126,9 +126,6 @@ class GameRepository(
         }
     }
 
-
-    /* ===================== REPORT CACHE ===================== */
-
     suspend fun getCachedReport(pgn: String): FullReport? {
         val hash = pgnHash(pgn)
         val row = db.gameDao().getReportByHash(hash) ?: return null
@@ -145,9 +142,6 @@ class GameRepository(
             )
         )
     }
-
-
-    /* ===================== KEYS / HASH ===================== */
 
     fun pgnHash(pgn: String): String = sha256Hex(pgn)
 
@@ -169,8 +163,51 @@ class GameRepository(
         val bytes = md.digest(s.toByteArray(Charsets.UTF_8))
         return bytes.joinToString("") { "%02x".format(it) }
     }
+
+    private fun parseGameTimestamp(pgn: String, dateIso: String?): Long {
+        try {
+            // Попытка парсинга UTCDate и UTCTime из PGN
+            val utcDateMatch = Regex("""\[UTCDate\s+"([^"]+)"]""").find(pgn)
+            val utcTimeMatch = Regex("""\[UTCTime\s+"([^"]+)"]""").find(pgn)
+
+            if (utcDateMatch != null && utcTimeMatch != null) {
+                val date = utcDateMatch.groupValues[1]
+                val time = utcTimeMatch.groupValues[1]
+                val format = SimpleDateFormat("yyyy.MM.dd HH:mm:ss", Locale.US)
+                format.timeZone = TimeZone.getTimeZone("UTC")
+                return format.parse("$date $time")?.time ?: System.currentTimeMillis()
+            }
+
+            // Fallback на Date tag
+            val dateMatch = Regex("""\[Date\s+"([^"]+)"]""").find(pgn)
+            if (dateMatch != null) {
+                val date = dateMatch.groupValues[1]
+                val format = SimpleDateFormat("yyyy.MM.dd", Locale.US)
+                return format.parse(date)?.time ?: System.currentTimeMillis()
+            }
+
+            // Fallback на переданный dateIso
+            if (!dateIso.isNullOrBlank()) {
+                val formats = listOf(
+                    SimpleDateFormat("yyyy.MM.dd", Locale.US),
+                    SimpleDateFormat("yyyy-MM-dd", Locale.US),
+                    SimpleDateFormat("dd.MM.yyyy", Locale.US)
+                )
+                for (format in formats) {
+                    try {
+                        return format.parse(dateIso)?.time ?: continue
+                    } catch (_: Exception) {
+                        continue
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            // Игнорируем ошибки парсинга
+        }
+
+        return System.currentTimeMillis()
+    }
 }
 
-/* Утилита для получения инстанса репозитория из Android-кода */
 fun Context.gameRepository(json: Json): GameRepository =
     GameRepository(AppDatabase.getInstance(this), json)

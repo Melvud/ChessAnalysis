@@ -1,3 +1,5 @@
+// app/src/main/java/com/example/chessanalysis/data/local/GameDao.kt
+
 package com.example.chessanalysis.data.local
 
 import androidx.room.Dao
@@ -9,17 +11,11 @@ import androidx.room.Update
 @Dao
 interface GameDao {
 
-    /* ===================== BOT ===================== */
-
     @Insert
     suspend fun insertBotGame(entity: BotGameEntity): Long
 
-    // Сами по себе боты теперь нам не нужны — используем общий UNION-запрос ниже.
     @Query("SELECT * FROM bot_games ORDER BY id DESC")
     suspend fun getAllBotGames(): List<BotGameEntity>
-
-
-    /* ===================== EXTERNAL ===================== */
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertExternalIgnore(entity: ExternalGameEntity): Long
@@ -33,12 +29,8 @@ interface GameDao {
     @Query("UPDATE external_games SET pgn = :pgn WHERE headerKey = :key")
     suspend fun updateExternalPgnByKey(key: String, pgn: String)
 
-    // Как и для ботов — отдельная выборка может пригодиться, но для списка используем UNION.
     @Query("SELECT * FROM external_games ORDER BY rowid DESC")
     suspend fun getAllExternal(): List<ExternalGameEntity>
-
-
-    /* ===================== REPORT CACHE ===================== */
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertReport(entity: ReportCacheEntity)
@@ -46,14 +38,6 @@ interface GameDao {
     @Query("SELECT * FROM report_cache WHERE pgnHash = :hash LIMIT 1")
     suspend fun getReportByHash(hash: String): ReportCacheEntity?
 
-
-    /* ===================== ОБЪЕДИНЁННАЯ ЛЕНТА ===================== */
-
-    /**
-     * Универсальная строка для общей ленты партий.
-     * provider: 'LICHESS' | 'CHESSCOM' | 'BOT'
-     * addedAt: порядок добавления (rowid/id), DESC = новейшие сверху.
-     */
     data class ListRow(
         val provider: String,
         val dateIso: String?,
@@ -63,15 +47,10 @@ interface GameDao {
         val opening: String?,
         val eco: String?,
         val pgn: String?,
-        val addedAt: Long
+        val gameTimestamp: Long,
+        val addedTimestamp: Long
     )
 
-    /**
-     * Берём все внешние и все бот-партии, добавляем техническое поле addedAt и сортируем так,
-     * чтобы самые новые (по факту вставки в БД) были первыми.
-     *
-     * Важно: типы и порядок столбцов в обоих SELECT должны совпадать.
-     */
     @Query(
         """
         SELECT 
@@ -83,7 +62,8 @@ interface GameDao {
             opening  AS opening,
             eco      AS eco,
             pgn      AS pgn,
-            rowid    AS addedAt
+            gameTimestamp AS gameTimestamp,
+            addedTimestamp AS addedTimestamp
         FROM external_games
         UNION ALL
         SELECT 
@@ -95,10 +75,11 @@ interface GameDao {
             NULL     AS opening,
             NULL     AS eco,
             pgn      AS pgn,
-            id       AS addedAt
+            gameTimestamp AS gameTimestamp,
+            addedTimestamp AS addedTimestamp
         FROM bot_games
-        ORDER BY addedAt DESC
+        ORDER BY gameTimestamp DESC
         """
     )
-    suspend fun getAllForListOrderByAdded(): List<ListRow>
+    suspend fun getAllForListByGameTime(): List<ListRow>
 }
