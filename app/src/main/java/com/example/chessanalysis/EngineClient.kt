@@ -191,7 +191,12 @@ object EngineClient {
         val etaMs: Long? = null,
         val stage: String? = null,
         val startedAt: Long? = null,
-        val updatedAt: Long? = null
+        val updatedAt: Long? = null,
+
+        // ---- Новые поля для «живой» доски ----
+        val fen: String? = null,
+        val currentSan: String? = null,
+        val currentClass: String? = null
     )
 
     @Serializable
@@ -469,7 +474,7 @@ object EngineClient {
         var s = src.replace("\uFEFF", "").replace("\r\n", "\n").replace("\r", "\n")
         s = s.replace("0-0-0", "O-O-O").replace("0-0", "O-O")
         s = s.replace("1–0", "1-0").replace("0–1", "0-1")
-            .replace("½–½", "1/2-1/2").replace("½-½", "1/2-1/2")
+        s = s.replace("½–½", "1/2-1/2").replace("½-½", "1/2-1/2")
         s = s.replace(Regex("""\{\[%clk [^}]+\]\}"""), "")
         s = s.replace(Regex("""\s\$\d+"""), "")
         s = buildString(s.length) { for (ch in s) if (ch == '\n' || ch == '\t' || ch.code >= 32) append(ch) }

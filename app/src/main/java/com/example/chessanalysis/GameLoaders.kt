@@ -78,6 +78,7 @@ object GameLoaders {
         withContext(Dispatchers.IO) {
             Log.d(TAG, "Loading Lichess games for user: $username")
 
+            // Попытка NDJSON (pgnInJson)
             val ndUrl =
                 "https://lichess.org/api/games/user/${username.trim()}?max=$max&perfType=blitz,bullet,rapid,classical&analysed=false&clocks=false&evals=false&opening=true&pgnInJson=true"
             val ndReq = Request.Builder()
@@ -86,6 +87,7 @@ object GameLoaders {
                 .header("User-Agent", UA)
                 .build()
 
+            var ndResult: List<GameHeader>? = null
             client.newCall(ndReq).execute().use { resp ->
                 if (resp.isSuccessful) {
                     val ctype = resp.header("Content-Type").orEmpty()
@@ -113,11 +115,15 @@ object GameLoaders {
                             }
                         }
                         Log.d(TAG, "Loaded ${list.size} games from Lichess")
-                        if (list.isNotEmpty()) return@use list
+                        if (list.isNotEmpty()) {
+                            ndResult = list
+                        }
                     }
                 }
             }
+            if (ndResult != null) return@withContext ndResult!!
 
+            // Fallback: обычный PGN-дамп
             val pgnUrl =
                 "https://lichess.org/api/games/user/${username.trim()}?max=$max&moves=true&opening=true"
             val pgnReq = Request.Builder()

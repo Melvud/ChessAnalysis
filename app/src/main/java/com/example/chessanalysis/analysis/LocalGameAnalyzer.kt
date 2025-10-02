@@ -44,7 +44,7 @@ class LocalGameAnalyzer(
         val startFen = parsed.firstOrNull()?.beforeFen
             ?: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
-        notify(progressId, 0, total, "preparing", startedAt, onProgress)
+        notify(progressId, 0, total, "preparing", startedAt, onProgress, null, null, null, null)
 
         // 1) Evaluate all positions (including start)
         val positions = mutableListOf<EngineClient.PositionDTO>()
@@ -53,17 +53,50 @@ class LocalGameAnalyzer(
         val pos0 = EngineClient.evaluateFenDetailed(startFen, depth, multiPv, null)
         positions.add(pos0)
 
-        notify(progressId, 0, total, "evaluating", startedAt, onProgress)
+        notify(progressId, 0, total, "evaluating", startedAt, onProgress, null, null, null, null)
 
         // Evaluate each move's resulting position
         for (i in 0 until total) {
+            val beforeFen = if (i == 0) startFen else parsed[i - 1].afterFen
             val afterFen = parsed[i].afterFen
+            val san = parsed[i].san
+            val uci = parsed[i].uci
+
+            val posBefore = positions.last()
             val posAfter = EngineClient.evaluateFenDetailed(afterFen, depth, multiPv, null)
             positions.add(posAfter)
-            notify(progressId, i + 1, total, "evaluating", startedAt, onProgress)
+
+            // Классификация текущего хода (упрощённо, но стабильно)
+            val cls = classifyMove(
+                posBefore = posBefore,
+                posAfter = posAfter,
+                bestMove = posBefore.bestMove,
+                played = uci
+            )
+
+            // Обновляем прогресс + живые поля для доски
+            val doneNow = i + 1
+            val elapsed = System.currentTimeMillis() - startedAt
+            val eta = if (doneNow > 0) {
+                val perMove = elapsed / doneNow.toDouble()
+                ((total - doneNow) * perMove).toLong()
+            } else null
+
+            notify(
+                id = progressId,
+                done = doneNow,
+                total = total,
+                stage = "evaluating",
+                startedAt = startedAt,
+                onProgress = onProgress,
+                etaMs = eta,
+                fen = afterFen,
+                san = san,
+                cls = cls.name
+            )
         }
 
-        notify(progressId, total, total, "postprocess", startedAt, onProgress)
+        notify(progressId, total, total, "postprocess", startedAt, onProgress, 0L, null, null, null)
 
         // 2) Build PositionEval list with PROPER CP/MATE INVERSION
         val fens = listOf(startFen) + parsed.map { it.afterFen }
@@ -142,7 +175,7 @@ class LocalGameAnalyzer(
         val hdr = header ?: tagsHeader
         val est = EstimateElo.computeEstimatedElo(positionEvals, hdr.whiteElo, hdr.blackElo)
 
-        notify(progressId, total, total, "done", startedAt, onProgress)
+        notify(progressId, total, total, "done", startedAt, onProgress, 0L, null, null, null)
 
         FullReport(
             header = hdr,
@@ -292,7 +325,11 @@ class LocalGameAnalyzer(
         total: Int,
         stage: String,
         startedAt: Long,
-        onProgress: (EngineClient.ProgressSnapshot) -> Unit
+        onProgress: (EngineClient.ProgressSnapshot) -> Unit,
+        etaMs: Long? = null,
+        fen: String? = null,
+        san: String? = null,
+        cls: String? = null
     ) {
         val percent = if (total > 0) done.toDouble() * 100.0 / total else null
         val snap = EngineClient.ProgressSnapshot(
@@ -300,10 +337,13 @@ class LocalGameAnalyzer(
             total = total,
             done = done,
             percent = percent,
-            etaMs = null,
+            etaMs = etaMs,
             stage = stage,
             startedAt = startedAt,
-            updatedAt = System.currentTimeMillis()
+            updatedAt = System.currentTimeMillis(),
+            fen = fen,
+            currentSan = san,
+            currentClass = cls
         )
         onProgress(snap)
         progressHook(id, percent, stage)
@@ -373,11 +413,9 @@ class LocalGameAnalyzer(
 
             // Forced BEST if played move matches engine best
             val bestFromPos = classifiedPositions[i].bestMove ?: ""
-            if (bestFromPos.isNotEmpty()) {
-                val playedUci = normUci(uci)
-                val bestUci = normUci(bestFromPos)
-                if (playedUci == bestUci) cls = "BEST"
-            }
+            val playedUci = normUci(uci)
+            val bestUci = normUci(bestFromPos)
+            if (bestFromPos.isNotEmpty() && playedUci == bestUci) cls = "BEST"
 
             MoveReport(
                 san = san,

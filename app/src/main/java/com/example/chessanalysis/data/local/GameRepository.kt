@@ -17,6 +17,8 @@ class GameRepository(
     private val json: Json
 ) {
 
+    // ---------------- BOT-игры ----------------
+
     suspend fun insertBotGame(
         pgn: String,
         white: String,
@@ -56,6 +58,8 @@ class GameRepository(
             )
         }
 
+    // --------------- Внешние игры (Lichess/Chess.com) ----------------
+
     suspend fun mergeExternal(provider: Provider, incoming: List<GameHeader>): Int {
         var added = 0
         for (gh in incoming) {
@@ -79,6 +83,7 @@ class GameRepository(
                 val rowId = db.gameDao().insertExternalIgnore(e)
                 if (rowId != -1L) added++
             } else {
+                // Обновляем до более полного PGN, если он короче/пустой в БД
                 if (gh.pgn != null && (existing.pgn == null || existing.pgn!!.length < gh.pgn!!.length)) {
                     val gameTimestamp = parseGameTimestamp(gh.pgn!!, gh.date)
                     db.gameDao().updateExternal(
@@ -126,6 +131,8 @@ class GameRepository(
         }
     }
 
+    // --------------- Кэш отчётов ----------------
+
     suspend fun getCachedReport(pgn: String): FullReport? {
         val hash = pgnHash(pgn)
         val row = db.gameDao().getReportByHash(hash) ?: return null
@@ -143,17 +150,33 @@ class GameRepository(
         )
     }
 
+    // --------------- Ключи и хэши ----------------
+
     fun pgnHash(pgn: String): String = sha256Hex(pgn)
 
+    /**
+     * УНИКАЛЬНЫЙ ключ заголовка для внешних игр.
+     * Раньше использовались только date/white/black/result/eco/opening (что давало коллизии) :contentReference[oaicite:1]{index=1}
+     * Теперь:
+     * 1) Если в PGN есть стабильный внешний ID (lichess/chess.com) — используем его.
+     * 2) Иначе добавляем отпечаток ходов (hash по телу PGN без тегов/результата).
+     */
     fun headerKeyFor(provider: Provider, gh: GameHeader): String {
-        val raw = buildString {
-            append(provider.name).append('|')
-            append(gh.date ?: "").append('|')
-            append(gh.white ?: "").append('|')
-            append(gh.black ?: "").append('|')
-            append(gh.result ?: "").append('|')
-            append(gh.eco ?: "").append('|')
-            append(gh.opening ?: "")
+        val extId = gh.pgn?.let { extractExternalIdFromPgn(it) }
+
+        val raw = if (!extId.isNullOrBlank()) {
+            "${provider.name}|id:$extId"
+        } else {
+            buildString {
+                append(provider.name).append('|')
+                append(gh.date ?: "").append('|')
+                append(gh.white ?: "").append('|')
+                append(gh.black ?: "").append('|')
+                append(gh.result ?: "").append('|')
+                append(gh.eco ?: "").append('|')
+                append(gh.opening ?: "").append('|')
+                append(movesFingerprint(gh.pgn))
+            }
         }
         return sha256Hex(raw)
     }
@@ -164,9 +187,41 @@ class GameRepository(
         return bytes.joinToString("") { "%02x".format(it) }
     }
 
+    // Ищем внешний ID партии в PGN
+    private fun extractExternalIdFromPgn(pgn: String): String? {
+        // lichess: ...lichess.org/abcdefgh
+        Regex("""\[(?:Site|Link)\s+"[^"]*lichess\.org/([a-zA-Z0-9]{8})""")
+            .find(pgn)?.groupValues?.getOrNull(1)?.let { return it }
+
+        // chess.com: ...chess.com/game/live/1234567890 или game/daily/123...
+        Regex("""\[(?:Site|Link)\s+"https?://(?:www\.)?chess\.com/game/(?:live|daily)/(\d+)""")
+            .find(pgn)?.groupValues?.getOrNull(1)?.let { return it }
+
+        // Иногда бывает отдельный тег GameId
+        Regex("""\[GameId\s+"([^"]+)"]""")
+            .find(pgn)?.groupValues?.getOrNull(1)?.let { return it }
+
+        return null
+    }
+
+    // Отпечаток ходов: тело PGN без тегов и финального результата, нормализация пробелов
+    private fun movesFingerprint(pgn: String?): String {
+        if (pgn.isNullOrBlank()) return ""
+        val body = pgn
+            .lines()
+            .filterNot { it.trimStart().startsWith('[') }
+            .joinToString("\n")
+            .replace(Regex("""\s+(1-0|0-1|1/2-1/2|\*)\s*$"""), "")
+            .trim()
+        val normalized = body.replace(Regex("""\s+"""), " ")
+        return sha256Hex(normalized)
+    }
+
+    // --------------- Вспомогательное: время партии ----------------
+
     private fun parseGameTimestamp(pgn: String, dateIso: String?): Long {
         try {
-            // Попытка парсинга UTCDate и UTCTime из PGN
+            // Попытка UTCDate/UTCTime
             val utcDateMatch = Regex("""\[UTCDate\s+"([^"]+)"]""").find(pgn)
             val utcTimeMatch = Regex("""\[UTCTime\s+"([^"]+)"]""").find(pgn)
 
@@ -178,7 +233,7 @@ class GameRepository(
                 return format.parse("$date $time")?.time ?: System.currentTimeMillis()
             }
 
-            // Fallback на Date tag
+            // Fallback на Date
             val dateMatch = Regex("""\[Date\s+"([^"]+)"]""").find(pgn)
             if (dateMatch != null) {
                 val date = dateMatch.groupValues[1]
@@ -204,10 +259,10 @@ class GameRepository(
         } catch (_: Exception) {
             // Игнорируем ошибки парсинга
         }
-
         return System.currentTimeMillis()
     }
 }
 
+// Удобный экстеншен
 fun Context.gameRepository(json: Json): GameRepository =
     GameRepository(AppDatabase.getInstance(this), json)
