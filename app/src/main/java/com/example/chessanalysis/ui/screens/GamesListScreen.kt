@@ -4,53 +4,28 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Divider
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
@@ -58,8 +33,8 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.chessanalysis.EngineClient.analyzeGameByPgnWithProgress
 import com.example.chessanalysis.FullReport
 import com.example.chessanalysis.GameHeader
@@ -87,6 +62,9 @@ fun GamesListScreen(
     var items by remember { mutableStateOf<List<GameHeader>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
 
+    // Кэш проанализированных партий
+    var analyzedGames by remember { mutableStateOf<Map<String, FullReport>>(emptyMap()) }
+
     var showAnalysis by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(0f) }
     var stage by remember { mutableStateOf("Подготовка…") }
@@ -94,7 +72,6 @@ fun GamesListScreen(
     var total by remember { mutableStateOf(0) }
     var etaMs by remember { mutableStateOf<Long?>(null) }
 
-    // Добавление партии
     var showAddDialog by remember { mutableStateOf(false) }
     var pastedPgn by remember { mutableStateOf("") }
 
@@ -108,9 +85,19 @@ fun GamesListScreen(
 
     suspend fun loadFromLocal() {
         items = repo.getAllHeaders()
+        // Проверяем, какие партии проанализированы
+        val analyzed = mutableMapOf<String, FullReport>()
+        items.forEach { game ->
+            game.pgn?.let { pgn ->
+                repo.getCachedReport(pgn)?.let { report ->
+                    val hash = repo.pgnHash(pgn)
+                    analyzed[hash] = report
+                }
+            }
+        }
+        analyzedGames = analyzed
     }
 
-    /** Только добавляем новые из сети в локальное хранилище. */
     suspend fun syncWithRemote() {
         try {
             val lichessList = if (profile.lichessUsername.isNotEmpty())
@@ -121,10 +108,9 @@ fun GamesListScreen(
                 com.example.chessanalysis.GameLoaders.loadChessCom(profile.chessUsername)
             else emptyList()
 
-            // Мердж «только добавление»
             repo.mergeExternal(Provider.LICHESS, lichessList)
             repo.mergeExternal(Provider.CHESSCOM, chessList)
-        } catch (_: Throwable) { /* оффлайн/ошибка сети — пропускаем */ }
+        } catch (_: Throwable) { }
     }
 
     LaunchedEffect(profile) {
@@ -137,7 +123,6 @@ fun GamesListScreen(
 
     val pullState = rememberPullToRefreshState()
 
-    // Пикер файла .pgn
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -199,155 +184,79 @@ fun GamesListScreen(
                     }
                     else -> {
                         LazyColumn(Modifier.fillMaxSize()) {
-                            items(items) { game ->
-                                val mySide: Boolean? = guessMySide(profile, game)
-                                val userWon = mySide != null && (
-                                        (mySide && game.result == "1-0") ||
-                                                (!mySide && game.result == "0-1")
-                                        )
-                                val userLost = mySide != null && (
-                                        (mySide && game.result == "0-1") ||
-                                                (!mySide && game.result == "1-0")
-                                        )
+                            itemsIndexed(items, key = { _, game ->
+                                "${game.site}_${game.date}_${game.white}_${game.black}"
+                            }) { index, game ->
+                                AnimatedGameCard(
+                                    game = game,
+                                    profile = profile,
+                                    analyzedReport = analyzedGames[repo.pgnHash(game.pgn.orEmpty())],
+                                    index = index,
+                                    isAnalyzing = showAnalysis,
+                                    onClick = {
+                                        if (showAnalysis) return@AnimatedGameCard
+                                        scope.launch {
+                                            try {
+                                                val fullPgn = com.example.chessanalysis.GameLoaders
+                                                    .ensureFullPgn(game)
+                                                    .ifBlank { game.pgn.orEmpty() }
 
-                                val cardColor = when {
-                                    userWon -> Color(0xFFDFF0D8)
-                                    userLost -> Color(0xFFF2DEDE)
-                                    else -> MaterialTheme.colorScheme.surface
-                                }
-
-                                Card(
-                                    colors = CardDefaults.cardColors(containerColor = cardColor),
-                                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                                        .clickable(enabled = !showAnalysis) {
-                                            if (showAnalysis) return@clickable
-                                            scope.launch {
-                                                try {
-                                                    val fullPgn = com.example.chessanalysis.GameLoaders
-                                                        .ensureFullPgn(game)
-                                                        .ifBlank { game.pgn.orEmpty() }
-
-                                                    if (fullPgn.isBlank()) {
-                                                        Toast.makeText(context, "PGN не найден", Toast.LENGTH_SHORT).show()
-                                                        return@launch
-                                                    }
-
-                                                    if (game.site == Provider.LICHESS || game.site == Provider.CHESSCOM) {
-                                                        repo.updateExternalPgn(game.site, game, fullPgn)
-                                                    }
-
-                                                    val cached = repo.getCachedReport(fullPgn)
-                                                    if (cached != null) {
-                                                        onOpenReport(cached)
-                                                        return@launch
-                                                    }
-
-                                                    showAnalysis = true
-                                                    stage = "Ожидание сервера…"
-                                                    progress = 0.05f
-                                                    done = 0
-                                                    total = 0
-                                                    etaMs = null
-
-                                                    val header = runCatching { PgnChess.headerFromPgn(fullPgn) }.getOrNull()
-                                                    val report = analyzeGameByPgnWithProgress(
-                                                        pgn = fullPgn,
-                                                        depth = 16,
-                                                        multiPv = 3,
-                                                        header = header
-                                                    ) { snap ->
-                                                        total = snap.total
-                                                        done = snap.done
-                                                        stage = when (snap.stage) {
-                                                            "queued"      -> "В очереди…"
-                                                            "preparing"   -> "Подготовка…"
-                                                            "evaluating"  -> "Анализ позиций…"
-                                                            "postprocess" -> "Постобработка…"
-                                                            "done"        -> "Готово"
-                                                            else          -> "Анализ…"
-                                                        }
-                                                        if (snap.total > 0) {
-                                                            progress = (snap.done.toFloat() / snap.total.toFloat()).coerceIn(0f, 1f)
-                                                        }
-                                                        etaMs = snap.etaMs
-                                                    }
-
-                                                    repo.saveReport(fullPgn, report)
-                                                    showAnalysis = false
-                                                    onOpenReport(report)
-                                                } catch (t: Throwable) {
-                                                    showAnalysis = false
-                                                    Toast.makeText(context, "Ошибка анализа: ${t.message}", Toast.LENGTH_LONG).show()
+                                                if (fullPgn.isBlank()) {
+                                                    Toast.makeText(context, "PGN не найден", Toast.LENGTH_SHORT).show()
+                                                    return@launch
                                                 }
+
+                                                if (game.site == Provider.LICHESS || game.site == Provider.CHESSCOM) {
+                                                    repo.updateExternalPgn(game.site, game, fullPgn)
+                                                }
+
+                                                val cached = repo.getCachedReport(fullPgn)
+                                                if (cached != null) {
+                                                    onOpenReport(cached)
+                                                    return@launch
+                                                }
+
+                                                showAnalysis = true
+                                                stage = "Ожидание сервера…"
+                                                progress = 0.05f
+                                                done = 0
+                                                total = 0
+                                                etaMs = null
+
+                                                val header = runCatching { PgnChess.headerFromPgn(fullPgn) }.getOrNull()
+                                                val report = analyzeGameByPgnWithProgress(
+                                                    pgn = fullPgn,
+                                                    depth = 16,
+                                                    multiPv = 3,
+                                                    header = header
+                                                ) { snap ->
+                                                    total = snap.total
+                                                    done = snap.done
+                                                    stage = when (snap.stage) {
+                                                        "queued"      -> "В очереди…"
+                                                        "preparing"   -> "Подготовка…"
+                                                        "evaluating"  -> "Анализ позиций…"
+                                                        "postprocess" -> "Постобработка…"
+                                                        "done"        -> "Готово"
+                                                        else          -> "Анализ…"
+                                                    }
+                                                    if (snap.total > 0) {
+                                                        progress = (snap.done.toFloat() / snap.total.toFloat()).coerceIn(0f, 1f)
+                                                    }
+                                                    etaMs = snap.etaMs
+                                                }
+
+                                                repo.saveReport(fullPgn, report)
+                                                showAnalysis = false
+                                                loadFromLocal() // Обновляем список после анализа
+                                                onOpenReport(report)
+                                            } catch (t: Throwable) {
+                                                showAnalysis = false
+                                                Toast.makeText(context, "Ошибка анализа: ${t.message}", Toast.LENGTH_LONG).show()
                                             }
-                                        }
-                                ) {
-                                    Column(Modifier.padding(14.dp)) {
-                                        val siteName = when (game.site) {
-                                            Provider.LICHESS -> "Lichess"
-                                            Provider.CHESSCOM -> "Chess.com"
-                                            Provider.BOT -> "Bot"
-                                            null -> ""
-                                        }
-
-                                        val (modeLabel, openingLine) = deriveModeAndOpening(game)
-
-                                        Text(
-                                            buildAnnotatedString {
-                                                withStyle(SpanStyle(fontWeight = FontWeight.Medium)) {
-                                                    append(siteName)
-                                                }
-                                                if (!game.date.isNullOrBlank()) {
-                                                    append("  •  ")
-                                                    append(game.date!!)
-                                                }
-                                                if (modeLabel.isNotBlank()) {
-                                                    append("  •  ")
-                                                    append(modeLabel)
-                                                }
-                                            },
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-
-                                        Spacer(Modifier.height(10.dp))
-
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                UserBubble(name = game.white ?: "W", size = 28.dp)
-                                                Spacer(Modifier.width(8.dp))
-                                                Text(
-                                                    text = playerWithTitle(game.white, game.pgn, isWhite = true),
-                                                    style = MaterialTheme.typography.bodyMedium
-                                                )
-                                            }
-                                            Text(
-                                                game.result.orEmpty(),
-                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                                            )
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Text(
-                                                    text = playerWithTitle(game.black, game.pgn, isWhite = false),
-                                                    style = MaterialTheme.typography.bodyMedium
-                                                )
-                                                Spacer(Modifier.width(8.dp))
-                                                UserBubble(name = game.black ?: "B", size = 28.dp)
-                                            }
-                                        }
-
-                                        if (openingLine.isNotBlank()) {
-                                            Spacer(Modifier.height(8.dp))
-                                            Text(openingLine, style = MaterialTheme.typography.bodySmall)
                                         }
                                     }
-                                }
+                                )
                             }
                         }
                     }
@@ -396,7 +305,6 @@ fun GamesListScreen(
     }
 
     if (showAddDialog) {
-        // 🔧 Вынесли обращения к CompositionLocal из onClick наружу:
         val contextLocal = LocalContext.current
         val repoLocal = repo
         val profileLocal = profile
@@ -419,7 +327,6 @@ fun GamesListScreen(
                     )
                     Spacer(Modifier.height(8.dp))
                     TextButton(onClick = {
-                        // выбор файла
                         filePicker.launch(arrayOf("application/x-chess-pgn", "text/plain", "text/*"))
                     }) {
                         Text("Выбрать файл .pgn")
@@ -435,7 +342,6 @@ fun GamesListScreen(
                         }
                         runCatching {
                             addManualGame(pgn = pastedPgn, profile = profileLocal, repo = repoLocal)
-                            // после добавления — перезагрузим список
                             items = repoLocal.getAllHeaders()
                         }.onSuccess {
                             pastedPgn = ""
@@ -454,12 +360,344 @@ fun GamesListScreen(
     }
 }
 
+@Composable
+private fun AnimatedGameCard(
+    game: GameHeader,
+    profile: UserProfile,
+    analyzedReport: FullReport?,
+    index: Int,
+    isAnalyzing: Boolean,
+    onClick: () -> Unit
+) {
+    // Анимация появления карточки
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(index * 50L)
+        visible = true
+    }
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(300)) + slideInVertically(tween(400)) { it / 4 }
+    ) {
+        val mySide: Boolean? = guessMySide(profile, game)
+        val userWon = mySide != null && (
+                (mySide && game.result == "1-0") ||
+                        (!mySide && game.result == "0-1")
+                )
+        val userLost = mySide != null && (
+                (mySide && game.result == "0-1") ||
+                        (!mySide && game.result == "1-0")
+                )
+
+        val isAnalyzed = analyzedReport != null
+
+        // Анимация масштаба при клике
+        var pressed by remember { mutableStateOf(false) }
+        val scale by animateFloatAsState(
+            targetValue = if (pressed) 0.97f else 1f,
+            animationSpec = spring(stiffness = Spring.StiffnessMedium)
+        )
+
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = when {
+                    userWon -> Color(0xFFDFF0D8)
+                    userLost -> Color(0xFFF2DEDE)
+                    else -> MaterialTheme.colorScheme.surface
+                }
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .scale(scale)
+                .clickable(enabled = !isAnalyzing) {
+                    pressed = true
+                    onClick()
+                    pressed = false
+                }
+        ) {
+            Box {
+                Column(Modifier.padding(14.dp)) {
+                    // Верхняя строка с информацией о партии
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val siteName = when (game.site) {
+                            Provider.LICHESS -> "Lichess"
+                            Provider.CHESSCOM -> "Chess.com"
+                            Provider.BOT -> "Bot"
+                            null -> ""
+                        }
+
+                        val (modeLabel, openingLine) = deriveModeAndOpening(game)
+
+                        Text(
+                            buildAnnotatedString {
+                                withStyle(SpanStyle(fontWeight = FontWeight.Medium)) {
+                                    append(siteName)
+                                }
+                                if (!game.date.isNullOrBlank()) {
+                                    append("  •  ")
+                                    append(game.date!!)
+                                }
+                                if (modeLabel.isNotBlank()) {
+                                    append("  •  ")
+                                    append(modeLabel)
+                                }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        // Индикатор анализа
+                        if (isAnalyzed) {
+                            AnimatedAnalyzedBadge()
+                        }
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+
+                    // Игроки
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            UserBubble(name = game.white ?: "W", size = 28.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = playerWithTitle(game.white, game.pgn, isWhite = true),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        Text(
+                            game.result.orEmpty(),
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = playerWithTitle(game.black, game.pgn, isWhite = false),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            UserBubble(name = game.black ?: "B", size = 28.dp)
+                        }
+                    }
+
+                    // Статистика анализа
+                    if (isAnalyzed && analyzedReport != null) {
+                        Spacer(Modifier.height(12.dp))
+                        Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                        Spacer(Modifier.height(12.dp))
+
+                        AnimatedAnalysisStats(
+                            whiteAccuracy = analyzedReport.accuracy.whiteMovesAcc.itera,
+                            blackAccuracy = analyzedReport.accuracy.blackMovesAcc.itera,
+                            whitePerformance = analyzedReport.estimatedElo.whiteEst,
+                            blackPerformance = analyzedReport.estimatedElo.blackEst
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AnimatedAnalyzedBadge() {
+    val infiniteTransition = rememberInfiniteTransition(label = "badge")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.7f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "alpha"
+    )
+
+    Box(
+        modifier = Modifier
+            .background(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(
+                        Color(0xFF4CAF50).copy(alpha = alpha),
+                        Color(0xFF66BB6A).copy(alpha = alpha)
+                    )
+                ),
+                shape = RoundedCornerShape(12.dp)
+            )
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                Icons.Default.CheckCircle,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(16.dp)
+            )
+            Text(
+                "Анализ",
+                color = Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
+
+@Composable
+private fun AnimatedAnalysisStats(
+    whiteAccuracy: Double,
+    blackAccuracy: Double,
+    whitePerformance: Int?,
+    blackPerformance: Int?
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly
+    ) {
+        // Белые
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.weight(1f)
+        ) {
+            Text(
+                "Точность",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+            Spacer(Modifier.height(4.dp))
+            AnimatedCounter(
+                value = whiteAccuracy,
+                suffix = "%",
+                color = getAccuracyColor(whiteAccuracy)
+            )
+
+            if (whitePerformance != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Перформанс",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+                Spacer(Modifier.height(4.dp))
+                AnimatedCounter(
+                    value = whitePerformance.toDouble(),
+                    suffix = "",
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+
+        // Разделитель
+        Box(
+            modifier = Modifier
+                .width(1.dp)
+                .height(80.dp)
+                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+        )
+
+        // Черные
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.weight(1f)
+        ) {
+            Text(
+                "Точность",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+            Spacer(Modifier.height(4.dp))
+            AnimatedCounter(
+                value = blackAccuracy,
+                suffix = "%",
+                color = getAccuracyColor(blackAccuracy)
+            )
+
+            if (blackPerformance != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Перформанс",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+                Spacer(Modifier.height(4.dp))
+                AnimatedCounter(
+                    value = blackPerformance.toDouble(),
+                    suffix = "",
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AnimatedCounter(
+    value: Double,
+    suffix: String,
+    color: Color
+) {
+    var displayValue by remember { mutableStateOf(0.0) }
+
+    LaunchedEffect(value) {
+        val start = displayValue
+        val duration = 800
+        val startTime = System.currentTimeMillis()
+
+        while (displayValue != value) {
+            val elapsed = System.currentTimeMillis() - startTime
+            val progress = (elapsed.toFloat() / duration).coerceIn(0f, 1f)
+
+            displayValue = start + (value - start) * progress
+
+            if (progress >= 1f) {
+                displayValue = value
+                break
+            }
+
+            kotlinx.coroutines.delay(16)
+        }
+    }
+
+    Text(
+        text = if (suffix == "%") {
+            "%.1f$suffix".format(displayValue)
+        } else {
+            "%.0f$suffix".format(displayValue)
+        },
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = color
+    )
+}
+
+private fun getAccuracyColor(accuracy: Double): Color {
+    return when {
+        accuracy >= 90 -> Color(0xFF4CAF50) // Зеленый
+        accuracy >= 80 -> Color(0xFF8BC34A) // Светло-зеленый
+        accuracy >= 70 -> Color(0xFFFFC107) // Желтый
+        accuracy >= 60 -> Color(0xFFFF9800) // Оранжевый
+        else -> Color(0xFFF44336) // Красный
+    }
+}
+
 /* ======================== ВСПОМОГАТЕЛЬНОЕ ======================== */
 
 @Composable
 private fun UserBubble(
     name: String,
-    size: Dp,
+    size: androidx.compose.ui.unit.Dp,
     bg: Color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
     fg: Color = MaterialTheme.colorScheme.primary
 ) {
@@ -480,9 +718,6 @@ private fun UserBubble(
     }
 }
 
-/**
- * Пытаемся определить сторону пользователя, чтобы подсветить результат.
- */
 private fun guessMySide(profile: UserProfile, game: GameHeader): Boolean? {
     val me = listOf(
         profile.nickname.trim(),
@@ -501,7 +736,6 @@ private fun guessMySide(profile: UserProfile, game: GameHeader): Boolean? {
     }
 }
 
-/** Берём из PGN теги WhiteTitle/BlackTitle, если полный PGN уже есть локально. */
 private fun playerWithTitle(name: String?, pgn: String?, isWhite: Boolean): String {
     val base = name.orEmpty()
     if (pgn.isNullOrBlank()) return base
@@ -511,7 +745,6 @@ private fun playerWithTitle(name: String?, pgn: String?, isWhite: Boolean): Stri
     return if (!title.isNullOrBlank()) "$base (${title.uppercase()})" else base
 }
 
-/** Возвращает метку режима (bullet/blitz/rapid/…) и строку дебюта (Opening / ECO), если они есть в PGN. */
 private fun deriveModeAndOpening(game: GameHeader): Pair<String, String> {
     val pgn = game.pgn
     var mode = ""
@@ -546,9 +779,6 @@ private fun mapTimeControlToMode(tc: String): String {
     }
 }
 
-/**
- * Добавляет в локальную БД партию из полного PGN.
- */
 private suspend fun addManualGame(
     pgn: String,
     profile: UserProfile,
@@ -557,7 +787,7 @@ private suspend fun addManualGame(
     val header = runCatching { PgnChess.headerFromPgn(pgn) }.getOrNull()
 
     val gh = GameHeader(
-        site = Provider.LICHESS, // используем как стабильный ключ-провайдер
+        site = Provider.LICHESS,
         pgn = pgn,
         white = header?.white ?: Regex("""\[White\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1),
         black = header?.black ?: Regex("""\[Black\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1),
