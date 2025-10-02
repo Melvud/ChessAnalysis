@@ -8,6 +8,8 @@ import com.github.bhlangonijr.chesslib.Piece
 import com.github.bhlangonijr.chesslib.Square
 import com.github.bhlangonijr.chesslib.move.Move
 import android.content.Context
+import com.github.bhlangonijr.chesslib.PieceType
+import com.github.bhlangonijr.chesslib.Side
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.decodeFromString
@@ -303,61 +305,89 @@ object MoveClassification {
         bestLinePvToPlay: List<String>
     ): Boolean {
         try {
+            if (bestLinePvToPlay.isEmpty()) return false
+
             val board = Board()
             board.loadFromFen(fen)
 
-            val from = Square.fromValue(playedMove.substring(0, 2).uppercase())
-            val to = Square.fromValue(playedMove.substring(2, 4).uppercase())
+            val whiteToPlay = board.sideToMove == Side.WHITE
+            val startingMaterialDiff = getMaterialDifference(board)
 
-            val move = Move(from, to)
-            val movingPiece = board.getPiece(from)
-            val capturedPiece = board.getPiece(to)
-
-            // Не жертва если берем фигуру
-            if (capturedPiece != Piece.NONE) return false
-
-            // Пешки не считаются жертвой
-            if (movingPiece == Piece.WHITE_PAWN || movingPiece == Piece.BLACK_PAWN) {
-                return false
+            // Играем последовательность: сыгранный ход + продолжение
+            var moves = listOf(playedMove) + bestLinePvToPlay
+            if (moves.size % 2 == 1) {
+                moves = moves.dropLast(1)
             }
 
-            // Делаем ход
-            board.doMove(move)
+            var nonCapturingMovesTemp = 1
+            val capturedPieces = mutableMapOf<Side, MutableList<PieceType>>(
+                Side.WHITE to mutableListOf(),
+                Side.BLACK to mutableListOf()
+            )
 
-            // Смотрим, есть ли реальные атакующие на нашу фигуру после хода
-            val attackedBy: Any? = board.squareAttackedBy(to, board.sideToMove)
-            val hasAttackers = when (attackedBy) {
-                null -> false
-                is Collection<*> -> attackedBy.isNotEmpty()
-                is Array<*> -> attackedBy.isNotEmpty()
-                is Long -> attackedBy != 0L
-                is Int -> attackedBy != 0
-                else -> true
-            }
-            if (!hasAttackers) return false
+            for (moveUci in moves) {
+                try {
+                    val from = Square.fromValue(moveUci.substring(0, 2).uppercase())
+                    val to = Square.fromValue(moveUci.substring(2, 4).uppercase())
+                    val move = Move(from, to)
 
-            // bestLinePvToPlay[0] - это лучший ответ противника (первый ход в PV)
-            if (bestLinePvToPlay.isNotEmpty()) {
-                val opponentResponse = bestLinePvToPlay[0]
-                val responseTo = Square.fromValue(opponentResponse.substring(2, 4).uppercase())
+                    val mover = board.getPiece(from)
+                    val captured = board.getPiece(to)
 
-                // Если противник берет нашу фигуру
-                if (responseTo == to) {
-                    val responseFrom = Square.fromValue(opponentResponse.substring(0, 2).uppercase())
-                    val respondingPiece = board.getPiece(responseFrom)
+                    board.doMove(move)
 
-                    val movingValue = getPieceValue(movingPiece)
-                    val respondingValue = getPieceValue(respondingPiece)
-
-                    // Если можно забрать равноценной или меньшей фигурой - не жертва
-                    if (respondingValue <= movingValue) return false
+                    if (captured != Piece.NONE) {
+                        val side = if (mover.pieceSide == Side.WHITE) Side.WHITE else Side.BLACK
+                        capturedPieces[side]?.add(captured.pieceType)
+                        nonCapturingMovesTemp = 1
+                    } else {
+                        nonCapturingMovesTemp--
+                        if (nonCapturingMovesTemp < 0) break
+                    }
+                } catch (e: Exception) {
+                    return false
                 }
             }
 
-            return true
+            // Убираем взаимные размены одинаковых фигур
+            val whiteCaptured = capturedPieces[Side.WHITE] ?: mutableListOf()
+            val blackCaptured = capturedPieces[Side.BLACK] ?: mutableListOf()
+
+            for (pieceType in whiteCaptured.toList()) {
+                if (blackCaptured.contains(pieceType)) {
+                    blackCaptured.remove(pieceType)
+                    whiteCaptured.remove(pieceType)
+                }
+            }
+
+            // Если только пешки и разница <= 1 - не жертва
+            if (kotlin.math.abs(whiteCaptured.size - blackCaptured.size) <= 1 &&
+                (whiteCaptured + blackCaptured).all { it == PieceType.PAWN }
+            ) {
+                return false
+            }
+
+            val endingMaterialDiff = getMaterialDifference(board)
+            val materialDiff = endingMaterialDiff - startingMaterialDiff
+            val materialDiffPlayerRelative = if (whiteToPlay) materialDiff else -materialDiff
+
+            return materialDiffPlayerRelative < 0
+
         } catch (e: Exception) {
             return false
         }
+    }
+
+    private fun getMaterialDifference(board: Board): Int {
+        var diff = 0
+        for (sq in Square.values()) {
+            val piece = board.getPiece(sq)
+            if (piece == Piece.NONE) continue
+
+            val value = getPieceValue(piece)
+            diff += if (piece.pieceSide == Side.WHITE) value else -value
+        }
+        return diff
     }
 
     private fun isSimplePieceRecapture(
