@@ -27,11 +27,17 @@ import com.example.chessanalysis.ui.screens.ReportScreen
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+// ✅ добавлено: Firebase для проверки сохранённой сессии
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import kotlin.coroutines.resumeWithException
+
 @Composable
 fun AppRoot() {
     val rootNav = rememberNavController()
 
-    var isBootLoading by rememberSaveable { mutableStateOf(false) }
+    // Флаги/состояния приложения
+    var isBootLoading by rememberSaveable { mutableStateOf(true) }   // ← был false, теперь true: показываем сплэш, пока проверяем сессию
     var currentUserProfile by rememberSaveable { mutableStateOf<UserProfile?>(null) }
     var games by rememberSaveable { mutableStateOf<List<GameHeader>>(emptyList()) }
     var openingFens by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
@@ -43,7 +49,35 @@ fun AppRoot() {
         }
     }
 
-    LaunchedEffect(Unit) { isBootLoading = false }
+    // 🔑 Проверяем сохранённую сессию Firebase при старте приложения
+    LaunchedEffect(Unit) {
+        runCatching {
+            val auth = FirebaseAuth.getInstance()
+            val user = auth.currentUser
+            if (user != null) {
+                // Пользователь уже авторизован — подтягиваем профиль из Firestore и идём на home
+                val doc = FirebaseFirestore.getInstance()
+                    .collection("users")
+                    .document(user.uid)
+                    .get()
+                    .await() // см. ниже: вспомогательный suspend-расширитель
+
+                val profile = UserProfile(
+                    email = user.email ?: "",
+                    nickname = doc.getString("nickname") ?: "",
+                    lichessUsername = doc.getString("lichessUsername") ?: "",
+                    chessUsername = doc.getString("chessUsername") ?: ""
+                )
+                currentUserProfile = profile
+            } else {
+                currentUserProfile = null
+            }
+        }.onFailure {
+            // В случае ошибки просто показываем экран логина
+            currentUserProfile = null
+        }
+        isBootLoading = false
+    }
 
     if (isBootLoading) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -95,6 +129,8 @@ fun AppRoot() {
                         currentUserProfile = updated
                     },
                     onLogout = {
+                        // 👇 корректно выходим из аккаунта и чистим локальный стейт
+                        FirebaseAuth.getInstance().signOut()
                         currentUserProfile = null
                         games = emptyList()
                         openingFens = emptySet()
@@ -119,6 +155,7 @@ fun AppRoot() {
                         rootNav.popBackStack()
                     },
                     onLogout = {
+                        FirebaseAuth.getInstance().signOut()
                         currentUserProfile = null
                         games = emptyList()
                         openingFens = emptySet()
@@ -178,6 +215,16 @@ fun AppRoot() {
                     onBack = { rootNav.popBackStack() }
                 )
             }
+        }
+    }
+}
+
+// Вспомогательный suspend для Task → await (без внешних зависимостей корутин-плейсхолдер)
+private suspend fun <T> com.google.android.gms.tasks.Task<T>.await(): T {
+    return kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+        addOnCompleteListener { task ->
+            if (task.isSuccessful) cont.resume(task.result, null)
+            else cont.resumeWithException(task.exception ?: RuntimeException("Task failed"))
         }
     }
 }
