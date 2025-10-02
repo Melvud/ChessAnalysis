@@ -256,7 +256,7 @@ fun GamesListScreen(
                                                     val report = analyzeGameByPgnWithProgress(
                                                         pgn = fullPgn,
                                                         depth = 16,
-                                                        multiPv = 2,
+                                                        multiPv = 3,
                                                         header = header
                                                     ) { snap ->
                                                         total = snap.total

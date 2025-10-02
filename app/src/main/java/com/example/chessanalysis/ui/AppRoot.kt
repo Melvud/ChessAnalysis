@@ -19,15 +19,12 @@ import androidx.navigation.compose.rememberNavController
 import com.example.chessanalysis.FullReport
 import com.example.chessanalysis.GameHeader
 import com.example.chessanalysis.ui.screens.GameReportScreen
-import com.example.chessanalysis.ui.screens.GamesListScreen
 import com.example.chessanalysis.ui.screens.HomeWithBottomNav
 import com.example.chessanalysis.ui.screens.LoginScreen
 import com.example.chessanalysis.ui.screens.ProfileScreen
 import com.example.chessanalysis.ui.screens.ReportScreen
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-
-// ✅ добавлено: Firebase для проверки сохранённой сессии
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlin.coroutines.resumeWithException
@@ -36,46 +33,37 @@ import kotlin.coroutines.resumeWithException
 fun AppRoot() {
     val rootNav = rememberNavController()
 
-    // Флаги/состояния приложения
-    var isBootLoading by rememberSaveable { mutableStateOf(true) }   // ← был false, теперь true: показываем сплэш, пока проверяем сессию
+    var isBootLoading by rememberSaveable { mutableStateOf(true) }
     var currentUserProfile by rememberSaveable { mutableStateOf<UserProfile?>(null) }
     var games by rememberSaveable { mutableStateOf<List<GameHeader>>(emptyList()) }
     var openingFens by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
 
     val json = remember {
-        Json {
-            ignoreUnknownKeys = true
-            explicitNulls = false
-        }
+        Json { ignoreUnknownKeys = true; explicitNulls = false }
     }
 
-    // 🔑 Проверяем сохранённую сессию Firebase при старте приложения
+    // Проверяем сохранённую сессию Firebase при старте
     LaunchedEffect(Unit) {
         runCatching {
             val auth = FirebaseAuth.getInstance()
             val user = auth.currentUser
             if (user != null) {
-                // Пользователь уже авторизован — подтягиваем профиль из Firestore и идём на home
                 val doc = FirebaseFirestore.getInstance()
                     .collection("users")
                     .document(user.uid)
                     .get()
-                    .await() // см. ниже: вспомогательный suspend-расширитель
+                    .await()
 
-                val profile = UserProfile(
+                currentUserProfile = UserProfile(
                     email = user.email ?: "",
                     nickname = doc.getString("nickname") ?: "",
                     lichessUsername = doc.getString("lichessUsername") ?: "",
                     chessUsername = doc.getString("chessUsername") ?: ""
                 )
-                currentUserProfile = profile
             } else {
                 currentUserProfile = null
             }
-        }.onFailure {
-            // В случае ошибки просто показываем экран логина
-            currentUserProfile = null
-        }
+        }.onFailure { currentUserProfile = null }
         isBootLoading = false
     }
 
@@ -95,20 +83,16 @@ fun AppRoot() {
             LoginScreen(
                 onLoginSuccess = { profile ->
                     currentUserProfile = profile
-                    rootNav.navigate("home") {
-                        popUpTo("login") { inclusive = true }
-                    }
+                    rootNav.navigate("home") { popUpTo("login") { inclusive = true } }
                 },
                 onRegisterSuccess = { profile ->
                     currentUserProfile = profile
-                    rootNav.navigate("home") {
-                        popUpTo("login") { inclusive = true }
-                    }
+                    rootNav.navigate("home") { popUpTo("login") { inclusive = true } }
                 }
             )
         }
 
-        // --- HOME c нижним меню ---
+        // --- HOME ---
         composable("home") {
             val profile = currentUserProfile
             if (profile == null) {
@@ -120,16 +104,13 @@ fun AppRoot() {
                     openingFens = openingFens,
                     onOpenReport = { report ->
                         val packed = json.encodeToString(report)
-                        rootNav.currentBackStackEntry
-                            ?.savedStateHandle
-                            ?.set("reportJson", packed)
+                        rootNav.currentBackStackEntry?.savedStateHandle?.set("reportJson", packed)
                         rootNav.navigate("reportSummary")
                     },
                     onSaveProfile = { updated ->
                         currentUserProfile = updated
                     },
                     onLogout = {
-                        // 👇 корректно выходим из аккаунта и чистим локальный стейт
                         FirebaseAuth.getInstance().signOut()
                         currentUserProfile = null
                         games = emptyList()
@@ -142,7 +123,7 @@ fun AppRoot() {
             }
         }
 
-        // --- profile (в обход нижнего меню; оставляем на всякий случай) ---
+        // --- PROFILE ---
         composable("profile") {
             val profile = currentUserProfile
             if (profile == null) {
@@ -159,9 +140,7 @@ fun AppRoot() {
                         currentUserProfile = null
                         games = emptyList()
                         openingFens = emptySet()
-                        rootNav.navigate("login") {
-                            popUpTo("home") { inclusive = true }
-                        }
+                        rootNav.navigate("login") { popUpTo("home") { inclusive = true } }
                     },
                     onBack = { rootNav.popBackStack() }
                 )
@@ -187,16 +166,14 @@ fun AppRoot() {
                     onBack = { rootNav.popBackStack() },
                     onOpenBoard = {
                         val packed = json.encodeToString(report)
-                        rootNav.currentBackStackEntry
-                            ?.savedStateHandle
-                            ?.set("reportJson", packed)
+                        rootNav.currentBackStackEntry?.savedStateHandle?.set("reportJson", packed)
                         rootNav.navigate("reportBoard")
                     }
                 )
             }
         }
 
-        // --- REPORT (full board) ---
+        // --- REPORT (board) ---
         composable("reportBoard") {
             val reportJson = readArg(
                 current = rootNav.currentBackStackEntry,
@@ -219,7 +196,8 @@ fun AppRoot() {
     }
 }
 
-// Вспомогательный suspend для Task → await (без внешних зависимостей корутин-плейсхолдер)
+// --- утилиты ---
+
 private suspend fun <T> com.google.android.gms.tasks.Task<T>.await(): T {
     return kotlinx.coroutines.suspendCancellableCoroutine { cont ->
         addOnCompleteListener { task ->

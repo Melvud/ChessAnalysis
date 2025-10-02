@@ -1,3 +1,5 @@
+import com.android.build.api.dsl.AndroidResources
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -19,7 +21,8 @@ android {
         versionCode = 1
         versionName = "1.0"
     }
-    aaptOptions {
+    fun AndroidResources.() {
+        @Suppress("DEPRECATION")
         noCompress("wasm", "nnue")
     }
     buildTypes {
@@ -127,4 +130,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.1")
     implementation("com.patrykandpatrick.vico:compose-m3:2.1.3")
     implementation("com.patrykandpatrick.vico:core:2.1.3")
+    implementation("androidx.datastore:datastore-preferences:1.0.0")
+    implementation("androidx.datastore:datastore-preferences-core:1.0.0")
 }

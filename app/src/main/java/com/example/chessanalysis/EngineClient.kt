@@ -4,6 +4,7 @@ package com.example.chessanalysis
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.SharedPreferences
 import android.util.Log
 import com.example.chessanalysis.engine.EngineWebView
 import com.example.chessanalysis.analysis.LocalGameAnalyzer
@@ -34,6 +35,11 @@ object EngineClient {
     private val _engineMode = MutableStateFlow(EngineMode.SERVER)
     val engineMode: StateFlow<EngineMode> = _engineMode
 
+    // ====== Персист настроек движка ======
+    private const val PREFS_NAME = "engine_prefs"
+    private const val KEY_ENGINE_MODE = "engine_mode"
+    private var prefs: SharedPreferences? = null
+
     fun setAndroidContext(ctx: Context) {
         Log.d(TAG, "Setting Android context")
         val appContext = ctx.applicationContext
@@ -41,18 +47,38 @@ object EngineClient {
 
         // Инициализация openings для классификации
         Openings.init(appContext)
+
+        // Инициализация префсов и восстановление режима
+        if (prefs == null) {
+            prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val saved = when (prefs?.getString(KEY_ENGINE_MODE, EngineMode.LOCAL.name)) {
+                EngineMode.SERVER.name -> EngineMode.SERVER
+                else -> EngineMode.LOCAL // по умолчанию — локальный
+            }
+            _engineMode.value = saved
+            if (saved == EngineMode.LOCAL) {
+                // Поднимаем локальный движок, если нужно
+                runCatching { LocalEngine.ensureStarted() }
+                    .onFailure { e -> Log.e(TAG, "Failed to start local engine on restore", e) }
+            } else {
+                LocalEngine.stop()
+            }
+        }
     }
 
     suspend fun setEngineMode(mode: EngineMode) = withContext(Dispatchers.Main) {
         Log.d(TAG, "Setting engine mode to: $mode")
         _engineMode.value = mode
+
+        // Сохраняем выбор
+        prefs?.edit()?.putString(KEY_ENGINE_MODE, mode.name)?.apply()
+
         if (mode == EngineMode.LOCAL) {
-            runCatching {
-                LocalEngine.ensureStarted()
-            }.onFailure { e ->
-                Log.e(TAG, "Failed to start local engine", e)
-                throw e
-            }
+            runCatching { LocalEngine.ensureStarted() }
+                .onFailure { e ->
+                    Log.e(TAG, "Failed to start local engine", e)
+                    throw e
+                }
         } else {
             LocalEngine.stop()
         }
