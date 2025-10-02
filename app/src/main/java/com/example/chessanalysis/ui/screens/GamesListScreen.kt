@@ -5,7 +5,6 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -20,10 +19,33 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material3.*
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
-import androidx.compose.runtime.*
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,6 +58,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.chessanalysis.EngineClient.analyzeGameByPgnWithProgress
@@ -85,7 +108,7 @@ fun GamesListScreen(
     var reAnalyzeMultiPv by remember { mutableStateOf(3) }
     var reAnalyzeTargetPgn by remember { mutableStateOf<String?>(null) }
 
-    // ФУНКЦИЯ: Загрузка всех партий из локального хранилища
+    // Загрузка всех партий из локального хранилища
     suspend fun loadFromLocal() {
         Log.d(TAG, "loadFromLocal: starting...")
         items = repo.getAllHeaders()
@@ -135,28 +158,20 @@ fun GamesListScreen(
             Log.d(TAG, "syncWithRemote: total added = $addedCount")
 
             if (addedCount > 0) {
-                Toast.makeText(
-                    context,
-                    "Добавлено новых партий: $addedCount",
-                    Toast.LENGTH_SHORT
-                ).show()
+                Toast.makeText(context, "Добавлено новых партий: $addedCount", Toast.LENGTH_SHORT).show()
             }
         } catch (e: Throwable) {
             Log.e(TAG, "syncWithRemote failed: ${e.message}", e)
-            Toast.makeText(
-                context,
-                "Ошибка синхронизации: ${e.message}",
-                Toast.LENGTH_SHORT
-            ).show()
+            Toast.makeText(context, "Ошибка синхронизации: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
-    // При первом запуске: загружаем из БД, затем синхронизируем с серверами
+    // При первом запуске: загружаем из БД, затем синхронизируем, затем снова БД
     LaunchedEffect(profile) {
         isLoading = true
-        loadFromLocal() // Сначала показываем то, что есть в БД
-        syncWithRemote() // Затем подгружаем новые партии
-        loadFromLocal() // И снова загружаем из БД (уже с новыми)
+        loadFromLocal()
+        syncWithRemote()
+        loadFromLocal()
         isLoading = false
     }
 
@@ -234,8 +249,8 @@ fun GamesListScreen(
                 onRefresh = {
                     scope.launch {
                         isLoading = true
-                        syncWithRemote() // Синхронизируем с серверами
-                        loadFromLocal() // Обновляем список
+                        syncWithRemote()
+                        loadFromLocal()
                         isLoading = false
                     }
                 },
@@ -256,7 +271,11 @@ fun GamesListScreen(
                         LazyColumn(Modifier.fillMaxSize()) {
                             itemsIndexed(
                                 items,
-                                key = { idx, game -> "${game.site}_${game.date}_${game.white}_${game.black}_$idx" }
+                                // стабильный ключ (без индекса) — чтобы не терялся state элементов
+                                key = { _, g ->
+                                    val hashPart = (g.pgn?.length ?: 0).toString()
+                                    "${g.site}|${g.date}|${g.white}|${g.black}|${g.result}|$hashPart"
+                                }
                             ) { index, game ->
                                 val analyzedReport = analyzedGames[repo.pgnHash(game.pgn.orEmpty())]
                                 CompactGameCard(
@@ -298,7 +317,7 @@ fun GamesListScreen(
                 }
             }
 
-            // === МИНИМАЛЬНЫЙ оверлей ожидания анализа (только доска) ===
+            // Простой оверлей анализа
             if (showAnalysis) {
                 Box(
                     Modifier
@@ -452,7 +471,7 @@ fun GamesListScreen(
     }
 }
 
-/* ====== Остальные функции без изменений ====== */
+/* ===== Карточка ===== */
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -465,154 +484,157 @@ private fun CompactGameCard(
     onClick: () -> Unit,
     onLongPress: () -> Unit
 ) {
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(index * 30L)
-        visible = true
-    }
+    val mySide: Boolean? = guessMySide(profile, game)
+    val userWon = mySide != null && ((mySide && game.result == "1-0") || (!mySide && game.result == "0-1"))
+    val userLost = mySide != null && ((mySide && game.result == "0-1") || (!mySide && game.result == "1-0"))
+    val isAnalyzed = analyzedReport != null
 
-    AnimatedVisibility(visible = visible) {
-        val mySide: Boolean? = guessMySide(profile, game)
-        val userWon = mySide != null && ((mySide && game.result == "1-0") || (!mySide && game.result == "0-1"))
-        val userLost = mySide != null && ((mySide && game.result == "0-1") || (!mySide && game.result == "1-0"))
-        val isAnalyzed = analyzedReport != null
+    var pressed by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.98f else 1f,
+        animationSpec = spring(stiffness = Spring.StiffnessMedium),
+        label = "scale"
+    )
 
-        var pressed by remember { mutableStateOf(false) }
-        val scale by animateFloatAsState(targetValue = if (pressed) 0.98f else 1f, animationSpec = spring(stiffness = Spring.StiffnessMedium))
-
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = when {
-                    userWon -> Color(0xFFDFF0D8)
-                    userLost -> Color(0xFFF2DEDE)
-                    else -> MaterialTheme.colorScheme.surface
-                }
-            ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(148.dp)
-                .padding(horizontal = 12.dp, vertical = 4.dp)
-                .scale(scale)
-                .combinedClickable(
-                    enabled = !isAnalyzing,
-                    onClick = { pressed = true; onClick(); pressed = false },
-                    onLongClick = { if (isAnalyzed) onLongPress() }
-                )
-        ) {
-            val siteName = when (game.site) {
-                Provider.LICHESS -> "Lichess"
-                Provider.CHESSCOM -> "Chess.com"
-                Provider.BOT -> "Bot"
-                null -> ""
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = when {
+                userWon -> Color(0xFFDFF0D8)
+                userLost -> Color(0xFFF2DEDE)
+                else -> MaterialTheme.colorScheme.surface
             }
-            val (modeLabel, openingLine) = deriveModeAndOpening(game)
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(148.dp)
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .scale(scale)
+            .combinedClickable(
+                enabled = !isAnalyzing,
+                onClick = { pressed = true; onClick(); pressed = false },
+                onLongClick = { if (isAnalyzed) onLongPress() }
+            )
+    ) {
+        val siteName = when (game.site) {
+            Provider.LICHESS -> "Lichess"
+            Provider.CHESSCOM -> "Chess.com"
+            Provider.BOT -> "Bot"
+            null -> ""
+        }
+        val (modeLabel, openingLine) = deriveModeAndOpening(game)
 
-            Column(Modifier.padding(10.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        buildAnnotatedString {
-                            withStyle(SpanStyle(fontWeight = FontWeight.Medium, fontSize = 11.sp)) { append(siteName) }
-                            if (!game.date.isNullOrBlank()) { append(" • "); append(game.date!!) }
-                            if (modeLabel.isNotBlank()) { append(" • "); append(modeLabel) }
-                        },
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    if (isAnalyzed) {
-                        Badge(containerColor = Color(0xFF4CAF50), contentColor = Color.White) {
-                            Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Анализировано", fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-                            }
+        Column(Modifier.padding(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    buildAnnotatedString {
+                        withStyle(SpanStyle(fontWeight = FontWeight.Medium, fontSize = 11.sp)) { append(siteName) }
+                        if (!game.date.isNullOrBlank()) { append(" • "); append(game.date!!) }
+                        if (modeLabel.isNotBlank()) { append(" • "); append(modeLabel) }
+                    },
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (isAnalyzed) {
+                    Badge(containerColor = Color(0xFF4CAF50), contentColor = Color.White) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Анализировано", fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
+            }
 
-                Spacer(Modifier.height(6.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                        UserBubble(name = game.white ?: "W", size = 22.dp)
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            text = playerWithTitle(game.white, game.pgn, isWhite = true),
-                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+            Spacer(Modifier.height(6.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    UserBubble(name = game.white ?: "W", size = 22.dp)
+                    Spacer(Modifier.width(6.dp))
                     Text(
-                        game.result.orEmpty(),
-                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold, fontSize = 12.sp),
-                        modifier = Modifier.padding(horizontal = 8.dp)
-                    )
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        Text(
-                            text = playerWithTitle(game.black, game.pgn, isWhite = false),
-                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            textAlign = TextAlign.End
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        UserBubble(name = game.black ?: "B", size = 22.dp)
-                    }
-                }
-
-                if (openingLine.isNotBlank()) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        openingLine,
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        text = playerWithTitle(game.white, game.pgn, isWhite = true),
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
+                Text(
+                    game.result.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold, fontSize = 12.sp),
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Text(
+                        text = playerWithTitle(game.black, game.pgn, isWhite = false),
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.End
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    UserBubble(name = game.black ?: "B", size = 22.dp)
+                }
+            }
 
-                Spacer(Modifier.height(6.dp))
-                Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(8.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        StatColumn(
-                            accuracy = analyzedReport?.accuracy?.whiteMovesAcc?.itera,
-                            performance = analyzedReport?.estimatedElo?.whiteEst
-                        )
-                        Box(
-                            modifier = Modifier.width(1.dp).height(24.dp)
-                                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
-                        )
-                        StatColumn(
-                            accuracy = analyzedReport?.accuracy?.blackMovesAcc?.itera,
-                            performance = analyzedReport?.estimatedElo?.blackEst
-                        )
-                    }
+            if (openingLine.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    openingLine,
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(Modifier.height(6.dp))
+            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(8.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    StatColumn(
+                        accuracy = analyzedReport?.accuracy?.whiteMovesAcc?.itera,
+                        performance = analyzedReport?.estimatedElo?.whiteEst
+                    )
+                    Box(
+                        modifier = Modifier
+                            .width(1.dp)
+                            .height(24.dp)
+                            .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+                    )
+                    StatColumn(
+                        accuracy = analyzedReport?.accuracy?.blackMovesAcc?.itera,
+                        performance = analyzedReport?.estimatedElo?.blackEst
+                    )
                 }
             }
         }
     }
 }
 
-/* ====== ВСПОМОГАТЕЛЬНОЕ ====== */
+/* ===== Вспомогательное ===== */
 
 @Composable
 private fun StatColumn(accuracy: Double?, performance: Int?) {
@@ -641,13 +663,26 @@ private fun getAccuracyColor(accuracy: Double): Color = when {
 }
 
 @Composable
-private fun UserBubble(name: String, size: androidx.compose.ui.unit.Dp, bg: Color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), fg: Color = MaterialTheme.colorScheme.primary) {
+private fun UserBubble(
+    name: String,
+    size: Dp,
+    bg: Color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+    fg: Color = MaterialTheme.colorScheme.primary
+) {
     val letter = name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
     Box(
-        modifier = Modifier.size(size).clip(CircleShape).background(bg),
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(bg),
         contentAlignment = Alignment.Center
     ) {
-        Text(text = letter, color = fg, style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp), fontWeight = FontWeight.SemiBold)
+        Text(
+            text = letter,
+            color = fg,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 
@@ -719,7 +754,17 @@ private suspend fun addManualGame(
         date = header?.date ?: Regex("""\[Date\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1),
         sideToView = guessMySide(
             profile,
-            header ?: GameHeader(site = null, pgn = pgn, white = null, black = null, result = null, date = null, sideToView = null, opening = null, eco = null)
+            header ?: GameHeader(
+                site = null,
+                pgn = pgn,
+                white = null,
+                black = null,
+                result = null,
+                date = null,
+                sideToView = null,
+                opening = null,
+                eco = null
+            )
         ),
         opening = header?.opening,
         eco = header?.eco

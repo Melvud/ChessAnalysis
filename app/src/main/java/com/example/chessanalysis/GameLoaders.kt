@@ -8,23 +8,61 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.contentOrNull
+import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 
 object GameLoaders {
     private const val TAG = "GameLoaders"
 
-    private val client = OkHttpClient.Builder()
+    /**
+     * Проблема из лога: попытка TLS к lichess.org по IPv6, после чего:
+     * EHOSTUNREACH / "No route to host" → SSL handshake aborted → java.net.ConnectException.
+     *
+     * Решение:
+     * 1) DNS, который **ставит IPv4-адреса первыми** (Happy Eyeballs у OkHttp сработает корректно).
+     * 2) Фолбэк-клиент, который **полностью отфильтровывает AAAA** при повторе — на случай, если
+     *    в резолве пришёл только AAAA или стек/маршрут IPv6 у устройства нестабилен.
+     */
+    private object Ipv4FirstDns : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            val all = Dns.SYSTEM.lookup(hostname)
+            // Ставим IPv4 первыми — это ускорит успешное соединение при битом IPv6.
+            return all.sortedBy { addr -> if (addr is Inet4Address) 0 else 1 }
+        }
+    }
+
+    private object Ipv4OnlyDns : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            val all = Dns.SYSTEM.lookup(hostname)
+            val only4 = all.filterIsInstance<Inet4Address>()
+            // Если вдруг нет A-записей — вернём оригинальный список (пусть OkHttp сам разберётся).
+            return if (only4.isNotEmpty()) only4 else all
+        }
+    }
+
+    private val clientPreferV4: OkHttpClient = OkHttpClient.Builder()
+        .dns(Ipv4FirstDns)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
+
+    private val clientV4Fallback: OkHttpClient = OkHttpClient.Builder()
+        .dns(Ipv4OnlyDns)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
 
     private val json = Json { ignoreUnknownKeys = true }
 
     private const val UA = "ChessAnalysis/1.0 (+android; contact: app@example.com)"
 
-    // Утилиты --------------------------------------------------------
+    // --------------------------- Утилиты ---------------------------
 
     private fun hasMoves(pgn: String): Boolean {
         return Regex("""\b\d+\.\s""").containsMatchIn(pgn)
@@ -35,6 +73,10 @@ object GameLoaders {
         return rx.findAll(pgn).associate { it.groupValues[1] to it.groupValues[2] }
     }
 
+    /**
+     * Дозагружает полный PGN по lichessId из тэгов, если в header.pgn нет ходов.
+     * Клиент с IPv4-фолбэком.
+     */
     suspend fun ensureFullPgn(header: GameHeader): String = withContext(Dispatchers.IO) {
         val src = header.pgn.orEmpty()
         if (src.isNotBlank() && hasMoves(src)) return@withContext src
@@ -46,13 +88,12 @@ object GameLoaders {
             ?: tags["GameId"]
 
         if (!lichessId.isNullOrBlank()) {
-            val url = "https://lichess.org/game/export/$lichessId?moves=true&tags=true&opening=true&clocks=false&evals=false"
+            val url =
+                "https://lichess.org/game/export/$lichessId?moves=true&tags=true&opening=true&clocks=false&evals=false"
             val req = Request.Builder().url(url).header("User-Agent", UA).build()
-            client.newCall(req).execute().use { resp ->
-                val body = resp.body?.string().orEmpty()
-                if (resp.isSuccessful && hasMoves(body)) {
-                    return@withContext body
-                }
+            val body = execWithIpv6SafeClient(req)
+            if (body != null && hasMoves(body)) {
+                return@withContext body
             }
         }
 
@@ -72,11 +113,11 @@ object GameLoaders {
         }
     }
 
-    // Загрузчик Lichess ---------------------------------------------
+    // --------------------- Загрузчик Lichess ----------------------
 
     suspend fun loadLichess(username: String, max: Int = 20): List<GameHeader> =
         withContext(Dispatchers.IO) {
-            Log.d(TAG, "Loading $max latest Lichess games for user: $username")
+            Log.d(TAG, "Loading Lichess games for user: $username")
 
             // Попытка NDJSON (pgnInJson)
             val ndUrl =
@@ -87,217 +128,107 @@ object GameLoaders {
                 .header("User-Agent", UA)
                 .build()
 
-            var ndResult: List<GameHeader>? = null
-            client.newCall(ndReq).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    val ctype = resp.header("Content-Type").orEmpty()
-                    val body = resp.body?.string().orEmpty()
-                    Log.d(TAG, "Lichess response type: $ctype, body length: ${body.length}")
-
-                    if (body.isNotBlank() && ctype.startsWith("application/x-ndjson")) {
-                        val list = mutableListOf<GameHeader>()
-                        body.lineSequence().forEach { line ->
-                            if (line.isBlank()) return@forEach
-                            runCatching {
-                                val el = json.parseToJsonElement(line).jsonObject
-                                val pgn = el["pgn"]?.jsonPrimitive?.contentOrNull
-                                if (!pgn.isNullOrBlank()) {
-                                    val header = PgnChess.headerFromPgn(pgn)
-                                    val sideToView = determineUserSide(pgn, username)
-                                    list += header.copy(
-                                        site = Provider.LICHESS,
-                                        pgn = pgn,
-                                        sideToView = sideToView
-                                    )
-                                }
-                            }.onFailure { e ->
-                                Log.e(TAG, "Error parsing Lichess game: ${e.message}")
+            execWithIpv6SafeClient(ndReq)?.let { body ->
+                val list = mutableListOf<GameHeader>()
+                // Если это NDJSON
+                val isNdjson = body.lineSequence().take(1).firstOrNull()?.trim()?.startsWith("{") == true
+                if (isNdjson) {
+                    body.lineSequence().forEach { line ->
+                        if (line.isBlank()) return@forEach
+                        runCatching {
+                            val el = json.parseToJsonElement(line).jsonObject
+                            val pgn = el["pgn"]?.jsonPrimitive?.content
+                            if (!pgn.isNullOrBlank()) {
+                                list += PgnChess.headerFromPgn(pgn).copy(site = Provider.LICHESS, pgn = pgn)
                             }
                         }
-                        Log.d(TAG, "Loaded ${list.size} games from Lichess")
-                        if (list.isNotEmpty()) {
-                            ndResult = list
+                    }
+                    if (list.isNotEmpty()) return@withContext list
+                } else {
+                    // Фолбэк: это PGN-дамп — режем регуляркой по партиям
+                    val rx = Regex("""(?s)(\[(?:.|\n)*?)(?=\n\n\[Event|\z)""", setOf(RegexOption.DOT_MATCHES_ALL))
+                    rx.findAll(body).forEach { m ->
+                        val pgn = m.groupValues[1].trim()
+                        if (pgn.isNotEmpty()) {
+                            list += PgnChess.headerFromPgn(pgn).copy(site = Provider.LICHESS, pgn = pgn)
                         }
                     }
+                    if (list.isNotEmpty()) return@withContext list
                 }
             }
-            if (ndResult != null) return@withContext ndResult!!
 
-            // Fallback: обычный PGN-дамп
-            val pgnUrl =
-                "https://lichess.org/api/games/user/${username.trim()}?max=$max&moves=true&opening=true"
-            val pgnReq = Request.Builder()
-                .url(pgnUrl)
-                .header("User-Agent", UA)
-                .build()
-
-            client.newCall(pgnReq).execute().use { resp ->
-                val body = resp.body?.string().orEmpty()
-                if (!resp.isSuccessful || body.isBlank()) {
-                    Log.e(TAG, "Failed to load Lichess games: ${resp.code}")
-                    return@use emptyList<GameHeader>()
-                }
-
-                val rx = Regex("""(?s)(?=\[Event\b)(.*?)(?=(?:\n\n\[Event\b)|\Z)""")
-                val out = mutableListOf<GameHeader>()
-                rx.findAll(body).forEach { m ->
-                    val pgn = m.groupValues[1].trim()
-                    if (pgn.isNotEmpty()) {
-                        val header = PgnChess.headerFromPgn(pgn)
-                        val sideToView = determineUserSide(pgn, username)
-                        out += header.copy(
-                            site = Provider.LICHESS,
-                            pgn = pgn,
-                            sideToView = sideToView
-                        )
-                    }
-                }
-                Log.d(TAG, "Loaded ${out.size} games from Lichess (PGN fallback)")
-                out
-            }
+            // Ничего не пришло
+            emptyList()
         }
 
-    // Загрузчик Chess.com -------------------------------------------
+    // --------------------- Загрузчик Chess.com --------------------
 
     suspend fun loadChessCom(username: String, max: Int = 20): List<GameHeader> =
         withContext(Dispatchers.IO) {
-            Log.d(TAG, "Loading $max latest Chess.com games for user: $username")
+            val archReq = Request.Builder()
+                .url("https://api.chess.com/pub/player/${username.trim().lowercase()}/games/archives")
+                .header("User-Agent", UA)
+                .build()
 
-            try {
-                val archReq = Request.Builder()
-                    .url("https://api.chess.com/pub/player/${username.trim().lowercase()}/games/archives")
-                    .header("User-Agent", UA)
-                    .build()
+            val archives = execWithIpv6SafeClient(archReq) ?: return@withContext emptyList()
+            val last = Regex(""""(https:[^"]+/[0-9]{4}/[0-9]{2})"""")
+                .findAll(archives).toList().lastOrNull()?.groupValues?.get(1)
+                ?: return@withContext emptyList<GameHeader>()
 
-                client.newCall(archReq).execute().use { ar ->
-                    val archivesBody = ar.body?.string().orEmpty()
-                    Log.d(TAG, "Chess.com archives response: ${archivesBody.take(200)}")
+            val monthReq = Request.Builder().url(last).header("User-Agent", UA).build()
+            val month = execWithIpv6SafeClient(monthReq) ?: return@withContext emptyList()
+            val matches = Regex(""""pgn"\s*:\s*"((?:\\.|[^"\\])*)"""")
+                .findAll(month).toList()
 
-                    if (!ar.isSuccessful) {
-                        Log.e(TAG, "Failed to load Chess.com archives: ${ar.code}")
-                        return@withContext emptyList<GameHeader>()
-                    }
-
-                    val archivesJson = runCatching {
-                        json.parseToJsonElement(archivesBody).jsonObject
-                    }.getOrNull()
-
-                    val archives = archivesJson?.get("archives")?.jsonArray
-                    if (archives == null || archives.isEmpty()) {
-                        Log.e(TAG, "No archives found for Chess.com user: $username")
-                        return@withContext emptyList()
-                    }
-
-                    // Берём последние несколько архивов, чтобы точно получить max игр
-                    val allGames = mutableListOf<GameHeader>()
-                    val archivesToFetch = archives.takeLast(3) // Берём последние 3 месяца
-
-                    Log.d(TAG, "Fetching ${archivesToFetch.size} Chess.com archives")
-
-                    for (archiveElement in archivesToFetch.reversed()) { // От новых к старым
-                        val archiveUrl = archiveElement.jsonPrimitive.contentOrNull ?: continue
-
-                        Log.d(TAG, "Fetching archive: $archiveUrl")
-
-                        val monthReq = Request.Builder()
-                            .url(archiveUrl)
-                            .header("User-Agent", UA)
-                            .build()
-
-                        client.newCall(monthReq).execute().use { mr ->
-                            val monthBody = mr.body?.string().orEmpty()
-
-
-
-                            val monthJson = runCatching {
-                                json.parseToJsonElement(monthBody).jsonObject
-                            }.getOrNull()
-
-                            val gamesArray = monthJson?.get("games")?.jsonArray
-
-
-                            Log.d(TAG, "Found ${gamesArray?.size} games in archive")
-
-                            // Добавляем игры из этого архива (от новых к старым)
-                            gamesArray?.reversed()?.forEach { gameElement ->
-                                if (allGames.size >= max) return@forEach // Достигли лимита
-
-                                runCatching {
-                                    val gameObj = gameElement.jsonObject
-                                    val pgn = gameObj["pgn"]?.jsonPrimitive?.contentOrNull
-
-                                    if (!pgn.isNullOrBlank()) {
-                                        val header = PgnChess.headerFromPgn(pgn)
-                                        val sideToView = determineUserSide(pgn, username)
-                                        allGames.add(
-                                            header.copy(
-                                                site = Provider.CHESSCOM,
-                                                pgn = pgn,
-                                                sideToView = sideToView
-                                            )
-                                        )
-                                    }
-                                }.onFailure { e ->
-                                    Log.e(TAG, "Error parsing Chess.com game: ${e.message}")
-                                }
-                            }
-                        }
-
-                        // Если уже набрали достаточно игр, можно остановиться
-                        if (allGames.size >= max) {
-                            Log.d(TAG, "Reached max games limit: $max")
-                            break
-                        }
-                    }
-
-                    Log.d(TAG, "Successfully loaded ${allGames.size} Chess.com games")
-                    allGames
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Exception loading Chess.com games: ${e.message}", e)
-                emptyList()
+            matches.takeLast(max).map {
+                val pgn = it.groupValues[1].replace("\\n", "\n").replace("\\\"", "\"")
+                PgnChess.headerFromPgn(pgn).copy(site = Provider.CHESSCOM, pgn = pgn)
             }
         }
 
-    // ------------------ Мини-клиент для аватаров ------------------
+    // ---------------------- Вспомогательная сеть ------------------
 
-    suspend fun fetchLichessAvatar(username: String): String? =
-        withContext(Dispatchers.IO) {
-            if (username.isBlank()) return@withContext null
-            val url = "https://lichess.org/api/user/${username.trim()}"
-            val req = Request.Builder()
-                .url(url)
-                .header("Accept", "application/json")
-                .header("User-Agent", UA)
-                .build()
-            runCatching {
-                client.newCall(req).execute().use { resp ->
-                    val body = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful || body.isBlank()) return@use null
-                    val root = json.parseToJsonElement(body).jsonObject
-                    val profile = root["profile"]?.jsonObject
-                    val image = profile?.get("image")
-                    image?.jsonPrimitive?.contentOrNull
-                }
-            }.getOrNull()
+    /**
+     * Выполняет запрос с предпочтением IPv4 и единообразным фолбэком
+     * на «только IPv4», если видим типичные ошибки IPv6-маршрутизации.
+     */
+    private fun execWithIpv6SafeClient(req: Request): String? {
+        // 1) Пробуем клиент с IPv4-первыми адресами
+        try {
+            clientPreferV4.newCall(req).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (resp.isSuccessful && body.isNotBlank()) return body
+                // даже при неуспехе вернём тело — вызывающий решит, подходит ли оно
+                if (body.isNotBlank()) return body
+            }
+        } catch (e: Exception) {
+            if (!isIpv6RouteIssue(e)) {
+                Log.w(TAG, "HTTP error (preferV4): ${e.message}")
+                return null
+            }
+            Log.w(TAG, "IPv6 route issue detected, retry with IPv4-only… (${e.javaClass.simpleName})")
         }
 
-    suspend fun fetchChessComAvatar(username: String): String? =
-        withContext(Dispatchers.IO) {
-            if (username.isBlank()) return@withContext null
-            val url = "https://api.chess.com/pub/player/${username.trim().lowercase()}"
-            val req = Request.Builder()
-                .url(url)
-                .header("Accept", "application/json")
-                .header("User-Agent", UA)
-                .build()
-            runCatching {
-                client.newCall(req).execute().use { resp ->
-                    val body = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful || body.isBlank()) return@use null
-                    val root = json.parseToJsonElement(body).jsonObject
-                    root["avatar"]?.jsonPrimitive?.contentOrNull
-                }
-            }.getOrNull()
+        // 2) Повтор «только IPv4»
+        return try {
+            clientV4Fallback.newCall(req).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (resp.isSuccessful && body.isNotBlank()) body else body.ifBlank { null }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "HTTP error (v4only): ${e.message}")
+            null
         }
+    }
+
+    /**
+     * Эвристика: распознаём типичные тексты исключений при проблемах IPv6.
+     */
+    private fun isIpv6RouteIssue(e: Throwable): Boolean {
+        val msg = (e.message ?: "").lowercase()
+        return ("ehostunreach" in msg) ||
+                ("no route to host" in msg) ||
+                ("connection reset by peer" in msg) ||
+                (e is java.net.ConnectException)
+    }
 }

@@ -75,6 +75,7 @@ dependencies {
     implementation("androidx.compose.runtime:runtime-livedata")
     implementation(libs.androidx.ui.unit)
     implementation(libs.androidx.animation.core)
+    implementation(libs.material3)
 
     // SVG/изображения
 

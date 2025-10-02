@@ -18,7 +18,9 @@
         android:theme="@style/Theme.ChessAnalyzer"
         android:usesCleartextTraffic="true"
         android:extractNativeLibs="true"
-        android:networkSecurityConfig="@xml/network_security_config">
+        android:enableOnBackInvokedCallback="true"
+        android:networkSecurityConfig="@xml/network_security_config"
+        tools:targetApi="33">
         <activity
             android:name=".MainActivity"
             android:exported="true"
