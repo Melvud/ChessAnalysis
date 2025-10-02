@@ -12,9 +12,6 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 
-/**
- * Минимальный мост для общения с WASM‑Stockfish в WebView.
- */
 class EngineWebView(
     context: Context,
     private val onLine: (String) -> Unit
@@ -42,7 +39,6 @@ class EngineWebView(
             domStorageEnabled = true
             databaseEnabled = true
             cacheMode = WebSettings.LOAD_NO_CACHE
-            // КРИТИЧНО для WASM
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
 
@@ -63,47 +59,45 @@ class EngineWebView(
         }
 
         webView.webChromeClient = object : WebChromeClient() {
-            override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
-                Log.d(TAG, "[JS] ${consoleMessage.message()} (${consoleMessage.sourceId()}:${consoleMessage.lineNumber()})")
+            override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
+                // Логируем только ошибки
+                if (msg.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                    Log.e(TAG, "[JS ERROR] ${msg.message()}")
+                }
                 return true
             }
         }
 
-        // JS -> Android: слушаем строки от движка
+        // JS -> Android bridge
         webView.addJavascriptInterface(object {
             @JavascriptInterface
             fun onEngineLine(line: String?) {
-                Log.d(TAG, "← Engine: $line")
-                line?.let { onLine(it) }
+                if (line != null) {
+                    Log.d(TAG, "← $line")
+                    onLine(line)
+                }
             }
         }, "Android")
 
-        // Загружаем локальную страницу из assets/www
         Log.d(TAG, "Loading file:///android_asset/www/index.html")
         webView.loadUrl("file:///android_asset/www/index.html")
     }
 
-    /** Отправить UCI‑команду в движок */
     fun send(cmd: String) {
-        Log.d(TAG, "→ Sending: $cmd")
-        // Экранируем кавычки и обратные слэши для JS
         val safe = cmd
             .replace("\\", "\\\\")
             .replace("\"", "\\\"")
             .replace("\n", "\\n")
-        val js = "window.EngineBridge && window.EngineBridge.push(\"$safe\");"
+        val js = "if(window.EngineBridge){window.EngineBridge.push(\"$safe\");}else{console.error('Bridge not ready');}"
         mainHandler.post {
-            webView.evaluateJavascript(js) { result ->
-                Log.d(TAG, "JS eval result: $result")
-            }
+            webView.evaluateJavascript(js, null)
         }
     }
 
-    /** Остановить / зачистить WebView */
     fun stop() {
         mainHandler.post {
             try {
-                webView.evaluateJavascript("window.EngineBridge && window.EngineBridge.push('quit');", null)
+                webView.evaluateJavascript("window.EngineBridge && window.EngineBridge.engine && window.EngineBridge.push('quit');", null)
             } catch (_: Throwable) {}
             try {
                 webView.destroy()

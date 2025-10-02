@@ -19,6 +19,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.clickable
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,6 +30,8 @@ fun ProfileScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope() // Добавляем scope для корутин
+
     var email by remember { mutableStateOf(profile.email) }
     var nickname by remember { mutableStateOf(profile.nickname) }
     var lichessName by remember { mutableStateOf(profile.lichessUsername) }
@@ -129,11 +132,12 @@ fun ProfileScreen(
                 RadioButton(
                     selected = engineMode == EngineClient.EngineMode.SERVER,
                     onClick = {
-                        // Безопасное переключение
-                        try {
-                            EngineClient.setEngineMode(EngineClient.EngineMode.SERVER)
-                        } catch (e: Exception) {
-                            errorMessage = "Ошибка переключения: ${e.message}"
+                        scope.launch {
+                            try {
+                                EngineClient.setEngineMode(EngineClient.EngineMode.SERVER)
+                            } catch (e: Exception) {
+                                errorMessage = "Ошибка переключения: ${e.message}"
+                            }
                         }
                     }
                 )
@@ -141,10 +145,12 @@ fun ProfileScreen(
                     text = "Сервер",
                     modifier = Modifier
                         .clickable {
-                            try {
-                                EngineClient.setEngineMode(EngineClient.EngineMode.SERVER)
-                            } catch (e: Exception) {
-                                errorMessage = "Ошибка переключения: ${e.message}"
+                            scope.launch {
+                                try {
+                                    EngineClient.setEngineMode(EngineClient.EngineMode.SERVER)
+                                } catch (e: Exception) {
+                                    errorMessage = "Ошибка переключения: ${e.message}"
+                                }
                             }
                         }
                         .padding(end = 16.dp)
@@ -152,12 +158,13 @@ fun ProfileScreen(
                 RadioButton(
                     selected = engineMode == EngineClient.EngineMode.LOCAL,
                     onClick = {
-                        // Безопасное переключение с проверкой контекста
-                        try {
-                            EngineClient.setAndroidContext(context.applicationContext)
-                            EngineClient.setEngineMode(EngineClient.EngineMode.LOCAL)
-                        } catch (e: Exception) {
-                            errorMessage = "Ошибка переключения на локальный режим: ${e.message}"
+                        scope.launch {
+                            try {
+                                EngineClient.setAndroidContext(context.applicationContext)
+                                EngineClient.setEngineMode(EngineClient.EngineMode.LOCAL)
+                            } catch (e: Exception) {
+                                errorMessage = "Ошибка переключения на локальный режим: ${e.message}"
+                            }
                         }
                     }
                 )
@@ -165,11 +172,13 @@ fun ProfileScreen(
                     text = "Локальный",
                     modifier = Modifier
                         .clickable {
-                            try {
-                                EngineClient.setAndroidContext(context.applicationContext)
-                                EngineClient.setEngineMode(EngineClient.EngineMode.LOCAL)
-                            } catch (e: Exception) {
-                                errorMessage = "Ошибка переключения на локальный режим: ${e.message}"
+                            scope.launch {
+                                try {
+                                    EngineClient.setAndroidContext(context.applicationContext)
+                                    EngineClient.setEngineMode(EngineClient.EngineMode.LOCAL)
+                                } catch (e: Exception) {
+                                    errorMessage = "Ошибка переключения на локальный режим: ${e.message}"
+                                }
                             }
                         }
                 )

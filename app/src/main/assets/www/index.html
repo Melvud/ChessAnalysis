@@ -1,79 +1,105 @@
-<!doctype html>
+<!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>Stockfish 17.1 (manual WASM load)</title>
+  <meta charset="UTF-8">
+  <title>Stockfish 17 WASM</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
 <body>
+<h3>Stockfish Engine</h3>
 <script>
   // ==== Логгер в Android ====
   function log(msg) {
-    console.log(msg);
-    if (window.Android && typeof window.Android.onEngineLine === 'function') {
-      try { window.Android.onEngineLine('info string [HTML] ' + msg); } catch(_) {}
-    }
+      console.log(msg);
+      if (window.Android && typeof window.Android.onEngineLine === 'function') {
+          try {
+              window.Android.onEngineLine('info string [HTML] ' + msg);
+          } catch(e) {
+              console.error('Failed to call Android.onEngineLine:', e);
+          }
+      }
   }
 
-  log('=== INIT SF17 ===');
+  log('=== INIT STOCKFISH 17 ===');
 
   // ==== РАННИЙ СТАБ МОСТА ====
-  // Буферизуем команды до момента, когда движок будет готов.
-  window.EngineBridge = window.EngineBridge || (function () {
-    const queue = [];
-    return {
-      _q: queue,
-      push: function (cmd) { queue.push(String(cmd || '')); }
-    };
+  // Буферизуем команды до момента, когда движок будет готов
+  window.EngineBridge = window.EngineBridge || (function() {
+      const queue = [];
+      return {
+          _q: queue,
+          push: function(cmd) {
+              queue.push(String(cmd || ''));
+              log('Queued command: ' + cmd);
+          }
+      };
   })();
 
   // ==== UMD-хук для stockfish.js ====
-  // nmrugg-сборки часто кладут фабрику в module.exports.
+  // nmrugg-овские сборки часто кладут фабрику в module.exports
   window.module = { exports: {} };
   window.exports = window.module.exports;
 
   // ==== Ручная подгрузка WASM ====
   log('Loading WASM...');
   var xhr = new XMLHttpRequest();
-  xhr.open('GET', 'stockfish.wasm', true);
+  xhr.open('GET', 'stockfish.wasm', true);  // ← ИЗМЕНЕНО на stockfish.wasm
   xhr.responseType = 'arraybuffer';
-  xhr.onload = function () {
-    if (xhr.status === 200 || xhr.status === 0) {
-      window.wasmBinary = new Uint8Array(xhr.response);
-      log('WASM: ' + window.wasmBinary.byteLength + ' bytes');
 
-      // Загружаем stockfish.js после WASM
-      log('Loading stockfish.js...');
-      var s = document.createElement('script');
-      s.src = 'stockfish.js';
-      s.onload = function () {
-        log('stockfish.js loaded');
+  xhr.onload = function() {
+      if (xhr.status === 200 || xhr.status === 0) {
+          window.wasmBinary = new Uint8Array(xhr.response);
+          log('WASM: ' + window.wasmBinary.byteLength + ' bytes');
 
-        // Достаём фабрику Stockfish
-        if (typeof module !== 'undefined' && module.exports && typeof module.exports === 'function') {
-          window.Stockfish = module.exports;
-          log('Stockfish found in module.exports');
-        } else if (typeof Stockfish !== 'undefined') {
-          log('Stockfish found globally');
-        } else {
-          log('ERROR: Stockfish not found');
-          return;
-        }
+          // Загружаем сам stockfish.js после WASM
+          log('Loading stockfish.js...');
+          var s = document.createElement('script');
+          s.src = 'stockfish.js';
 
-        log('typeof Stockfish: ' + typeof Stockfish);
+          s.onload = function() {
+              log('stockfish.js loaded');
 
-        // Инициализация основной логики (создание инстанса, мост и т.д.)
-        var main = document.createElement('script');
-        main.src = 'main.js';
-        document.body.appendChild(main);
-      };
-      s.onerror = function () { log('ERROR: Failed to load stockfish.js'); };
-      document.body.appendChild(s);
-    } else {
-      log('ERROR: WASM failed: ' + xhr.status);
-    }
+              // Достаём фабрику Stockfish
+              if (typeof module !== 'undefined' && module.exports && typeof module.exports === 'function') {
+                  window.Stockfish = module.exports;
+                  log('Stockfish found in module.exports');
+              } else if (typeof Stockfish !== 'undefined') {
+                  log('Stockfish found globally');
+              } else {
+                  log('ERROR: Stockfish not found');
+                  return;
+              }
+
+              log('typeof Stockfish: ' + typeof Stockfish);
+
+              // Инициализация основной логики
+              log('Loading main.js...');
+              var main = document.createElement('script');
+              main.src = 'main.js';
+              main.onload = function() {
+                  log('main.js loaded');
+              };
+              main.onerror = function() {
+                  log('ERROR: Failed to load main.js');
+              };
+              document.body.appendChild(main);
+          };
+
+          s.onerror = function() {
+              log('ERROR: Failed to load stockfish.js');
+          };
+
+          document.body.appendChild(s);
+
+      } else {
+          log('ERROR: WASM failed with status: ' + xhr.status);
+      }
   };
-  xhr.onerror = function () { log('ERROR: WASM network error'); };
+
+  xhr.onerror = function() {
+      log('ERROR: WASM network error');
+  };
+
   xhr.send();
 </script>
 </body>

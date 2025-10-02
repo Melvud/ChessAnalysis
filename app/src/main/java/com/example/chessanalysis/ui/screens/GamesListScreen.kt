@@ -255,8 +255,8 @@ fun GamesListScreen(
                                                     val header = runCatching { PgnChess.headerFromPgn(fullPgn) }.getOrNull()
                                                     val report = analyzeGameByPgnWithProgress(
                                                         pgn = fullPgn,
-                                                        depth = 15,
-                                                        multiPv = 3,
+                                                        depth = 16,
+                                                        multiPv = 2,
                                                         header = header
                                                     ) { snap ->
                                                         total = snap.total
