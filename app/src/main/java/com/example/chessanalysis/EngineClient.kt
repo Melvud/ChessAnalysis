@@ -432,6 +432,34 @@ object EngineClient {
         }
     }
 
+    /**
+     * NEW: Потоковая (стриминговая) оценка позиции.
+     * onUpdate вызывается КАЖДЫЙ РАЗ, когда движок присылает новую строку info/pv/depth.
+     * Возвращаемое значение — финальный снимок (после stop/bestmove или достижения нужной глубины).
+     */
+    suspend fun evaluateFenDetailedStreaming(
+        fen: String,
+        depth: Int = 14,
+        multiPv: Int = 3,
+        skillLevel: Int? = null,
+        onUpdate: (List<LineDTO>) -> Unit
+    ): PositionDTO = withContext(Dispatchers.IO) {
+        if (engineMode.value == EngineMode.LOCAL) {
+            return@withContext LocalEngine.evaluateFenDetailedStreamingLocal(
+                fen = fen,
+                depth = depth,
+                multiPv = multiPv,
+                skillLevel = skillLevel,
+                onUpdate = onUpdate
+            )
+        } else {
+            // Серверный режим: пока отдадим единоразово (без реального стриминга).
+            val pos = evaluateFenDetailed(fen, depth, multiPv, skillLevel)
+            onUpdate(pos.lines)
+            pos
+        }
+    }
+
     suspend fun evaluateFenDetailed(
         fen: String,
         depth: Int = 14,
@@ -586,7 +614,7 @@ object EngineClient {
             web = EngineWebView(ctx) { line ->
                 when {
                     line == "ENGINE_READY" -> engineReady.set(true)
-                    line.startsWith("info string") -> { /* игнорируем */ }
+                    line.startsWith("info string") -> { /* ignore */ }
                     else -> {
                         synchronized(listeners) {
                             for (l in listeners) {
@@ -656,6 +684,9 @@ object EngineClient {
             }
         }
 
+        /**
+         * Старый метод — единоразовый снимок (вызывался после bestmove).
+         */
         suspend fun evaluateFenDetailedLocal(
             fen: String,
             depth: Int,
@@ -748,6 +779,134 @@ object EngineClient {
 
             PositionDTO(
                 lines = lines.ifEmpty { listOf(LineDTO(pv = emptyList(), cp = 0)) },
+                bestMove = bestMove ?: lines.firstOrNull()?.pv?.firstOrNull()
+            )
+        }
+
+        /**
+         * НОВОЕ: потоковая локальная оценка — onUpdate дергается на каждую «info ... pv ... depth ...».
+         * Возвращает финальный снимок (для совместимости).
+         */
+        suspend fun evaluateFenDetailedStreamingLocal(
+            fen: String,
+            depth: Int,
+            multiPv: Int,
+            skillLevel: Int?,
+            onUpdate: (List<LineDTO>) -> Unit
+        ): PositionDTO = withTimeout(180_000) {
+            ensureStarted()
+            if (!engineReady.get()) error("Engine not ready!")
+
+            val acc = mutableMapOf<Int, AccLine>()
+            var bestMove: String? = null
+            val done = CompletableDeferred<Unit>()
+
+            // локальная функция для эмита текущего снимка
+            fun emitSnapshot() {
+                val snapshot = acc.entries
+                    .sortedBy { it.key }
+                    .map { (mp, a) ->
+                        LineDTO(
+                            pv = a.pv,
+                            cp = a.cp,
+                            mate = a.mate,
+                            depth = a.depth,
+                            multiPv = mp
+                        )
+                    }
+                if (snapshot.isNotEmpty()) onUpdate(snapshot)
+            }
+
+            var reachedTargetDepth = 0
+
+            val listener: (String) -> Unit = { line ->
+                when {
+                    rxInfo.matcher(line).matches() -> {
+                        val mMp = rxMultiPv.matcher(line)
+                        val mp = if (mMp.find()) mMp.group(1).toIntOrNull() ?: 1 else 1
+                        val slot = acc.getOrPut(mp) { AccLine() }
+
+                        val mDepth = rxDepth.matcher(line)
+                        if (mDepth.find()) {
+                            val d = mDepth.group(1).toIntOrNull()
+                            if (d != null) {
+                                slot.depth = d
+                                reachedTargetDepth = maxOf(reachedTargetDepth, d)
+                            }
+                        }
+
+                        val mMate = rxScoreMate.matcher(line)
+                        val mCp = rxScoreCp.matcher(line)
+                        slot.mate = if (mMate.find()) mMate.group(1).toIntOrNull() else null
+                        slot.cp = if (slot.mate == null && mCp.find()) mCp.group(1).toIntOrNull() else slot.cp
+
+                        val mPv = rxPv.matcher(line)
+                        if (mPv.find()) {
+                            val pvStr = mPv.group(1)
+                            slot.pv = pvStr.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+                        }
+
+                        // Эмитим прогресс сразу же
+                        emitSnapshot()
+
+                        // Если достигли целевой глубины и есть MultiPV-линии — можно останавливать
+                        if (reachedTargetDepth >= depth && acc.isNotEmpty()) {
+                            done.complete(Unit)
+                        }
+                    }
+                    line.startsWith("bestmove") -> {
+                        val parts = line.split("\\s+".toRegex())
+                        if (parts.size >= 2) bestMove = parts[1]
+                        // финальный эмит
+                        emitSnapshot()
+                        done.complete(Unit)
+                    }
+                }
+            }
+
+            addListener(listener)
+
+            try {
+                send("uci")
+                delay(60)
+                send("isready")
+                delay(60)
+                send("ucinewgame")
+                delay(40)
+
+                if (skillLevel != null) {
+                    send("setoption name Skill Level value $skillLevel")
+                    delay(40)
+                }
+
+                // Обязательно включаем MultiPV заранее
+                send("setoption name MultiPV value ${multiPv.coerceAtLeast(1)}")
+                delay(40)
+
+                send("position fen $fen")
+                delay(40)
+                send("go depth $depth")
+
+                done.await()
+            } finally {
+                removeListener(listener)
+                runCatching { send("stop") }
+            }
+
+            val lines = acc.entries
+                .sortedBy { it.key }
+                .map { (mp, a) ->
+                    LineDTO(
+                        pv = a.pv,
+                        cp = a.cp,
+                        mate = a.mate,
+                        depth = a.depth,
+                        multiPv = mp
+                    )
+                }
+
+            PositionDTO(
+                lines = if (lines.isNotEmpty()) lines else listOf(LineDTO(pv = emptyList(), cp = 0)),
                 bestMove = bestMove ?: lines.firstOrNull()?.pv?.firstOrNull()
             )
         }

@@ -1,6 +1,8 @@
 package com.example.chessanalysis.ui.screens
 
+import android.annotation.SuppressLint
 import android.media.MediaPlayer
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
@@ -11,6 +13,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -29,6 +32,7 @@ import coil.request.ImageRequest
 import com.example.chessanalysis.*
 import com.example.chessanalysis.EngineClient.analyzeMoveRealtime
 import com.example.chessanalysis.EngineClient.evaluateFenDetailed
+import com.example.chessanalysis.EngineClient.evaluateFenDetailedStreaming
 import com.example.chessanalysis.ui.components.BoardCanvas
 import com.example.chessanalysis.ui.components.EvalBar
 import com.example.chessanalysis.ui.components.MovesCarousel
@@ -47,10 +51,10 @@ import kotlin.math.abs
 // ---------------- Вспомогательные типы для PV-панели ----------------
 
 private data class PvToken(
-    val iconAsset: String,          // "wN.svg", "bQ.svg" ...
-    val toSquare: String,           // "e5"
+    val iconAsset: String,
+    val toSquare: String,
     val capture: Boolean,
-    val promoSuffix: String = ""    // "=Q", "=N" и т.п.
+    val promoSuffix: String = ""
 )
 
 private fun pieceAssetName(p: Piece): String {
@@ -75,14 +79,9 @@ private fun PieceAssetIcon(name: String, size: Dp) {
             .decoderFactory(SvgDecoder.Factory())
             .build()
     )
-    Image(
-        painter = painter,
-        contentDescription = null,
-        modifier = Modifier.size(size)
-    )
+    Image(painter = painter, contentDescription = null, modifier = Modifier.size(size))
 }
 
-/** Безопасный поиск ЛЕГАЛЬНОГО хода (с поддержкой промоций) */
 private fun findLegalMove(board: Board, uci: String): Move? {
     if (uci.length < 4) return null
     val from = Square.fromValue(uci.substring(0, 2).uppercase())
@@ -102,7 +101,6 @@ private fun findLegalMove(board: Board, uci: String): Move? {
     } ?: legal.firstOrNull { it.from == from && it.to == to }
 }
 
-/** Построение токенов для «SAN-подобной» строки PV с иконками */
 private fun buildIconTokens(fen: String, pv: List<String>): List<PvToken> {
     val b = Board().apply { loadFromFen(fen) }
     val out = mutableListOf<PvToken>()
@@ -130,7 +128,6 @@ private fun buildIconTokens(fen: String, pv: List<String>): List<PvToken> {
     return out
 }
 
-/** Чип с оценкой (+1.53 / M…) */
 @Composable
 private fun EvalChip(line: LineEval, modifier: Modifier = Modifier) {
     val txt = when {
@@ -147,7 +144,6 @@ private fun EvalChip(line: LineEval, modifier: Modifier = Modifier) {
     }
 }
 
-/** Одна строка PV: чип с оценкой + ряд иконок-ходов */
 @Composable
 private fun PvRow(
     baseFen: String,
@@ -186,12 +182,12 @@ private fun PvRow(
     }
 }
 
-/** Панель из трёх линий */
 @Composable
 private fun EnginePvPanel(
     baseFen: String,
     lines: List<LineEval>,
     onClickMoveInLine: (lineIdx: Int, moveIdx: Int) -> Unit,
+    isBusy: Boolean,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -200,36 +196,64 @@ private fun EnginePvPanel(
             .background(Color(0xFF1E1C1A))
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        lines.take(3).forEachIndexed { li, line ->
-            PvRow(
-                baseFen = baseFen,
-                line = line,
-                onClickMoveAtIndex = { mi -> onClickMoveInLine(li, mi) }
-            )
+        Text(
+            "Линии компьютера",
+            color = Color.White,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(bottom = 6.dp)
+        )
+
+        AnimatedVisibility(visible = lines.isNotEmpty()) {
+            Column {
+                lines.forEachIndexed { li, line ->
+                    PvRow(
+                        baseFen = baseFen,
+                        line = line,
+                        onClickMoveAtIndex = { mi -> onClickMoveInLine(li, mi) }
+                    )
+                }
+            }
+        }
+
+        AnimatedVisibility(visible = lines.isEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                if (isBusy) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Линии рассчитываются…", color = Color.White.copy(alpha = 0.8f))
+                } else {
+                    Text("Нет доступных линий для этой позиции", color = Color.White.copy(alpha = 0.6f))
+                }
+            }
         }
     }
 }
 
-// --------------------- Топ-левел утилиты ДЛЯ ЧАСОВ ---------------------
+// --------------------- Часы / утилиты ---------------------
 
 fun extractGameId(pgn: String?): String? {
     if (pgn.isNullOrBlank()) return null
-    // [Site "https://lichess.org/AbCdEfGh"] или [Site "https://.../123456"]
     val sitePattern = Regex("""\[Site\s+".*/([\w]+)"\]""")
     sitePattern.find(pgn)?.groupValues?.getOrNull(1)?.let { return it }
-    // запасной вариант — любое 8-символьное
     val lichessPattern = Regex("""([a-zA-Z0-9]{8})""")
     lichessPattern.find(pgn)?.groupValues?.getOrNull(1)?.let { return it }
     return null
 }
 
-/**
- * Парсим все [%clk H:MM:SS] или [%clk MM:SS] из PGN и строим список оставшегося времени
- * после КАЖДОГО полухода. Часы для белых — на чётных индексах, для чёрных — на нечётных.
- */
 fun parseClockData(pgn: String): ClockData {
     val clockPattern = Regex("""\[%clk\s+((\d+):)?(\d{1,2}):(\d{1,2})\]""")
-    val whiteTimes = mutableListOf<Int>() // в сотых долях секунды
+    val whiteTimes = mutableListOf<Int>()
     val blackTimes = mutableListOf<Int>()
     var plyIndex = 0
     clockPattern.findAll(pgn).forEach { m ->
@@ -248,7 +272,6 @@ private suspend fun fetchLichessClocks(gameId: String): ClockData? = withContext
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .build()
-    // clocks=true вернёт только теги [%clk ...]
     val url = "https://lichess.org/game/export/$gameId?clocks=true&moves=false&tags=false"
     val request = Request.Builder().url(url).header("Accept", "application/x-chess-pgn").build()
     try {
@@ -263,6 +286,7 @@ private suspend fun fetchLichessClocks(gameId: String): ClockData? = withContext
 
 // --------------------- ЭКРАН ---------------------
 
+@SuppressLint("UnrememberedMutableState")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GameReportScreen(
@@ -288,14 +312,19 @@ fun GameReportScreen(
     var legalTargets by remember { mutableStateOf<Set<String>>(emptySet()) }
     var isAnalyzing by remember { mutableStateOf(false) }
 
-    // линии для нижней панели
+    // линии движка
     var engineLines by remember { mutableStateOf<List<LineEval>>(emptyList()) }
+
+    // настройки качества анализа
+    var targetDepth by remember { mutableStateOf(16) }
+    var targetMultiPv by remember { mutableStateOf(3) }
+    var pvBusy by remember { mutableStateOf(false) }
 
     val bgColor = Color(0xFF161512)
     val surfaceColor = Color(0xFF262522)
     val cardColor = Color(0xFF1E1C1A)
 
-    // Загрузка часов: сперва пробуем вытащить из PGN, если пусто — для Lichess дергаем экспорт clocks
+    // часы
     LaunchedEffect(report) {
         val pgn = report.header.pgn
         if (!pgn.isNullOrBlank()) {
@@ -311,11 +340,42 @@ fun GameReportScreen(
         }
     }
 
-    // Обновляем PV-панель при смене позиции, если не в вариации
-    LaunchedEffect(currentPlyIndex, variationActive) {
-        if (!variationActive) {
-            engineLines = report.positions.getOrNull(currentPlyIndex)?.lines?.take(3) ?: emptyList()
+    val baseFenForPanel by derivedStateOf {
+        if (variationActive) (variationFen ?: report.positions.getOrNull(currentPlyIndex)?.fen)
+        else report.positions.getOrNull(currentPlyIndex)?.fen
+    }
+
+    // Пересчёт PV при смене позиции/вариации/параметров — СТРИМИНГОМ
+    LaunchedEffect(baseFenForPanel, targetDepth, targetMultiPv) {
+        val fen = baseFenForPanel ?: return@LaunchedEffect
+        pvBusy = true
+        engineLines = emptyList()
+        // запуск стримингового расчёта
+        runCatching {
+            val final = evaluateFenDetailedStreaming(
+                fen = fen,
+                depth = targetDepth,
+                multiPv = targetMultiPv,
+                skillLevel = null
+            ) { linesDto ->
+                // onUpdate — обновляем сразу (без ожидания)
+                engineLines = linesDto.map { l ->
+                    LineEval(
+                        pv = l.pv,
+                        cp = l.cp,
+                        mate = l.mate,
+                        best = l.pv.firstOrNull()
+                    )
+                }.take(targetMultiPv)
+            }
+            // на выходе можно (необязательно) синхронизоваться с финальным снимком
+            engineLines = final.lines.map { l ->
+                LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
+            }.take(targetMultiPv)
+        }.onFailure {
+            engineLines = emptyList()
         }
+        pvBusy = false
     }
 
     fun evalOfPosition(pos: PositionEval?): Float {
@@ -342,7 +402,6 @@ fun GameReportScreen(
         } catch (_: Exception) {}
     }
 
-    /** Обработчик клика по клетке на доске — вариации + realtime-анализ */
     fun handleSquareClick(square: String) {
         if (isAnalyzing) return
 
@@ -353,27 +412,22 @@ fun GameReportScreen(
 
         val board = Board().apply { loadFromFen(boardFenNow) }
 
-        // Повторный клик — снять выделение
         if (selectedSquare != null && selectedSquare.equals(square, ignoreCase = true)) {
             selectedSquare = null
             legalTargets = emptySet()
             return
         }
 
-        // Если нет выбранного источника — показать возможные цели
         if (selectedSquare == null) {
             selectedSquare = square.lowercase()
             val all = MoveGenerator.generateLegalMoves(board)
             legalTargets = all.filter { it.from.toString().equals(selectedSquare, true) }
                 .map { it.to.toString().lowercase() }
                 .toSet()
-            if (legalTargets.isEmpty()) {
-                selectedSquare = null
-            }
+            if (legalTargets.isEmpty()) selectedSquare = null
             return
         }
 
-        // Источник есть — проверяем переключение на другую фигуру
         val from = selectedSquare!!.lowercase()
         val to   = square.lowercase()
         run {
@@ -389,11 +443,9 @@ fun GameReportScreen(
             }
         }
 
-        // Пробуем выполнить ход
         val legalMoves = MoveGenerator.generateLegalMoves(board)
         val move = legalMoves.firstOrNull { it.from.toString().equals(from, true) && it.to.toString().equals(to, true) }
             ?: legalMoves.firstOrNull { it.toString().equals(from + to, true) }
-
         if (move == null) {
             selectedSquare = null
             legalTargets = emptySet()
@@ -419,7 +471,6 @@ fun GameReportScreen(
             }
         }
 
-        // Входим в вариацию
         variationActive = true
         variationFen = afterFen
         variationLastMove = from to to
@@ -434,34 +485,41 @@ fun GameReportScreen(
                     beforeFen = beforeFen,
                     afterFen = afterFen,
                     uciMove = uciMove,
-                    depth = 16,
-                    multiPv = 3
+                    depth = targetDepth,
+                    multiPv = targetMultiPv
                 )
                 variationEval = newEval
                 variationMoveClass = moveClass
                 variationBestUci = bestMove
                 playMoveSound(moveClass, captured)
 
-                val detailed = evaluateFenDetailed(afterFen, depth = 16, multiPv = 3)
-                engineLines = detailed.lines.map { l ->
-                    LineEval(
-                        pv = l.pv,
-                        cp = l.cp,
-                        mate = l.mate,
-                        best = l.pv.firstOrNull()
-                    )
-                }.take(3)
+                // СТРИМИМ линии для новой позиции после хода:
+                pvBusy = true
+                engineLines = emptyList()
+                val final = evaluateFenDetailedStreaming(
+                    fen = afterFen,
+                    depth = targetDepth,
+                    multiPv = targetMultiPv,
+                    skillLevel = null
+                ) { linesDto ->
+                    engineLines = linesDto.map { l ->
+                        LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
+                    }.take(targetMultiPv)
+                }
+                engineLines = final.lines.map { l ->
+                    LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
+                }.take(targetMultiPv)
             } catch (_: Exception) {
                 variationEval = evalOfPosition(report.positions.getOrNull(currentPlyIndex))
                 variationMoveClass = MoveClass.OKAY
                 variationBestUci = null
             } finally {
+                pvBusy = false
                 isAnalyzing = false
             }
         }
     }
 
-    /** Клик по ходу внутри одной из трёх PV-строк */
     fun onClickPvMove(lineIdx: Int, moveIdx: Int) {
         val baseFen = if (variationActive)
             (variationFen ?: report.positions.getOrNull(currentPlyIndex)?.fen)
@@ -512,29 +570,36 @@ fun GameReportScreen(
                     beforeFen = before,
                     afterFen = after,
                     uciMove = uci,
-                    depth = 16,
-                    multiPv = 3
+                    depth = targetDepth,
+                    multiPv = targetMultiPv
                 )
                 variationEval = newEval
                 variationMoveClass = moveClass
                 variationBestUci = bestMove
                 playMoveSound(moveClass, captured)
 
-                // Переоценить «после» и показать новые 3 линии
-                val detailed = evaluateFenDetailed(after, depth = 16, multiPv = 3)
-                engineLines = detailed.lines.map { l ->
-                    LineEval(
-                        pv = l.pv,
-                        cp = l.cp,
-                        mate = l.mate,
-                        best = l.pv.firstOrNull()
-                    )
-                }.take(3)
+                // СТРИМИМ линии для этой точки вариации:
+                pvBusy = true
+                engineLines = emptyList()
+                val final = evaluateFenDetailedStreaming(
+                    fen = after,
+                    depth = targetDepth,
+                    multiPv = targetMultiPv,
+                    skillLevel = null
+                ) { linesDto ->
+                    engineLines = linesDto.map { l ->
+                        LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
+                    }.take(targetMultiPv)
+                }
+                engineLines = final.lines.map { l ->
+                    LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
+                }.take(targetMultiPv)
             } catch (_: Exception) {
                 variationEval = evalOfPosition(report.positions.getOrNull(currentPlyIndex))
                 variationMoveClass = MoveClass.OKAY
                 variationBestUci = null
             } finally {
+                pvBusy = false
                 isAnalyzing = false
             }
         }
@@ -566,10 +631,7 @@ fun GameReportScreen(
                     }
                 },
                 actions = {
-                    IconButton(
-                        onClick = { if (!isAnalyzing) isWhiteBottom = !isWhiteBottom },
-                        enabled = !isAnalyzing
-                    ) {
+                    IconButton(onClick = { if (!isAnalyzing) isWhiteBottom = !isWhiteBottom }, enabled = !isAnalyzing) {
                         Icon(Icons.Default.ScreenRotation, contentDescription = "Перевернуть", tint = if (isAnalyzing) Color.Gray else Color.White)
                     }
                 },
@@ -580,11 +642,13 @@ fun GameReportScreen(
             )
         }
     ) { padding ->
+        // ГЛАВНАЯ ВЕРТИКАЛЬНАЯ ПРОКРУТКА
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .background(bgColor)
+                .verticalScroll(rememberScrollState())
         ) {
             // Верхний игрок
             val topIsWhite = !isWhiteBottom
@@ -608,7 +672,7 @@ fun GameReportScreen(
                     .padding(horizontal = 12.dp, vertical = 4.dp)
             )
 
-            // Доска + Eval bar
+            // Доска + Eval bar (квадрат)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -637,7 +701,6 @@ fun GameReportScreen(
                         .width(20.dp)
                 )
 
-                // Доска
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
@@ -681,7 +744,7 @@ fun GameReportScreen(
                             isWhiteBottom = isWhiteBottom,
                             selectedSquare = selectedSquare,
                             legalMoves = legalTargets,
-                            onSquareClick = { handleSquareClick(it) }, // клики по доске включены в отчёте
+                            onSquareClick = { handleSquareClick(it) },
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -734,6 +797,18 @@ fun GameReportScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
+            // Карточка качества анализа (после ходов, до линий)
+            AnalysisQualityCard(
+                targetDepth = targetDepth,
+                onDepthChange = { targetDepth = it },
+                targetMultiPv = targetMultiPv,
+                onMultiPvChange = { targetMultiPv = it },
+                isBusy = pvBusy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+
             // Кнопки управления
             Row(
                 modifier = Modifier
@@ -776,16 +851,18 @@ fun GameReportScreen(
                 }
             }
 
-            // ---- НИЖНЯЯ ПАНЕЛЬ С ТРЕМЯ ЛИНИЯМИ ДВИЖКА ----
-            val baseFenForPanel =
-                if (variationActive) (variationFen ?: report.positions.getOrNull(currentPlyIndex)?.fen)
-                else report.positions.getOrNull(currentPlyIndex)?.fen
+            // ЛИНИИ ДВИЖКА — живые, стриминговые
             EnginePvPanel(
                 baseFen = baseFenForPanel ?: report.positions.firstOrNull()?.fen.orEmpty(),
                 lines = engineLines,
                 onClickMoveInLine = ::onClickPvMove,
-                modifier = Modifier.weight(1f)
+                isBusy = pvBusy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
             )
+
+            Spacer(Modifier.height(64.dp))
 
             // Автоплей
             LaunchedEffect(isAutoPlaying, currentPlyIndex, isAnalyzing) {
@@ -804,7 +881,7 @@ fun GameReportScreen(
 private fun PlayerCard(
     name: String,
     rating: Int?,
-    clock: Int?, // centiseconds
+    clock: Int?,
     isActive: Boolean,
     inverted: Boolean,
     modifier: Modifier = Modifier
@@ -821,14 +898,12 @@ private fun PlayerCard(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            // Цветовой пип (цвет стороны)
             Box(
                 modifier = Modifier
                     .size(10.dp)
                     .background(if (inverted) Color.Black else Color.White, CircleShape)
             )
             Spacer(Modifier.width(8.dp))
-            // Фолбэк-аватар с инициалом
             InitialAvatar(name = name, size = 28.dp)
             Spacer(Modifier.width(8.dp))
             Text(
@@ -880,5 +955,79 @@ private fun InitialAvatar(
             color = fg,
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
         )
+    }
+}
+
+// ------------------ Карточка качества анализа ------------------
+
+@Composable
+private fun AnalysisQualityCard(
+    targetDepth: Int,
+    onDepthChange: (Int) -> Unit,
+    targetMultiPv: Int,
+    onMultiPvChange: (Int) -> Unit,
+    isBusy: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1C1A)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Tune, contentDescription = null, tint = Color.White)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Качество анализа позиции",
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(Modifier.weight(1f))
+                if (isBusy) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("пересчёт…", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                    }
+                } else {
+                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF4CAF50))
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            Text("Depth: $targetDepth", color = Color.White.copy(alpha = 0.9f), fontWeight = FontWeight.Medium)
+            Slider(
+                value = targetDepth.toFloat(),
+                onValueChange = { onDepthChange(it.toInt().coerceIn(6, 40)) },
+                valueRange = 6f..40f,
+                steps = (40 - 6) - 1,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            Text("Линий (MultiPV): $targetMultiPv", color = Color.White.copy(alpha = 0.9f), fontWeight = FontWeight.Medium)
+            Slider(
+                value = targetMultiPv.toFloat(),
+                onValueChange = { onMultiPvChange(it.toInt().coerceIn(1, 5)) },
+                valueRange = 1f..5f,
+                steps = (5 - 1) - 1,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Повышайте глубину для точности, увеличивайте число линий для большего числа вариантов. Изменения применяются мгновенно к текущей позиции.",
+                color = Color.White.copy(alpha = 0.7f),
+                fontSize = 12.sp
+            )
+        }
     }
 }

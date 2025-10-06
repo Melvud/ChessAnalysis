@@ -1,5 +1,6 @@
 package com.example.chessanalysis.ui.screens
 
+import android.media.MediaPlayer
 import android.net.Uri
 import android.util.Log
 import android.widget.Toast
@@ -67,6 +68,7 @@ import com.example.chessanalysis.GameHeader
 import com.example.chessanalysis.MoveClass
 import com.example.chessanalysis.PgnChess
 import com.example.chessanalysis.Provider
+import com.example.chessanalysis.R
 import com.example.chessanalysis.data.local.gameRepository
 import com.example.chessanalysis.ui.UserProfile
 import com.example.chessanalysis.ui.components.BoardCanvas
@@ -92,11 +94,15 @@ fun GamesListScreen(
     var isLoading by remember { mutableStateOf(false) }
     var analyzedGames by remember { mutableStateOf<Map<String, FullReport>>(emptyMap()) }
 
-    // Live ожидание анализа
+    // Live ожидание анализа + мини-звуки
     var showAnalysis by remember { mutableStateOf(false) }
     var liveFen by remember { mutableStateOf<String?>(null) }
     var liveUciMove by remember { mutableStateOf<String?>(null) }
     var liveMoveClass by remember { mutableStateOf<String?>(null) }
+
+    // для звуков: предыдущая позиция (до текущего хода) и последний озвученный UCI
+    var prevFenForSound by remember { mutableStateOf<String?>(null) }
+    var lastSoundedUci by remember { mutableStateOf<String?>(null) }
 
     // Добавление PGN
     var showAddDialog by remember { mutableStateOf(false) }
@@ -108,7 +114,62 @@ fun GamesListScreen(
     var reAnalyzeMultiPv by remember { mutableStateOf(3) }
     var reAnalyzeTargetPgn by remember { mutableStateOf<String?>(null) }
 
-    // Загрузка всех партий из локального хранилища
+    // ===== Вспомогательные: звук и определение взятия по FEN+UCI =====
+    fun playMoveSound(cls: MoveClass?, isCapture: Boolean) {
+        val resId = when {
+            cls == MoveClass.INACCURACY || cls == MoveClass.MISTAKE || cls == MoveClass.BLUNDER -> R.raw.error
+            isCapture -> R.raw.capture
+            else -> R.raw.move
+        }
+        runCatching {
+            MediaPlayer.create(context, resId)?.apply {
+                setOnCompletionListener { it.release() }
+                start()
+            }
+        }
+    }
+
+    fun pieceAtFen(fen: String, square: String): Char? {
+        // fen: "pieces side castling ep halfmove fullmove"
+        val fields = fen.split(" ")
+        if (fields.isEmpty()) return null
+        val board = fields[0]
+        // строки board разделены '/', сверху (8) вниз (1)
+        val ranks = board.split("/")
+        if (ranks.size != 8) return null
+        val fileChar = square[0] - 'a' // 0..7
+        val rankIdxFromTop = 8 - (square[1] - '0') // 0..7
+        if (fileChar !in 0..7 || rankIdxFromTop !in 0..7) return null
+        val rank = ranks[rankIdxFromTop]
+        var col = 0
+        for (ch in rank) {
+            if (ch.isDigit()) {
+                col += (ch.code - '0'.code)
+            } else {
+                if (col == fileChar) return ch
+                col++
+            }
+        }
+        return null // пустая клетка
+    }
+
+    fun isCapture(prevFen: String?, uci: String): Boolean {
+        if (prevFen.isNullOrBlank() || uci.length < 4) return false
+        val from = uci.substring(0, 2)
+        val to = uci.substring(2, 4)
+        val pieceFrom = pieceAtFen(prevFen, from)
+        val pieceTo = pieceAtFen(prevFen, to)
+        // обычное взятие: на клетке назначения кто-то был
+        if (pieceTo != null) return true
+        // эн-пассант: пешка идёт по диагонали, но целевая пуста
+        val isPawn =
+            pieceFrom != null && (pieceFrom == 'P' || pieceFrom == 'p')
+        val fromFile = from[0]
+        val toFile = to[0]
+        return isPawn && fromFile != toFile
+    }
+
+    // ===== Загрузка всех партий из локального хранилища
     suspend fun loadFromLocal() {
         Log.d(TAG, "loadFromLocal: starting...")
         items = repo.getAllHeaders()
@@ -166,7 +227,7 @@ fun GamesListScreen(
         }
     }
 
-    // При первом запуске: загружаем из БД, затем синхронизируем, затем снова БД
+    // При первом запуске
     LaunchedEffect(profile) {
         isLoading = true
         loadFromLocal()
@@ -202,9 +263,12 @@ fun GamesListScreen(
         scope.launch {
             try {
                 showAnalysis = true
+                // сбрасываем состояние мини-звуков и лайва
                 liveFen = null
                 liveUciMove = null
                 liveMoveClass = null
+                prevFenForSound = null
+                lastSoundedUci = null
 
                 val header = runCatching { PgnChess.headerFromPgn(fullPgn) }.getOrNull()
 
@@ -214,8 +278,23 @@ fun GamesListScreen(
                     multiPv = multiPv,
                     header = header
                 ) { snap ->
-                    liveFen = snap.fen ?: liveFen
-                    liveUciMove = snap.currentUci ?: liveUciMove
+                    val newFen = snap.fen
+                    val newUci = snap.currentUci
+                    val cls = snap.currentClass?.let { runCatching { MoveClass.valueOf(it) }.getOrNull() }
+
+                    // Озвучиваем ход единожды
+                    if (!newUci.isNullOrBlank() && newUci != lastSoundedUci) {
+                        val captureNow = isCapture(prevFenForSound, newUci)
+                        playMoveSound(cls, captureNow)
+                        lastSoundedUci = newUci
+                    }
+
+                    // Обновляем prevFen на позицию ПОСЛЕ хода — она будет "до" для следующего
+                    prevFenForSound = newFen ?: prevFenForSound
+
+                    // Обновляем UI мини-экрана
+                    liveFen = newFen ?: liveFen
+                    liveUciMove = newUci ?: liveUciMove
                     liveMoveClass = snap.currentClass ?: liveMoveClass
                 }
 
@@ -271,7 +350,6 @@ fun GamesListScreen(
                         LazyColumn(Modifier.fillMaxSize()) {
                             itemsIndexed(
                                 items,
-                                // стабильный ключ (без индекса) — чтобы не терялся state элементов
                                 key = { _, g ->
                                     val hashPart = (g.pgn?.length ?: 0).toString()
                                     "${g.site}|${g.date}|${g.white}|${g.black}|${g.result}|$hashPart"
@@ -317,7 +395,7 @@ fun GamesListScreen(
                 }
             }
 
-            // Простой оверлей анализа
+            // Мини-оверлей анализа с доской и звуками (звуки триггерятся в колбэке выше)
             if (showAnalysis) {
                 Box(
                     Modifier
@@ -337,7 +415,7 @@ fun GamesListScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             if (!liveFen.isNullOrBlank()) {
-                                val lastMovePair = if (liveUciMove != null && liveUciMove!!.length >= 4) {
+                                val lastMovePair = if (!liveUciMove.isNullOrBlank() && liveUciMove!!.length >= 4) {
                                     liveUciMove!!.substring(0, 2) to liveUciMove!!.substring(2, 4)
                                 } else null
 
@@ -355,7 +433,9 @@ fun GamesListScreen(
                                     selectedSquare = null,
                                     legalMoves = emptySet(),
                                     onSquareClick = null,
-                                    modifier = Modifier.fillMaxSize().padding(8.dp)
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(8.dp)
                                 )
                             } else {
                                 CircularProgressIndicator()
