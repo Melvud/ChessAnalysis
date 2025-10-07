@@ -23,19 +23,20 @@ import okhttp3.logging.HttpLoggingInterceptor
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.regex.Pattern
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 object EngineClient {
 
     private const val TAG = "EngineClient"
 
-    // ====== Режим работы движка ======
     enum class EngineMode { SERVER, LOCAL }
 
     private val _engineMode = MutableStateFlow(EngineMode.SERVER)
     val engineMode: StateFlow<EngineMode> = _engineMode
 
-    // ====== Персист настроек движка ======
     private const val PREFS_NAME = "engine_prefs"
     private const val KEY_ENGINE_MODE = "engine_mode"
     private var prefs: SharedPreferences? = null
@@ -45,19 +46,16 @@ object EngineClient {
         val appContext = ctx.applicationContext
         LocalEngine.setContext(appContext)
 
-        // Инициализация openings для классификации
         Openings.init(appContext)
 
-        // Инициализация префсов и восстановление режима
         if (prefs == null) {
             prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val saved = when (prefs?.getString(KEY_ENGINE_MODE, EngineMode.LOCAL.name)) {
                 EngineMode.SERVER.name -> EngineMode.SERVER
-                else -> EngineMode.LOCAL // по умолчанию — локальный
+                else -> EngineMode.LOCAL
             }
             _engineMode.value = saved
             if (saved == EngineMode.LOCAL) {
-                // Поднимаем локальный движок, если нужно
                 runCatching { LocalEngine.ensureStarted() }
                     .onFailure { e -> Log.e(TAG, "Failed to start local engine on restore", e) }
             } else {
@@ -70,7 +68,6 @@ object EngineClient {
         Log.d(TAG, "Setting engine mode to: $mode")
         _engineMode.value = mode
 
-        // Сохраняем выбор
         prefs?.edit()?.putString(KEY_ENGINE_MODE, mode.name)?.apply()
 
         if (mode == EngineMode.LOCAL) {
@@ -84,7 +81,6 @@ object EngineClient {
         }
     }
 
-    // ----- КОНФИГУРАЦИЯ СЕРВЕРА -----
     object ServerConfig {
         private const val EMULATOR_URL = "http://10.0.2.2:8080"
         private const val PRODUCTION_URL = "https://your-chess-backend.com"
@@ -92,11 +88,9 @@ object EngineClient {
         val BASE_URL: String get() = if (IS_PRODUCTION) PRODUCTION_URL else EMULATOR_URL
     }
 
-    // ----- Логирование HTTP -----
     private val httpLogger = HttpLoggingInterceptor { msg -> Log.d("HTTP", msg) }
         .apply { level = HttpLoggingInterceptor.Level.BODY }
 
-    // ----- OkHttp с длинными таймаутами -----
     private val client = OkHttpClient.Builder()
         .addInterceptor(httpLogger)
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -106,12 +100,10 @@ object EngineClient {
         .retryOnConnectionFailure(true)
         .build()
 
-    // ----- JSON -----
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     private const val UA = "ChessAnalysis/1.5 (+android; local-server)"
 
-    // ----- Публичные state-потоки прогресса -----
     private val _percent = MutableStateFlow<Double?>(null)
     val percent: StateFlow<Double?> = _percent
 
@@ -122,8 +114,6 @@ object EngineClient {
         _percent.value = null
         _stage.value = null
     }
-
-    // ---------- DTO ----------
 
     @Serializable
     data class LineDTO(
@@ -192,12 +182,10 @@ object EngineClient {
         val stage: String? = null,
         val startedAt: Long? = null,
         val updatedAt: Long? = null,
-
-        // ---- Новые поля для «живой» доски ----
         val fen: String? = null,
         val currentSan: String? = null,
         val currentClass: String? = null,
-        val currentUci: String? = null  // UCI хода для отображения на доске
+        val currentUci: String? = null
     )
 
     @Serializable
@@ -218,8 +206,6 @@ object EngineClient {
         val skillLevel: Int? = null
     )
 
-    // ================= Публичное API =================
-
     suspend fun analyzeFen(
         fen: String,
         depth: Int = 14,
@@ -235,6 +221,30 @@ object EngineClient {
         }
     }
 
+    private fun parseClockDataFromPgn(pgn: String): ClockData {
+        val clockPattern = Regex("""\{\s*\[%clk\s+((\d+):)?(\d{1,2}):(\d{1,2})\]\s*\}""")
+        val whiteTimes = mutableListOf<Int>()
+        val blackTimes = mutableListOf<Int>()
+        var plyIndex = 0
+
+        clockPattern.findAll(pgn).forEach { m ->
+            val hours = (m.groups[2]?.value?.toIntOrNull() ?: 0)
+            val minutes = (m.groups[3]?.value?.toIntOrNull() ?: 0)
+            val seconds = (m.groups[4]?.value?.toIntOrNull() ?: 0)
+            val cs = (hours * 3600 + minutes * 60 + seconds) * 100
+
+            if (plyIndex % 2 == 0) {
+                whiteTimes.add(cs)
+            } else {
+                blackTimes.add(cs)
+            }
+            plyIndex++
+        }
+
+        Log.d(TAG, "parseClockDataFromPgn: found ${whiteTimes.size} white clocks, ${blackTimes.size} black clocks")
+        return ClockData(white = whiteTimes, black = blackTimes)
+    }
+
     suspend fun analyzeGameByPgnWithProgress(
         pgn: String,
         depth: Int = 16,
@@ -248,13 +258,21 @@ object EngineClient {
                 _percent.value = percent
                 _stage.value = stage
             }
-            return@coroutineScope analyzer.evaluateGameByPgnWithProgress(
+
+            // ПАРСИМ ЧАСЫ ДО НОРМАЛИЗАЦИИ
+            val clockData = parseClockDataFromPgn(pgn)
+            Log.d(TAG, "Parsed clocks before normalization: white=${clockData.white.size}, black=${clockData.black.size}")
+
+            val report = analyzer.evaluateGameByPgnWithProgress(
                 pgn = pgn,
                 depth = depth,
                 multiPv = multiPv,
                 workersNb = workersNb,
                 header = header
             ) { snap -> onProgress(snap) }
+
+            // ДОБАВЛЯЕМ ЧАСЫ В ОТЧЁТ
+            return@coroutineScope report.copy(clockData = clockData)
         }
 
         val progressId = UUID.randomUUID().toString()
@@ -264,6 +282,11 @@ object EngineClient {
             withContext(Dispatchers.IO) {
                 pingOrThrow()
                 val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game?progressId=$progressId"
+
+                // ПАРСИМ ЧАСЫ ДО НОРМАЛИЗАЦИИ
+                val clockData = parseClockDataFromPgn(pgn)
+                Log.d(TAG, "Parsed clocks before normalization: white=${clockData.white.size}, black=${clockData.black.size}")
+
                 val normalized = normalizePgn(pgn)
                 val payload = json.encodeToString(GamePgnRequest(normalized, depth, multiPv, workersNb, header))
                 val req = Request.Builder().url(url).header("Accept", "application/json").header("User-Agent", UA)
@@ -271,7 +294,10 @@ object EngineClient {
                 client.newCall(req).execute().use { resp ->
                     val body = resp.body?.string().orEmpty()
                     if (!resp.isSuccessful) error("HTTP ${resp.code}: ${body.take(300)}")
-                    json.decodeFromString<FullReport>(body)
+                    val report = json.decodeFromString<FullReport>(body)
+
+                    // ДОБАВЛЯЕМ ЧАСЫ В ОТЧЁТ
+                    report.copy(clockData = clockData)
                 }
             }
         } finally {
@@ -407,7 +433,6 @@ object EngineClient {
         multiPv: Int = 3
     ): Triple<Float, MoveClass, String?> = withContext(Dispatchers.IO) {
         if (engineMode.value == EngineMode.LOCAL) {
-            // Используем analyzeMoveRealtimeDetailed для полной классификации
             val result = analyzeMoveRealtimeDetailed(beforeFen, afterFen, uciMove, depth, multiPv, null)
             return@withContext Triple(result.evalAfter, result.moveClass, result.bestMove)
         }
@@ -432,11 +457,6 @@ object EngineClient {
         }
     }
 
-    /**
-     * NEW: Потоковая (стриминговая) оценка позиции.
-     * onUpdate вызывается КАЖДЫЙ РАЗ, когда движок присылает новую строку info/pv/depth.
-     * Возвращаемое значение — финальный снимок (после stop/bestmove или достижения нужной глубины).
-     */
     suspend fun evaluateFenDetailedStreaming(
         fen: String,
         depth: Int = 14,
@@ -453,7 +473,6 @@ object EngineClient {
                 onUpdate = onUpdate
             )
         } else {
-            // Серверный режим: пока отдадим единоразово (без реального стриминга).
             val pos = evaluateFenDetailed(fen, depth, multiPv, skillLevel)
             onUpdate(pos.lines)
             pos
@@ -480,8 +499,6 @@ object EngineClient {
             }
         }
     }
-
-    // ================= Вспомогательные =================
 
     private fun parseMoveClass(classification: String?): MoveClass {
         return when (classification?.uppercase()) {
@@ -588,7 +605,6 @@ object EngineClient {
         }
     }
 
-    // ====== Локальная реализация через WebView + UCI ======
     @SuppressLint("StaticFieldLeak")
     private object LocalEngine {
         private const val LOCAL_TAG = "LocalEngine"
@@ -597,23 +613,40 @@ object EngineClient {
         private var web: EngineWebView? = null
         private val started = AtomicBoolean(false)
         private val engineReady = AtomicBoolean(false)
+        private val analysisCounter = AtomicInteger(0)
+
+        private val engineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+        // Mutex для синхронизации доступа к движку
+        private val engineMutex = Mutex()
+
+        // Job текущего анализа (для отмены)
+        private var currentAnalysisJob: Job? = null
 
         fun setContext(ctx: Context) {
             appCtx = ctx
+            Log.d(LOCAL_TAG, "Context set")
         }
 
         fun ensureStarted() {
-            if (started.get()) return
+            if (started.getAndSet(true)) {
+                Log.d(LOCAL_TAG, "Engine already started")
+                return
+            }
 
             val ctx = appCtx ?: throw IllegalStateException(
                 "EngineClient: context is not set. Call setAndroidContext(context) before LOCAL mode."
             )
 
-            engineReady.set(false)
+            Log.d(LOCAL_TAG, "Starting engine initialization (async)...")
 
-            web = EngineWebView(ctx) { line ->
+            web = EngineWebView.getInstance(ctx) { line ->
                 when {
-                    line == "ENGINE_READY" -> engineReady.set(true)
+                    line == "ENGINE_READY" -> {
+                        engineReady.set(true)
+                        web?.markInitialized()
+                        Log.d(LOCAL_TAG, "✓ ENGINE_READY received")
+                    }
                     line.startsWith("info string") -> { /* ignore */ }
                     else -> {
                         synchronized(listeners) {
@@ -627,40 +660,42 @@ object EngineClient {
                         }
                     }
                 }
-            }.also {
-                it.start()
             }
 
-            started.set(true)
+            web?.start()
 
-            runBlocking {
+            engineScope.launch {
                 var attempts = 0
-                while (!engineReady.get() && attempts < 50) {
+                while (!engineReady.get() && attempts < 200) {
                     delay(100)
                     attempts++
                 }
                 if (!engineReady.get()) {
-                    Log.e(LOCAL_TAG, "Engine failed to initialize!")
+                    Log.e(LOCAL_TAG, "⚠ Engine initialization timeout after ${attempts * 100}ms")
+                } else {
+                    Log.d(LOCAL_TAG, "✓ Engine ready after ${attempts * 100}ms")
                 }
             }
         }
 
         fun stop() {
-            started.set(false)
-            engineReady.set(false)
-            runCatching { web?.stop() }
-            web = null
-            synchronized(listeners) { listeners.clear() }
+            Log.d(LOCAL_TAG, "stop() called — WebView remains alive")
         }
 
         private val listeners = mutableListOf<(String) -> Unit>()
 
         private fun addListener(l: (String) -> Unit) {
-            synchronized(listeners) { listeners.add(l) }
+            synchronized(listeners) {
+                listeners.add(l)
+                Log.d(LOCAL_TAG, "✓ Listener added, total: ${listeners.size}")
+            }
         }
 
         private fun removeListener(l: (String) -> Unit) {
-            synchronized(listeners) { listeners.remove(l) }
+            synchronized(listeners) {
+                listeners.remove(l)
+                Log.d(LOCAL_TAG, "✓ Listener removed, remaining: ${listeners.size}")
+            }
         }
 
         private val rxInfo = Pattern.compile("""^info\s+.*\bdepth\s+\d+.*""")
@@ -681,129 +716,151 @@ object EngineClient {
             withContext(Dispatchers.Main) {
                 val w = web ?: throw IllegalStateException("Local engine is not started")
                 w.send(cmd)
+                Log.d(LOCAL_TAG, "→ $cmd")
             }
         }
 
-        /**
-         * Старый метод — единоразовый снимок (вызывался после bestmove).
-         */
+        private suspend fun waitForReady(timeoutMs: Long = 20000): Boolean {
+            val startTime = System.currentTimeMillis()
+            while (!engineReady.get()) {
+                if (System.currentTimeMillis() - startTime > timeoutMs) {
+                    Log.e(LOCAL_TAG, "⚠ Engine not ready after ${timeoutMs}ms")
+                    return false
+                }
+                delay(100)
+            }
+            return true
+        }
+
+        private suspend fun sendAndWaitReady(cmd: String, timeoutMs: Long = 3000): Boolean {
+            val readySignal = CompletableDeferred<Unit>()
+
+            val readyListener: (String) -> Unit = { line ->
+                if (line == "readyok") {
+                    Log.d(LOCAL_TAG, "✓ readyok")
+                    readySignal.complete(Unit)
+                }
+            }
+
+            addListener(readyListener)
+
+            return try {
+                send(cmd)
+                withTimeout(timeoutMs) {
+                    readySignal.await()
+                }
+                true
+            } catch (e: TimeoutCancellationException) {
+                Log.w(LOCAL_TAG, "⚠ readyok timeout")
+                false
+            } finally {
+                removeListener(readyListener)
+            }
+        }
+
         suspend fun evaluateFenDetailedLocal(
             fen: String,
             depth: Int,
             multiPv: Int,
             skillLevel: Int?
         ): PositionDTO = withTimeout(120_000) {
-            ensureStarted()
+            // Отменяем предыдущий анализ
+            currentAnalysisJob?.cancel()
 
-            if (!engineReady.get()) {
-                throw IllegalStateException("Engine not ready!")
-            }
+            val analysisId = analysisCounter.incrementAndGet()
+            Log.d(LOCAL_TAG, "▶ Starting analysis #$analysisId (blocking previous)")
 
-            val acc = mutableMapOf<Int, AccLine>()
-            var bestMove: String? = null
-            val done = CompletableDeferred<Unit>()
+            // Захватываем mutex
+            engineMutex.withLock {
+                if (!waitForReady()) {
+                    throw IllegalStateException("Engine not ready!")
+                }
 
-            val listener: (String) -> Unit = { line ->
-                when {
-                    rxInfo.matcher(line).matches() -> {
-                        val mMp = rxMultiPv.matcher(line)
-                        val mp = if (mMp.find()) mMp.group(1).toIntOrNull() ?: 1 else 1
-                        val slot = acc.getOrPut(mp) { AccLine() }
+                val acc = mutableMapOf<Int, AccLine>()
+                var bestMove: String? = null
+                val done = CompletableDeferred<Unit>()
 
-                        val mDepth = rxDepth.matcher(line)
-                        if (mDepth.find()) slot.depth = mDepth.group(1).toIntOrNull()
+                val listener: (String) -> Unit = { line ->
+                    when {
+                        rxInfo.matcher(line).matches() -> {
+                            val mMp = rxMultiPv.matcher(line)
+                            val mp = if (mMp.find()) mMp.group(1).toIntOrNull() ?: 1 else 1
+                            val slot = acc.getOrPut(mp) { AccLine() }
 
-                        val mMate = rxScoreMate.matcher(line)
-                        val mCp = rxScoreCp.matcher(line)
-                        slot.mate = if (mMate.find()) mMate.group(1).toIntOrNull() else null
-                        slot.cp = if (slot.mate == null && mCp.find()) mCp.group(1).toIntOrNull() else slot.cp
+                            val mDepth = rxDepth.matcher(line)
+                            if (mDepth.find()) slot.depth = mDepth.group(1).toIntOrNull()
 
-                        val mPv = rxPv.matcher(line)
-                        if (mPv.find()) {
-                            val pvStr = mPv.group(1)
-                            slot.pv = pvStr.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+                            val mMate = rxScoreMate.matcher(line)
+                            val mCp = rxScoreCp.matcher(line)
+                            slot.mate = if (mMate.find()) mMate.group(1).toIntOrNull() else null
+                            slot.cp = if (slot.mate == null && mCp.find()) mCp.group(1).toIntOrNull() else slot.cp
+
+                            val mPv = rxPv.matcher(line)
+                            if (mPv.find()) {
+                                val pvStr = mPv.group(1)
+                                slot.pv = pvStr.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+                            }
+                        }
+                        line.startsWith("bestmove") -> {
+                            val parts = line.split("\\s+".toRegex())
+                            if (parts.size >= 2) {
+                                bestMove = parts[1]
+                            }
+                            Log.d(LOCAL_TAG, "✓ Analysis #$analysisId: bestmove=$bestMove")
+                            done.complete(Unit)
                         }
                     }
-                    line.startsWith("bestmove") -> {
-                        val parts = line.split("\\s+".toRegex())
-                        if (parts.size >= 2) {
-                            bestMove = parts[1]
-                        }
-                        done.complete(Unit)
+                }
+
+                addListener(listener)
+
+                try {
+                    send("stop")
+                    delay(150)
+
+                    sendAndWaitReady("isready")
+
+                    send("ucinewgame")
+                    delay(100)
+
+                    sendAndWaitReady("isready")
+
+                    if (skillLevel != null) {
+                        send("setoption name Skill Level value $skillLevel")
+                        delay(50)
                     }
-                }
-            }
 
-            addListener(listener)
+                    if (multiPv > 1) {
+                        send("setoption name MultiPV value $multiPv")
+                        delay(50)
+                    }
 
-            try {
-                send("uci")
-                delay(100)
-                send("isready")
-                delay(100)
-                send("ucinewgame")
-                delay(50)
+                    sendAndWaitReady("isready")
 
-                if (skillLevel != null) {
-                    send("setoption name Skill Level value $skillLevel")
-                    delay(50)
-                }
+                    send("position fen $fen")
+                    delay(100)
 
-                if (multiPv > 1) {
-                    send("setoption name MultiPV value $multiPv")
-                    delay(50)
-                }
+                    send("go depth $depth")
 
-                send("position fen $fen")
-                delay(50)
-                send("go depth $depth")
+                    withTimeout(110_000) {
+                        done.await()
+                    }
 
-                done.await()
+                    Log.d(LOCAL_TAG, "✓ Analysis #$analysisId completed")
 
-            } finally {
-                removeListener(listener)
-                runCatching { send("stop") }
-            }
-
-            val lines = acc.entries
-                .sortedBy { it.key }
-                .map { (mp, a) ->
-                    LineDTO(
-                        pv = a.pv,
-                        cp = a.cp,
-                        mate = a.mate,
-                        depth = a.depth,
-                        multiPv = mp
-                    )
+                } catch (e: CancellationException) {
+                    Log.w(LOCAL_TAG, "⚠ Analysis #$analysisId CANCELLED")
+                    throw e
+                } catch (e: TimeoutCancellationException) {
+                    Log.e(LOCAL_TAG, "⚠ Analysis #$analysisId TIMEOUT")
+                    send("stop")
+                    delay(100)
+                    throw e
+                } finally {
+                    removeListener(listener)
                 }
 
-            PositionDTO(
-                lines = lines.ifEmpty { listOf(LineDTO(pv = emptyList(), cp = 0)) },
-                bestMove = bestMove ?: lines.firstOrNull()?.pv?.firstOrNull()
-            )
-        }
-
-        /**
-         * НОВОЕ: потоковая локальная оценка — onUpdate дергается на каждую «info ... pv ... depth ...».
-         * Возвращает финальный снимок (для совместимости).
-         */
-        suspend fun evaluateFenDetailedStreamingLocal(
-            fen: String,
-            depth: Int,
-            multiPv: Int,
-            skillLevel: Int?,
-            onUpdate: (List<LineDTO>) -> Unit
-        ): PositionDTO = withTimeout(180_000) {
-            ensureStarted()
-            if (!engineReady.get()) error("Engine not ready!")
-
-            val acc = mutableMapOf<Int, AccLine>()
-            var bestMove: String? = null
-            val done = CompletableDeferred<Unit>()
-
-            // локальная функция для эмита текущего снимка
-            fun emitSnapshot() {
-                val snapshot = acc.entries
+                val lines = acc.entries
                     .sortedBy { it.key }
                     .map { (mp, a) ->
                         LineDTO(
@@ -814,101 +871,198 @@ object EngineClient {
                             multiPv = mp
                         )
                     }
-                if (snapshot.isNotEmpty()) onUpdate(snapshot)
+
+                PositionDTO(
+                    lines = lines.ifEmpty { listOf(LineDTO(pv = emptyList(), cp = 0)) },
+                    bestMove = bestMove ?: lines.firstOrNull()?.pv?.firstOrNull()
+                )
             }
+        }
 
-            var reachedTargetDepth = 0
+        suspend fun evaluateFenDetailedStreamingLocal(
+            fen: String,
+            depth: Int,
+            multiPv: Int,
+            skillLevel: Int?,
+            onUpdate: (List<LineDTO>) -> Unit
+        ): PositionDTO = coroutineScope {
+            // Отменяем предыдущий анализ
+            currentAnalysisJob?.cancel()
 
-            val listener: (String) -> Unit = { line ->
-                when {
-                    rxInfo.matcher(line).matches() -> {
-                        val mMp = rxMultiPv.matcher(line)
-                        val mp = if (mMp.find()) mMp.group(1).toIntOrNull() ?: 1 else 1
-                        val slot = acc.getOrPut(mp) { AccLine() }
+            val analysisId = analysisCounter.incrementAndGet()
+            Log.d(LOCAL_TAG, "▶ Starting streaming #$analysisId (cancelling previous)")
 
-                        val mDepth = rxDepth.matcher(line)
-                        if (mDepth.find()) {
-                            val d = mDepth.group(1).toIntOrNull()
-                            if (d != null) {
-                                slot.depth = d
-                                reachedTargetDepth = maxOf(reachedTargetDepth, d)
+            // Переменная для хранения финального результата
+            val finalResult = CompletableDeferred<PositionDTO>()
+
+            // Создаем новый Job для этого анализа
+            currentAnalysisJob = launch {
+                try {
+                    // Захватываем mutex
+                    engineMutex.withLock {
+                        if (!waitForReady()) {
+                            throw IllegalStateException("Engine not ready!")
+                        }
+
+                        val acc = mutableMapOf<Int, AccLine>()
+                        var bestMove: String? = null
+                        val done = CompletableDeferred<Unit>()
+
+                        fun emitSnapshot() {
+                            val snapshot = acc.entries
+                                .sortedBy { it.key }
+                                .map { (mp, a) ->
+                                    LineDTO(
+                                        pv = a.pv,
+                                        cp = a.cp,
+                                        mate = a.mate,
+                                        depth = a.depth,
+                                        multiPv = mp
+                                    )
+                                }
+                            if (snapshot.isNotEmpty()) {
+                                onUpdate(snapshot)
+                                Log.d(LOCAL_TAG, "📊 Streaming #$analysisId: emitted ${snapshot.size} lines")
                             }
                         }
 
-                        val mMate = rxScoreMate.matcher(line)
-                        val mCp = rxScoreCp.matcher(line)
-                        slot.mate = if (mMate.find()) mMate.group(1).toIntOrNull() else null
-                        slot.cp = if (slot.mate == null && mCp.find()) mCp.group(1).toIntOrNull() else slot.cp
+                        var reachedTargetDepth = 0
 
-                        val mPv = rxPv.matcher(line)
-                        if (mPv.find()) {
-                            val pvStr = mPv.group(1)
-                            slot.pv = pvStr.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+                        val listener: (String) -> Unit = { line ->
+                            when {
+                                rxInfo.matcher(line).matches() -> {
+                                    val mMp = rxMultiPv.matcher(line)
+                                    val mp = if (mMp.find()) mMp.group(1).toIntOrNull() ?: 1 else 1
+                                    val slot = acc.getOrPut(mp) { AccLine() }
+
+                                    val mDepth = rxDepth.matcher(line)
+                                    if (mDepth.find()) {
+                                        val d = mDepth.group(1).toIntOrNull()
+                                        if (d != null) {
+                                            slot.depth = d
+                                            reachedTargetDepth = maxOf(reachedTargetDepth, d)
+                                        }
+                                    }
+
+                                    val mMate = rxScoreMate.matcher(line)
+                                    val mCp = rxScoreCp.matcher(line)
+                                    slot.mate = if (mMate.find()) mMate.group(1).toIntOrNull() else null
+                                    slot.cp = if (slot.mate == null && mCp.find()) mCp.group(1).toIntOrNull() else slot.cp
+
+                                    val mPv = rxPv.matcher(line)
+                                    if (mPv.find()) {
+                                        val pvStr = mPv.group(1)
+                                        slot.pv = pvStr.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+                                    }
+
+                                    emitSnapshot()
+
+                                    if (reachedTargetDepth >= depth && acc.isNotEmpty()) {
+                                        Log.d(LOCAL_TAG, "✓ Streaming #$analysisId reached target depth $depth")
+                                        done.complete(Unit)
+                                    }
+                                }
+                                line.startsWith("bestmove") -> {
+                                    val parts = line.split("\\s+".toRegex())
+                                    if (parts.size >= 2) bestMove = parts[1]
+                                    emitSnapshot()
+                                    Log.d(LOCAL_TAG, "✓ Streaming #$analysisId: bestmove=$bestMove")
+                                    done.complete(Unit)
+                                }
+                            }
                         }
 
-                        // Эмитим прогресс сразу же
-                        emitSnapshot()
+                        addListener(listener)
 
-                        // Если достигли целевой глубины и есть MultiPV-линии — можно останавливать
-                        if (reachedTargetDepth >= depth && acc.isNotEmpty()) {
-                            done.complete(Unit)
+                        try {
+                            send("stop")
+                            delay(150)
+
+                            sendAndWaitReady("isready")
+
+                            send("ucinewgame")
+                            delay(100)
+
+                            sendAndWaitReady("isready")
+
+                            if (skillLevel != null) {
+                                send("setoption name Skill Level value $skillLevel")
+                                delay(50)
+                            }
+
+                            send("setoption name MultiPV value ${multiPv.coerceAtLeast(1)}")
+                            delay(50)
+
+                            sendAndWaitReady("isready")
+
+                            send("position fen $fen")
+                            delay(100)
+
+                            send("go depth $depth")
+
+                            withTimeout(170_000) {
+                                done.await()
+                            }
+
+                            // ВАЖНО: формируем финальный результат ПЕРЕД удалением listener
+                            val lines = acc.entries
+                                .sortedBy { it.key }
+                                .map { (mp, a) ->
+                                    LineDTO(
+                                        pv = a.pv,
+                                        cp = a.cp,
+                                        mate = a.mate,
+                                        depth = a.depth,
+                                        multiPv = mp
+                                    )
+                                }
+
+                            val result = PositionDTO(
+                                lines = if (lines.isNotEmpty()) lines else listOf(LineDTO(pv = emptyList(), cp = 0)),
+                                bestMove = bestMove ?: lines.firstOrNull()?.pv?.firstOrNull()
+                            )
+
+                            Log.d(LOCAL_TAG, "✓ Streaming #$analysisId completed with ${lines.size} lines")
+
+                            // Сохраняем результат
+                            finalResult.complete(result)
+
+                        } catch (e: CancellationException) {
+                            Log.w(LOCAL_TAG, "⚠ Streaming #$analysisId CANCELLED")
+                            send("stop")
+                            delay(100)
+                            finalResult.completeExceptionally(e)
+                            throw e
+                        } catch (e: TimeoutCancellationException) {
+                            Log.e(LOCAL_TAG, "⚠ Streaming #$analysisId TIMEOUT")
+                            send("stop")
+                            delay(100)
+                            finalResult.completeExceptionally(e)
+                            throw e
+                        } finally {
+                            removeListener(listener)
+                            Log.d(LOCAL_TAG, "✓ Listener removed for #$analysisId")
                         }
                     }
-                    line.startsWith("bestmove") -> {
-                        val parts = line.split("\\s+".toRegex())
-                        if (parts.size >= 2) bestMove = parts[1]
-                        // финальный эмит
-                        emitSnapshot()
-                        done.complete(Unit)
+                } catch (e: CancellationException) {
+                    Log.d(LOCAL_TAG, "✓ Analysis #$analysisId properly cancelled")
+                    if (!finalResult.isCompleted) {
+                        finalResult.completeExceptionally(e)
                     }
                 }
             }
 
-            addListener(listener)
-
+            // Ждём завершения и возвращаем результат
             try {
-                send("uci")
-                delay(60)
-                send("isready")
-                delay(60)
-                send("ucinewgame")
-                delay(40)
-
-                if (skillLevel != null) {
-                    send("setoption name Skill Level value $skillLevel")
-                    delay(40)
-                }
-
-                // Обязательно включаем MultiPV заранее
-                send("setoption name MultiPV value ${multiPv.coerceAtLeast(1)}")
-                delay(40)
-
-                send("position fen $fen")
-                delay(40)
-                send("go depth $depth")
-
-                done.await()
-            } finally {
-                removeListener(listener)
-                runCatching { send("stop") }
+                finalResult.await()
+            } catch (e: CancellationException) {
+                // Если был отменён, возвращаем пустой результат (чтобы не крашить UI)
+                Log.w(LOCAL_TAG, "Returning empty result due to cancellation")
+                PositionDTO(
+                    lines = listOf(LineDTO(pv = emptyList(), cp = 0)),
+                    bestMove = null
+                )
             }
-
-            val lines = acc.entries
-                .sortedBy { it.key }
-                .map { (mp, a) ->
-                    LineDTO(
-                        pv = a.pv,
-                        cp = a.cp,
-                        mate = a.mate,
-                        depth = a.depth,
-                        multiPv = mp
-                    )
-                }
-
-            PositionDTO(
-                lines = if (lines.isNotEmpty()) lines else listOf(LineDTO(pv = emptyList(), cp = 0)),
-                bestMove = bestMove ?: lines.firstOrNull()?.pv?.firstOrNull()
-            )
         }
     }
 }

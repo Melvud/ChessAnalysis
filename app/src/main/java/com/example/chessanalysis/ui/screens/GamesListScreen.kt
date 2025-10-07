@@ -12,47 +12,27 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Badge
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
-import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -77,12 +57,16 @@ import kotlinx.serialization.json.Json
 
 private const val TAG = "GamesListScreen"
 
+enum class GameFilter { ALL, LICHESS, CHESSCOM, MANUAL }
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun GamesListScreen(
     profile: UserProfile,
     games: List<GameHeader>,
     openingFens: Set<String>,
+    isFirstLoad: Boolean,
+    onFirstLoadComplete: () -> Unit,
     onOpenReport: (FullReport) -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -94,27 +78,24 @@ fun GamesListScreen(
     var isLoading by remember { mutableStateOf(false) }
     var analyzedGames by remember { mutableStateOf<Map<String, FullReport>>(emptyMap()) }
 
-    // Live ожидание анализа + мини-звуки
+    var currentFilter by remember { mutableStateOf(GameFilter.ALL) }
+
     var showAnalysis by remember { mutableStateOf(false) }
     var liveFen by remember { mutableStateOf<String?>(null) }
     var liveUciMove by remember { mutableStateOf<String?>(null) }
     var liveMoveClass by remember { mutableStateOf<String?>(null) }
 
-    // для звуков: предыдущая позиция (до текущего хода) и последний озвученный UCI
     var prevFenForSound by remember { mutableStateOf<String?>(null) }
     var lastSoundedUci by remember { mutableStateOf<String?>(null) }
 
-    // Добавление PGN
     var showAddDialog by remember { mutableStateOf(false) }
     var pastedPgn by remember { mutableStateOf("") }
 
-    // Лист перезапуска анализа
     var showReAnalyzeSheet by remember { mutableStateOf(false) }
     var reAnalyzeDepth by remember { mutableStateOf(16) }
     var reAnalyzeMultiPv by remember { mutableStateOf(3) }
     var reAnalyzeTargetPgn by remember { mutableStateOf<String?>(null) }
 
-    // ===== Вспомогательные: звук и определение взятия по FEN+UCI =====
     fun playMoveSound(cls: MoveClass?, isCapture: Boolean) {
         val resId = when {
             cls == MoveClass.INACCURACY || cls == MoveClass.MISTAKE || cls == MoveClass.BLUNDER -> R.raw.error
@@ -130,15 +111,13 @@ fun GamesListScreen(
     }
 
     fun pieceAtFen(fen: String, square: String): Char? {
-        // fen: "pieces side castling ep halfmove fullmove"
         val fields = fen.split(" ")
         if (fields.isEmpty()) return null
         val board = fields[0]
-        // строки board разделены '/', сверху (8) вниз (1)
         val ranks = board.split("/")
         if (ranks.size != 8) return null
-        val fileChar = square[0] - 'a' // 0..7
-        val rankIdxFromTop = 8 - (square[1] - '0') // 0..7
+        val fileChar = square[0] - 'a'
+        val rankIdxFromTop = 8 - (square[1] - '0')
         if (fileChar !in 0..7 || rankIdxFromTop !in 0..7) return null
         val rank = ranks[rankIdxFromTop]
         var col = 0
@@ -150,7 +129,7 @@ fun GamesListScreen(
                 col++
             }
         }
-        return null // пустая клетка
+        return null
     }
 
     fun isCapture(prevFen: String?, uci: String): Boolean {
@@ -159,17 +138,13 @@ fun GamesListScreen(
         val to = uci.substring(2, 4)
         val pieceFrom = pieceAtFen(prevFen, from)
         val pieceTo = pieceAtFen(prevFen, to)
-        // обычное взятие: на клетке назначения кто-то был
         if (pieceTo != null) return true
-        // эн-пассант: пешка идёт по диагонали, но целевая пуста
-        val isPawn =
-            pieceFrom != null && (pieceFrom == 'P' || pieceFrom == 'p')
+        val isPawn = pieceFrom != null && (pieceFrom == 'P' || pieceFrom == 'p')
         val fromFile = from[0]
         val toFile = to[0]
         return isPawn && fromFile != toFile
     }
 
-    // ===== Загрузка всех партий из локального хранилища
     suspend fun loadFromLocal() {
         Log.d(TAG, "loadFromLocal: starting...")
         items = repo.getAllHeaders()
@@ -219,21 +194,35 @@ fun GamesListScreen(
             Log.d(TAG, "syncWithRemote: total added = $addedCount")
 
             if (addedCount > 0) {
-                Toast.makeText(context, "Добавлено новых партий: $addedCount", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.games_added, addedCount),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         } catch (e: Throwable) {
             Log.e(TAG, "syncWithRemote failed: ${e.message}", e)
-            Toast.makeText(context, "Ошибка синхронизации: ${e.message}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                context,
+                context.getString(R.string.sync_error, e.message ?: ""),
+                Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
-    // При первом запуске
-    LaunchedEffect(profile) {
-        isLoading = true
-        loadFromLocal()
-        syncWithRemote()
-        loadFromLocal()
-        isLoading = false
+    LaunchedEffect(profile, isFirstLoad) {
+        if (isFirstLoad) {
+            Log.d(TAG, "🔄 First load detected, syncing with remote...")
+            isLoading = true
+            loadFromLocal()
+            syncWithRemote()
+            loadFromLocal()
+            isLoading = false
+            onFirstLoadComplete()
+        } else {
+            Log.d(TAG, "✓ Not first load, loading from cache only")
+            loadFromLocal()
+        }
     }
 
     val pullState = rememberPullToRefreshState()
@@ -247,12 +236,16 @@ fun GamesListScreen(
                     val pgn = context.contentResolver.openInputStream(uri)?.use {
                         it.readBytes().toString(Charsets.UTF_8)
                     }.orEmpty()
-                    if (pgn.isBlank()) error("Файл пустой или не PGN.")
+                    if (pgn.isBlank()) error(context.getString(R.string.empty_pgn))
                     addManualGame(pgn, profile, repo)
                     loadFromLocal()
-                    Toast.makeText(context, "Партия добавлена", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.game_added), Toast.LENGTH_SHORT).show()
                 }.onFailure {
-                    Toast.makeText(context, "Не удалось добавить партию: ${it.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.add_error, it.message ?: ""),
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             }
         }
@@ -263,7 +256,6 @@ fun GamesListScreen(
         scope.launch {
             try {
                 showAnalysis = true
-                // сбрасываем состояние мини-звуков и лайва
                 liveFen = null
                 liveUciMove = null
                 liveMoveClass = null
@@ -282,17 +274,14 @@ fun GamesListScreen(
                     val newUci = snap.currentUci
                     val cls = snap.currentClass?.let { runCatching { MoveClass.valueOf(it) }.getOrNull() }
 
-                    // Озвучиваем ход единожды
                     if (!newUci.isNullOrBlank() && newUci != lastSoundedUci) {
                         val captureNow = isCapture(prevFenForSound, newUci)
                         playMoveSound(cls, captureNow)
                         lastSoundedUci = newUci
                     }
 
-                    // Обновляем prevFen на позицию ПОСЛЕ хода — она будет "до" для следующего
                     prevFenForSound = newFen ?: prevFenForSound
 
-                    // Обновляем UI мини-экрана
                     liveFen = newFen ?: liveFen
                     liveUciMove = newUci ?: liveUciMove
                     liveMoveClass = snap.currentClass ?: liveMoveClass
@@ -304,98 +293,178 @@ fun GamesListScreen(
                 onOpenReport(report)
             } catch (t: Throwable) {
                 showAnalysis = false
-                Toast.makeText(context, "Ошибка анализа: ${t.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.analysis_error, t.message ?: ""),
+                    Toast.LENGTH_LONG
+                ).show()
             }
+        }
+    }
+
+    val filteredItems = remember(items, currentFilter) {
+        when (currentFilter) {
+            GameFilter.ALL -> items
+            GameFilter.LICHESS -> items.filter { it.site == Provider.LICHESS }
+            GameFilter.CHESSCOM -> items.filter { it.site == Provider.CHESSCOM }
+            GameFilter.MANUAL -> items.filter { it.site == Provider.MANUAL }
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Список партий") },
+                title = { Text(stringResource(R.string.games_list)) },
                 actions = {
                     IconButton(onClick = { showAddDialog = true }) {
-                        Icon(Icons.Default.Add, contentDescription = "Добавить партию")
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = stringResource(R.string.add_game)
+                        )
                     }
                 }
             )
         }
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            PullToRefreshBox(
-                modifier = Modifier.fillMaxSize(),
-                isRefreshing = isLoading,
-                onRefresh = {
-                    scope.launch {
-                        isLoading = true
-                        syncWithRemote()
-                        loadFromLocal()
-                        isLoading = false
-                    }
-                },
-                state = pullState
-            ) {
-                when {
-                    isLoading && items.isEmpty() -> {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator()
+            Column(Modifier.fillMaxSize()) {
+                // ФИЛЬТРЫ
+                // Замените секцию ФИЛЬТРЫ на это:
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = currentFilter == GameFilter.ALL,
+                        onClick = { currentFilter = GameFilter.ALL },
+                        label = {
+                            Text(
+                                context.getString(R.string.filter_all, items.size),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
-                    }
-                    items.isEmpty() && !isLoading -> {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("Партий не найдено", style = MaterialTheme.typography.titleMedium)
+                    )
+                    FilterChip(
+                        selected = currentFilter == GameFilter.LICHESS,
+                        onClick = { currentFilter = GameFilter.LICHESS },
+                        label = {
+                            Text(
+                                stringResource(R.string.filter_lichess),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
-                    }
-                    else -> {
-                        LazyColumn(Modifier.fillMaxSize()) {
-                            itemsIndexed(
-                                items,
-                                key = { _, g ->
-                                    val hashPart = (g.pgn?.length ?: 0).toString()
-                                    "${g.site}|${g.date}|${g.white}|${g.black}|${g.result}|$hashPart"
-                                }
-                            ) { index, game ->
-                                val analyzedReport = analyzedGames[repo.pgnHash(game.pgn.orEmpty())]
-                                CompactGameCard(
-                                    game = game,
-                                    profile = profile,
-                                    analyzedReport = analyzedReport,
-                                    index = index,
-                                    isAnalyzing = showAnalysis,
-                                    onClick = {
-                                        if (showAnalysis) return@CompactGameCard
-                                        scope.launch {
-                                            val fullPgn = com.example.chessanalysis.GameLoaders
-                                                .ensureFullPgn(game)
-                                                .ifBlank { game.pgn.orEmpty() }
-                                            if (fullPgn.isBlank()) {
-                                                Toast.makeText(context, "PGN не найден", Toast.LENGTH_SHORT).show()
-                                                return@launch
-                                            }
-                                            if (game.site == Provider.LICHESS || game.site == Provider.CHESSCOM) {
-                                                repo.updateExternalPgn(game.site, game, fullPgn)
-                                            }
-                                            val cached = repo.getCachedReport(fullPgn)
-                                            if (cached != null) onOpenReport(cached)
-                                            else startAnalysis(fullPgn, depth = 16, multiPv = 3)
-                                        }
-                                    },
-                                    onLongPress = {
-                                        if (analyzedReport != null) {
-                                            reAnalyzeTargetPgn = game.pgn
-                                            reAnalyzeDepth = 16
-                                            reAnalyzeMultiPv = 3
-                                            showReAnalyzeSheet = true
-                                        }
-                                    }
+                    )
+                    FilterChip(
+                        selected = currentFilter == GameFilter.CHESSCOM,
+                        onClick = { currentFilter == GameFilter.CHESSCOM },
+                        label = {
+                            Text(
+                                stringResource(R.string.filter_chesscom),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    )
+                    FilterChip(
+                        selected = currentFilter == GameFilter.MANUAL,
+                        onClick = { currentFilter = GameFilter.MANUAL },
+                        label = {
+                            Text(
+                                stringResource(R.string.filter_manual),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    )
+                }
+
+                PullToRefreshBox(
+                    modifier = Modifier.fillMaxSize(),
+                    isRefreshing = isLoading,
+                    onRefresh = {
+                        scope.launch {
+                            isLoading = true
+                            syncWithRemote()
+                            loadFromLocal()
+                            isLoading = false
+                        }
+                    },
+                    state = pullState
+                ) {
+                    when {
+                        isLoading && items.isEmpty() -> {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        }
+                        filteredItems.isEmpty() && !isLoading -> {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text(
+                                    stringResource(R.string.no_games),
+                                    style = MaterialTheme.typography.titleMedium
                                 )
+                            }
+                        }
+                        else -> {
+                            LazyColumn(Modifier.fillMaxSize()) {
+                                itemsIndexed(
+                                    filteredItems,
+                                    key = { _, g ->
+                                        val hashPart = (g.pgn?.length ?: 0).toString()
+                                        "${g.site}|${g.date}|${g.white}|${g.black}|${g.result}|$hashPart"
+                                    }
+                                ) { index, game ->
+                                    val analyzedReport = analyzedGames[repo.pgnHash(game.pgn.orEmpty())]
+                                    CompactGameCard(
+                                        game = game,
+                                        profile = profile,
+                                        analyzedReport = analyzedReport,
+                                        index = index,
+                                        isAnalyzing = showAnalysis,
+                                        onClick = {
+                                            if (showAnalysis) return@CompactGameCard
+                                            scope.launch {
+                                                val fullPgn = com.example.chessanalysis.GameLoaders
+                                                    .ensureFullPgn(game)
+                                                    .ifBlank { game.pgn.orEmpty() }
+                                                if (fullPgn.isBlank()) {
+                                                    Toast.makeText(
+                                                        context,
+                                                        context.getString(R.string.pgn_not_found),
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                    return@launch
+                                                }
+                                                if (game.site == Provider.LICHESS || game.site == Provider.CHESSCOM) {
+                                                    repo.updateExternalPgn(game.site, game, fullPgn)
+                                                }
+                                                val cached = repo.getCachedReport(fullPgn)
+                                                if (cached != null) onOpenReport(cached)
+                                                else startAnalysis(fullPgn, depth = 16, multiPv = 3)
+                                            }
+                                        },
+                                        onLongPress = {
+                                            if (analyzedReport != null) {
+                                                reAnalyzeTargetPgn = game.pgn
+                                                reAnalyzeDepth = 16
+                                                reAnalyzeMultiPv = 3
+                                                showReAnalyzeSheet = true
+                                            }
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
 
-            // Мини-оверлей анализа с доской и звуками (звуки триггерятся в колбэке выше)
             if (showAnalysis) {
                 Box(
                     Modifier
@@ -448,17 +517,12 @@ fun GamesListScreen(
     }
 
     if (showAddDialog) {
-        val contextLocal = LocalContext.current
-        val repoLocal = repo
-        val profileLocal = profile
-        val scopeLocal = scope
-
         AlertDialog(
             onDismissRequest = { showAddDialog = false },
-            title = { Text("Добавить партию") },
+            title = { Text(stringResource(R.string.add_game_title)) },
             text = {
                 Column {
-                    Text("Вставьте PGN полностью или выберите файл .pgn")
+                    Text(stringResource(R.string.paste_pgn_hint))
                     Spacer(Modifier.height(12.dp))
                     OutlinedTextField(
                         value = pastedPgn,
@@ -466,35 +530,51 @@ fun GamesListScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 120.dp),
-                        placeholder = { Text("Вставьте PGN сюда…") }
+                        placeholder = { Text(stringResource(R.string.paste_pgn_hint)) }
                     )
                     Spacer(Modifier.height(8.dp))
                     TextButton(onClick = {
                         filePicker.launch(arrayOf("application/x-chess-pgn", "text/plain", "text/*"))
-                    }) { Text("Выбрать файл .pgn") }
+                    }) { Text(stringResource(R.string.select_file)) }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    scopeLocal.launch {
+                    scope.launch {
                         if (pastedPgn.isBlank()) {
-                            Toast.makeText(contextLocal, "PGN пустой", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.empty_pgn),
+                                Toast.LENGTH_SHORT
+                            ).show()
                             return@launch
                         }
                         runCatching {
-                            addManualGame(pgn = pastedPgn, profile = profileLocal, repo = repoLocal)
+                            addManualGame(pgn = pastedPgn, profile = profile, repo = repo)
                             loadFromLocal()
                         }.onSuccess {
                             pastedPgn = ""
                             showAddDialog = false
-                            Toast.makeText(contextLocal, "Партия добавлена", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.game_added),
+                                Toast.LENGTH_SHORT
+                            ).show()
                         }.onFailure {
-                            Toast.makeText(contextLocal, "Ошибка: ${it.message}", Toast.LENGTH_LONG).show()
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.add_error, it.message ?: ""),
+                                Toast.LENGTH_LONG
+                            ).show()
                         }
                     }
-                }) { Text("Сохранить") }
+                }) { Text(stringResource(R.string.save)) }
             },
-            dismissButton = { TextButton(onClick = { showAddDialog = false }) { Text("Отмена") } }
+            dismissButton = {
+                TextButton(onClick = { showAddDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
         )
     }
 
@@ -505,11 +585,14 @@ fun GamesListScreen(
             sheetState = sheetState
         ) {
             Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                Text("Анализировать заново", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    stringResource(R.string.reanalyze_title),
+                    style = MaterialTheme.typography.titleMedium
+                )
                 Spacer(Modifier.height(12.dp))
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Depth", modifier = Modifier.width(80.dp))
+                    Text(stringResource(R.string.depth_label), modifier = Modifier.width(80.dp))
                     OutlinedTextField(
                         value = reAnalyzeDepth.toString(),
                         onValueChange = { s ->
@@ -521,7 +604,7 @@ fun GamesListScreen(
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("multiPV", modifier = Modifier.width(80.dp))
+                    Text(stringResource(R.string.multipv_label), modifier = Modifier.width(80.dp))
                     OutlinedTextField(
                         value = reAnalyzeMultiPv.toString(),
                         onValueChange = { s ->
@@ -544,14 +627,12 @@ fun GamesListScreen(
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text("Анализировать заново") }
+                ) { Text(stringResource(R.string.reanalyze)) }
                 Spacer(Modifier.height(24.dp))
             }
         }
     }
 }
-
-/* ===== Карточка ===== */
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -564,6 +645,7 @@ private fun CompactGameCard(
     onClick: () -> Unit,
     onLongPress: () -> Unit
 ) {
+    val context = LocalContext.current
     val mySide: Boolean? = guessMySide(profile, game)
     val userWon = mySide != null && ((mySide && game.result == "1-0") || (!mySide && game.result == "0-1"))
     val userLost = mySide != null && ((mySide && game.result == "0-1") || (!mySide && game.result == "1-0"))
@@ -597,12 +679,12 @@ private fun CompactGameCard(
             )
     ) {
         val siteName = when (game.site) {
-            Provider.LICHESS -> "Lichess"
-            Provider.CHESSCOM -> "Chess.com"
-            Provider.BOT -> "Bot"
+            Provider.LICHESS -> stringResource(R.string.filter_lichess)
+            Provider.CHESSCOM -> stringResource(R.string.filter_chesscom)
+            Provider.MANUAL, Provider.BOT -> stringResource(R.string.filter_manual)
             null -> ""
         }
-        val (modeLabel, openingLine) = deriveModeAndOpening(game)
+        val (modeLabel, openingLine) = deriveModeAndOpening(game, context)
 
         Column(Modifier.padding(10.dp)) {
             Row(
@@ -628,9 +710,18 @@ private fun CompactGameCard(
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp))
+                            Icon(
+                                Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(12.dp)
+                            )
                             Spacer(Modifier.width(4.dp))
-                            Text("Анализировано", fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                stringResource(R.string.analyzed),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
                     }
                 }
@@ -714,8 +805,6 @@ private fun CompactGameCard(
     }
 }
 
-/* ===== Вспомогательное ===== */
-
 @Composable
 private fun StatColumn(accuracy: Double?, performance: Int?) {
     val accText = if (accuracy != null) "%.1f%%".format(accuracy) else "—"
@@ -787,14 +876,14 @@ private fun playerWithTitle(name: String?, pgn: String?, isWhite: Boolean): Stri
     return if (!title.isNullOrBlank()) "$base (${title.uppercase()})" else base
 }
 
-private fun deriveModeAndOpening(game: GameHeader): Pair<String, String> {
+private fun deriveModeAndOpening(game: GameHeader, context: android.content.Context): Pair<String, String> {
     val pgn = game.pgn
     var mode = ""
     var openingLine = game.opening ?: game.eco ?: ""
 
     if (!pgn.isNullOrBlank()) {
         val tc = Regex("""\[TimeControl\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
-        mode = tc?.let { mapTimeControlToMode(it) } ?: ""
+        mode = tc?.let { mapTimeControlToMode(it, context) } ?: ""
         if (openingLine.isBlank()) {
             val op = Regex("""\[Opening\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
             val eco = Regex("""\[ECO\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
@@ -809,13 +898,13 @@ private fun deriveModeAndOpening(game: GameHeader): Pair<String, String> {
     return mode to (openingLine ?: "")
 }
 
-private fun mapTimeControlToMode(tc: String): String {
+private fun mapTimeControlToMode(tc: String, context: android.content.Context): String {
     val main = tc.substringBefore('+', tc).toIntOrNull() ?: return ""
     return when {
-        main <= 60 -> "bullet"
-        main <= 300 -> "blitz"
-        main <= 1500 -> "rapid"
-        else -> "classical"
+        main <= 60 -> context.getString(R.string.bullet)
+        main <= 300 -> context.getString(R.string.blitz)
+        main <= 1500 -> context.getString(R.string.rapid)
+        else -> context.getString(R.string.classical)
     }
 }
 
@@ -825,29 +914,92 @@ private suspend fun addManualGame(
     repo: com.example.chessanalysis.data.local.GameRepository
 ) {
     val header = runCatching { PgnChess.headerFromPgn(pgn) }.getOrNull()
-    val gh = GameHeader(
-        site = Provider.LICHESS,
-        pgn = pgn,
-        white = header?.white ?: Regex("""\[White\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1),
-        black = header?.black ?: Regex("""\[Black\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1),
-        result = header?.result ?: Regex("""\[Result\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1),
-        date = header?.date ?: Regex("""\[Date\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1),
-        sideToView = guessMySide(
-            profile,
-            header ?: GameHeader(
-                site = null,
-                pgn = pgn,
-                white = null,
-                black = null,
-                result = null,
-                date = null,
-                sideToView = null,
-                opening = null,
-                eco = null
-            )
-        ),
-        opening = header?.opening,
-        eco = header?.eco
+    val tags = parseTags(pgn)
+
+    val white = header?.white
+        ?: tags["White"]
+        ?: Regex("""\[White\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
+        ?: "Unknown"
+
+    val black = header?.black
+        ?: tags["Black"]
+        ?: Regex("""\[Black\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
+        ?: "Unknown"
+
+    val result = header?.result
+        ?: tags["Result"]
+        ?: Regex("""\[Result\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
+        ?: "*"
+
+    val date = header?.date
+        ?: tags["UTCDate"]
+        ?: tags["Date"]
+        ?: Regex("""\[(?:UTC)?Date\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
+
+    val whiteElo = header?.whiteElo
+        ?: tags["WhiteElo"]?.toIntOrNull()
+        ?: Regex("""\[WhiteElo\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+    val blackElo = header?.blackElo
+        ?: tags["BlackElo"]?.toIntOrNull()
+        ?: Regex("""\[BlackElo\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+    val opening = header?.opening
+        ?: tags["Opening"]
+        ?: Regex("""\[Opening\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
+
+    val eco = header?.eco
+        ?: tags["ECO"]
+        ?: Regex("""\[ECO\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
+
+    val site = tags["Site"]
+        ?: Regex("""\[Site\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
+
+    val provider = when {
+        site?.contains("lichess.org", ignoreCase = true) == true -> Provider.LICHESS
+        site?.contains("chess.com", ignoreCase = true) == true -> Provider.CHESSCOM
+        else -> Provider.BOT
+    }
+
+    val sideToView = guessMySide(
+        profile,
+        GameHeader(
+            site = provider,
+            pgn = pgn,
+            white = white,
+            black = black,
+            result = result,
+            date = date,
+            sideToView = null,
+            opening = opening,
+            eco = eco,
+            whiteElo = whiteElo,
+            blackElo = blackElo
+        )
     )
-    repo.mergeExternal(Provider.LICHESS, listOf(gh))
+
+    val gh = GameHeader(
+        site = provider,
+        pgn = pgn,
+        white = white,
+        black = black,
+        result = result,
+        date = date,
+        sideToView = sideToView,
+        opening = opening,
+        eco = eco,
+        whiteElo = whiteElo,
+        blackElo = blackElo
+    )
+
+    Log.d(TAG, "📝 Adding manual game: $white ($whiteElo) vs $black ($blackElo), date=$date, provider=$provider")
+
+    repo.mergeExternal(provider, listOf(gh))
+}
+
+private fun parseTags(pgn: String): Map<String, String> {
+    val tagPattern = Regex("""\[(\w+)\s+"([^"]*)"\]""")
+    return tagPattern.findAll(pgn).associate {
+        it.groupValues[1] to it.groupValues[2]
+    }
 }

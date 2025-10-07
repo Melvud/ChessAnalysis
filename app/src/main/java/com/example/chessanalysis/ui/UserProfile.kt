@@ -14,5 +14,6 @@ data class UserProfile(
     val email: String = "",
     val nickname: String = "",
     val lichessUsername: String = "",
-    val chessUsername: String = ""
+    val chessUsername: String = "",
+    val language: String = "ru"
 ) : Parcelable

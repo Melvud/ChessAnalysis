@@ -8,7 +8,8 @@ import kotlinx.serialization.SerialName
 enum class Provider {
     LICHESS,
     CHESSCOM,
-    BOT
+    BOT,
+    MANUAL
 }
 
 @Serializable
@@ -115,5 +116,12 @@ data class FullReport(
     val accuracy: AccuracySummary,
     val acpl: Acpl,
     val estimatedElo: EstimatedElo,
-    val analysisLog: List<String> = emptyList()
+    val analysisLog: List<String> = emptyList(),
+    val clockData: ClockData? = null  // ← ДОБАВИЛИ
+)
+
+@Serializable
+data class ClockData(
+    val white: List<Int> = emptyList(),  // Сантисекунды
+    val black: List<Int> = emptyList()
 )

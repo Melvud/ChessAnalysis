@@ -71,6 +71,8 @@ class GameRepository(
         var added = 0
         for (gh in incoming) {
             val key = headerKeyFor(provider, gh)
+            Log.d(TAG, "Processing game: ${gh.white} vs ${gh.black}, key=$key")
+
             val existing = db.gameDao().getExternalByKey(key)
 
             if (existing == null) {
@@ -91,9 +93,9 @@ class GameRepository(
                 val rowId = db.gameDao().insertExternalIgnore(e)
                 if (rowId != -1L) {
                     added++
-                    Log.d(TAG, "Added new game: ${gh.white} vs ${gh.black}, date=${gh.date}")
+                    Log.d(TAG, "✓ Added new game: ${gh.white} vs ${gh.black}, date=${gh.date}")
                 } else {
-                    Log.w(TAG, "Failed to insert game (duplicate?): ${gh.white} vs ${gh.black}")
+                    Log.w(TAG, "⚠ Failed to insert game (duplicate?): ${gh.white} vs ${gh.black}")
                 }
             } else {
                 // Обновляем до более полного PGN, если он короче/пустой в БД
@@ -111,9 +113,9 @@ class GameRepository(
                             gameTimestamp = gameTimestamp
                         )
                     )
-                    Log.d(TAG, "Updated existing game PGN: ${gh.white} vs ${gh.black}")
+                    Log.d(TAG, "✓ Updated existing game PGN: ${gh.white} vs ${gh.black}")
                 } else {
-                    Log.d(TAG, "Game already exists (skipped): ${gh.white} vs ${gh.black}")
+                    Log.d(TAG, "⏭ Game already exists (skipped): ${gh.white} vs ${gh.black}")
                 }
             }
         }
@@ -134,7 +136,6 @@ class GameRepository(
 
         if (rows.isEmpty()) {
             Log.w(TAG, "No games found in database!")
-            // Проверяем что вообще есть в таблицах
             val externalCount = db.gameDao().getAllExternal().size
             val botCount = db.gameDao().getAllBotGames().size
             Log.d(TAG, "Direct query shows: external=$externalCount, bot=$botCount")
@@ -185,23 +186,25 @@ class GameRepository(
     fun pgnHash(pgn: String): String = sha256Hex(pgn)
 
     fun headerKeyFor(provider: Provider, gh: GameHeader): String {
+        // ИСПРАВЛЕНО: приоритет внешним ID
         val extId = gh.pgn?.let { extractExternalIdFromPgn(it) }
 
         val raw = if (!extId.isNullOrBlank()) {
             "${provider.name}|id:$extId"
         } else {
+            // ИСПРАВЛЕНО: используем более стабильные поля
             buildString {
                 append(provider.name).append('|')
                 append(gh.date ?: "").append('|')
-                append(gh.white ?: "").append('|')
-                append(gh.black ?: "").append('|')
-                append(gh.result ?: "").append('|')
-                append(gh.eco ?: "").append('|')
-                append(gh.opening ?: "").append('|')
-                append(movesFingerprint(gh.pgn))
+                append(gh.white?.trim()?.lowercase() ?: "").append('|')
+                append(gh.black?.trim()?.lowercase() ?: "").append('|')
+                append(gh.result ?: "")
             }
         }
-        return sha256Hex(raw)
+
+        val key = sha256Hex(raw)
+        Log.d(TAG, "Generated key: $key for ${gh.white} vs ${gh.black}")
+        return key
     }
 
     private fun sha256Hex(s: String): String {

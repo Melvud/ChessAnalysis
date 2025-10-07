@@ -11,8 +11,8 @@ data class MoveBadgeRes(
 )
 
 fun moveClassBadgeRes(mc: MoveClass): MoveBadgeRes = when (mc) {
-    MoveClass.SPLENDID   -> MoveBadgeRes(R.drawable.splendid,   Color(0xFF1B5E20)) // тёмно-зелёный
-    MoveClass.PERFECT    -> MoveBadgeRes(R.drawable.perfect,    Color(0xFF2E7D32))
+    MoveClass.SPLENDID   -> MoveBadgeRes(R.drawable.splendid,   Color(0xFF1DC4A1)) // тёмно-зелёный
+    MoveClass.PERFECT    -> MoveBadgeRes(R.drawable.perfect,    Color(0xFF3386D3))
     MoveClass.BEST       -> MoveBadgeRes(R.drawable.best,       Color(0xFF388E3C))
     MoveClass.EXCELLENT  -> MoveBadgeRes(R.drawable.excellent,  Color(0xFF43A047))
     MoveClass.OKAY       -> MoveBadgeRes(R.drawable.okay,       Color(0xFF689F38))

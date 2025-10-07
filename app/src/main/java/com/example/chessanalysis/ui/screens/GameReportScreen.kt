@@ -2,9 +2,13 @@ package com.example.chessanalysis.ui.screens
 
 import android.annotation.SuppressLint
 import android.media.MediaPlayer
+import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -20,8 +24,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -31,7 +37,6 @@ import coil.decode.SvgDecoder
 import coil.request.ImageRequest
 import com.example.chessanalysis.*
 import com.example.chessanalysis.EngineClient.analyzeMoveRealtime
-import com.example.chessanalysis.EngineClient.evaluateFenDetailed
 import com.example.chessanalysis.EngineClient.evaluateFenDetailedStreaming
 import com.example.chessanalysis.ui.components.BoardCanvas
 import com.example.chessanalysis.ui.components.EvalBar
@@ -47,6 +52,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
+import com.example.chessanalysis.R
+private const val TAG = "GameReportScreen"
 
 // ---------------- Вспомогательные типы для PV-панели ----------------
 
@@ -132,7 +139,7 @@ private fun buildIconTokens(fen: String, pv: List<String>): List<PvToken> {
 private fun EvalChip(line: LineEval, modifier: Modifier = Modifier) {
     val txt = when {
         line.mate != null -> if (line.mate!! > 0) "M${abs(line.mate!!)}" else "M-${abs(line.mate!!)}"
-        line.cp != null   -> String.format("%+,.2f", line.cp!! / 100f)
+        line.cp != null   -> String.format("%+.2f", line.cp!! / 100f)
         else -> "—"
     }
     Box(
@@ -183,64 +190,240 @@ private fun PvRow(
 }
 
 @Composable
-private fun EnginePvPanel(
-    baseFen: String,
-    lines: List<LineEval>,
-    onClickMoveInLine: (lineIdx: Int, moveIdx: Int) -> Unit,
+private fun AnalysisSettingsPanel(
+    targetDepth: Int,
+    onDepthChange: (Int) -> Unit,
+    targetMultiPv: Int,
+    onMultiPvChange: (Int) -> Unit,
     isBusy: Boolean,
     modifier: Modifier = Modifier
 ) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(Color(0xFF1E1C1A))
-            .padding(horizontal = 12.dp, vertical = 8.dp)
+    val context = LocalContext.current
+    var isExpanded by remember { mutableStateOf(false) }
+    val rotationAngle by animateFloatAsState(
+        targetValue = if (isExpanded) 180f else 0f,
+        animationSpec = tween(300),
+        label = "chevron"
+    )
+
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1C1A)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Text(
-            "Линии компьютера",
-            color = Color.White,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(bottom = 6.dp)
-        )
-
-        AnimatedVisibility(visible = lines.isNotEmpty()) {
-            Column {
-                lines.forEachIndexed { li, line ->
-                    PvRow(
-                        baseFen = baseFen,
-                        line = line,
-                        onClickMoveAtIndex = { mi -> onClickMoveInLine(li, mi) }
-                    )
-                }
-            }
-        }
-
-        AnimatedVisibility(visible = lines.isEmpty()) {
+        Column(Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
+                    .clickable { isExpanded = !isExpanded }
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                Icon(Icons.Default.Settings, contentDescription = null, tint = Color.White)
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    stringResource(R.string.analysis_settings),
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
                 if (isBusy) {
                     CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
+                        modifier = Modifier.size(18.dp),
                         color = MaterialTheme.colorScheme.primary,
                         strokeWidth = 2.dp
                     )
                     Spacer(Modifier.width(8.dp))
-                    Text("Линии рассчитываются…", color = Color.White.copy(alpha = 0.8f))
                 } else {
-                    Text("Нет доступных линий для этой позиции", color = Color.White.copy(alpha = 0.6f))
+                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF4CAF50))
+                    Spacer(Modifier.width(8.dp))
+                }
+                Icon(
+                    Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.7f),
+                    modifier = Modifier.rotate(rotationAngle)
+                )
+            }
+
+            AnimatedVisibility(
+                visible = isExpanded,
+                enter = expandVertically(),
+                exit = shrinkVertically()
+            ) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+                ) {
+                    HorizontalDivider(color = Color.White.copy(alpha = 0.1f), thickness = 1.dp)
+                    Spacer(Modifier.height(16.dp))
+
+                    Text(
+                        context.getString(R.string.depth, targetDepth),
+                        color = Color.White.copy(alpha = 0.9f),
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 14.sp
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Slider(
+                        value = targetDepth.toFloat(),
+                        onValueChange = { onDepthChange(it.toInt().coerceIn(6, 40)) },
+                        valueRange = 6f..40f,
+                        steps = (40 - 6) - 1,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(Modifier.height(16.dp))
+
+                    Text(
+                        context.getString(R.string.multipv, targetMultiPv),
+                        color = Color.White.copy(alpha = 0.9f),
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 14.sp
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Slider(
+                        value = targetMultiPv.toFloat(),
+                        onValueChange = { onMultiPvChange(it.toInt().coerceIn(1, 5)) },
+                        valueRange = 1f..5f,
+                        steps = (5 - 1) - 1,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        stringResource(R.string.settings_note),
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
                 }
             }
         }
     }
 }
 
-// --------------------- Часы / утилиты ---------------------
+@Composable
+private fun EngineLinesPanel(
+    baseFen: String,
+    lines: List<LineEval>,
+    onClickMoveInLine: (lineIdx: Int, moveIdx: Int) -> Unit,
+    isBusy: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var isExpanded by remember { mutableStateOf(true) }
+    val rotationAngle by animateFloatAsState(
+        targetValue = if (isExpanded) 180f else 0f,
+        animationSpec = tween(300),
+        label = "chevron"
+    )
+
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1C1A)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { isExpanded = !isExpanded }
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.Search, contentDescription = null, tint = Color.White)
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    stringResource(R.string.engine_lines),
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                if (isBusy) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(Modifier.width(8.dp))
+                } else if (lines.isNotEmpty()) {
+                    Badge(
+                        containerColor = Color(0xFF4CAF50).copy(alpha = 0.2f),
+                        contentColor = Color(0xFF4CAF50)
+                    ) {
+                        Text("${lines.size}", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                }
+                Icon(
+                    Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.7f),
+                    modifier = Modifier.rotate(rotationAngle)
+                )
+            }
+
+            AnimatedVisibility(
+                visible = isExpanded,
+                enter = expandVertically(),
+                exit = shrinkVertically()
+            ) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+                ) {
+                    HorizontalDivider(color = Color.White.copy(alpha = 0.1f), thickness = 1.dp)
+                    Spacer(Modifier.height(12.dp))
+
+                    when {
+                        lines.isNotEmpty() -> {
+                            lines.forEachIndexed { li, line ->
+                                PvRow(
+                                    baseFen = baseFen,
+                                    line = line,
+                                    onClickMoveAtIndex = { mi -> onClickMoveInLine(li, mi) }
+                                )
+                            }
+                        }
+                        isBusy -> {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 16.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    stringResource(R.string.calculating),
+                                    color = Color.White.copy(alpha = 0.8f)
+                                )
+                            }
+                        }
+                        else -> {
+                            Text(
+                                stringResource(R.string.no_lines),
+                                color = Color.White.copy(alpha = 0.6f),
+                                fontSize = 14.sp,
+                                modifier = Modifier.padding(vertical = 16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 fun extractGameId(pgn: String?): String? {
     if (pgn.isNullOrBlank()) return null
@@ -252,22 +435,32 @@ fun extractGameId(pgn: String?): String? {
 }
 
 fun parseClockData(pgn: String): ClockData {
-    val clockPattern = Regex("""\[%clk\s+((\d+):)?(\d{1,2}):(\d{1,2})\]""")
+    Log.d(TAG, "parseClockData: parsing PGN for clocks...")
+    val clockPattern = Regex("""\{\s*\[%clk\s+((\d+):)?(\d{1,2}):(\d{1,2})\]\s*\}""")
     val whiteTimes = mutableListOf<Int>()
     val blackTimes = mutableListOf<Int>()
     var plyIndex = 0
+
     clockPattern.findAll(pgn).forEach { m ->
         val hours = (m.groups[2]?.value?.toIntOrNull() ?: 0)
         val minutes = (m.groups[3]?.value?.toIntOrNull() ?: 0)
         val seconds = (m.groups[4]?.value?.toIntOrNull() ?: 0)
         val cs = (hours * 3600 + minutes * 60 + seconds) * 100
-        if (plyIndex % 2 == 0) whiteTimes.add(cs) else blackTimes.add(cs)
+
+        if (plyIndex % 2 == 0) {
+            whiteTimes.add(cs)
+        } else {
+            blackTimes.add(cs)
+        }
         plyIndex++
     }
+
+    Log.d(TAG, "parseClockData: found ${whiteTimes.size} white clocks, ${blackTimes.size} black clocks")
     return ClockData(white = whiteTimes, black = blackTimes)
 }
 
 private suspend fun fetchLichessClocks(gameId: String): ClockData? = withContext(Dispatchers.IO) {
+    Log.d(TAG, "fetchLichessClocks: fetching for gameId=$gameId")
     val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
@@ -278,13 +471,18 @@ private suspend fun fetchLichessClocks(gameId: String): ClockData? = withContext
         client.newCall(request).execute().use { response ->
             if (response.isSuccessful) {
                 val body = response.body?.string() ?: return@withContext null
+                Log.d(TAG, "fetchLichessClocks: got response, parsing...")
                 parseClockData(body)
-            } else null
+            } else {
+                Log.w(TAG, "fetchLichessClocks: failed with code ${response.code}")
+                null
+            }
         }
-    } catch (_: Exception) { null }
+    } catch (e: Exception) {
+        Log.e(TAG, "fetchLichessClocks: error", e)
+        null
+    }
 }
-
-// --------------------- ЭКРАН ---------------------
 
 @SuppressLint("UnrememberedMutableState")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -300,7 +498,7 @@ fun GameReportScreen(
     var currentPlyIndex by remember { mutableStateOf(0) }
     var isAutoPlaying by remember { mutableStateOf(false) }
 
-    var clockData by remember { mutableStateOf<ClockData?>(null) }
+    var clockData by remember { mutableStateOf(report.clockData) }
 
     var variationActive by remember { mutableStateOf(false) }
     var variationFen by remember { mutableStateOf<String?>(null) }
@@ -312,31 +510,60 @@ fun GameReportScreen(
     var legalTargets by remember { mutableStateOf<Set<String>>(emptySet()) }
     var isAnalyzing by remember { mutableStateOf(false) }
 
-    // линии движка
     var engineLines by remember { mutableStateOf<List<LineEval>>(emptyList()) }
 
-    // настройки качества анализа
-    var targetDepth by remember { mutableStateOf(16) }
-    var targetMultiPv by remember { mutableStateOf(3) }
+    val positionSettings = remember { mutableStateMapOf<Int, Pair<Int, Int>>() }
+
+    val defaultDepth = remember {
+        report.positions.firstOrNull()?.lines?.firstOrNull()?.depth ?: 16
+    }
+    val defaultMultiPv = remember { 3 }
+
+    var targetDepth by remember { mutableStateOf(defaultDepth) }
+    var targetMultiPv by remember { mutableStateOf(defaultMultiPv) }
     var pvBusy by remember { mutableStateOf(false) }
 
     val bgColor = Color(0xFF161512)
     val surfaceColor = Color(0xFF262522)
     val cardColor = Color(0xFF1E1C1A)
 
-    // часы
     LaunchedEffect(report) {
+        Log.d(TAG, "🕐 LaunchedEffect: checking clocks...")
+
+        if (report.clockData != null &&
+            (report.clockData!!.white.isNotEmpty() || report.clockData!!.black.isNotEmpty())) {
+            Log.d(TAG, "✅ Using clocks from report: white=${report.clockData!!.white.size}, black=${report.clockData!!.black.size}")
+            clockData = report.clockData
+            return@LaunchedEffect
+        }
+
         val pgn = report.header.pgn
-        if (!pgn.isNullOrBlank()) {
-            val parsed = parseClockData(pgn)
-            clockData = if (parsed.white.isNotEmpty() || parsed.black.isNotEmpty()) {
-                parsed
+        if (pgn.isNullOrBlank()) {
+            Log.w(TAG, "⚠ No PGN in report, can't extract clocks")
+            return@LaunchedEffect
+        }
+
+        Log.d(TAG, "🔍 Trying to parse clocks from PGN...")
+        val parsed = parseClockData(pgn)
+
+        if (parsed.white.isNotEmpty() || parsed.black.isNotEmpty()) {
+            Log.d(TAG, "✅ Parsed clocks from PGN: white=${parsed.white.size}, black=${parsed.black.size}")
+            clockData = parsed
+            return@LaunchedEffect
+        }
+
+        val gameId = extractGameId(pgn)
+        if (gameId != null && report.header.site == Provider.LICHESS) {
+            Log.d(TAG, "🔍 Trying to fetch clocks from Lichess API for game: $gameId")
+            val fetched = fetchLichessClocks(gameId)
+            if (fetched != null && (fetched.white.isNotEmpty() || fetched.black.isNotEmpty())) {
+                Log.d(TAG, "✅ Fetched clocks from Lichess API: white=${fetched.white.size}, black=${fetched.black.size}")
+                clockData = fetched
             } else {
-                val gameId = extractGameId(pgn)
-                if (gameId != null && report.header.site == Provider.LICHESS) {
-                    fetchLichessClocks(gameId)
-                } else null
+                Log.w(TAG, "⚠ Failed to fetch clocks from Lichess API")
             }
+        } else {
+            Log.d(TAG, "ℹ Not a Lichess game or no gameId found")
         }
     }
 
@@ -345,12 +572,28 @@ fun GameReportScreen(
         else report.positions.getOrNull(currentPlyIndex)?.fen
     }
 
-    // Пересчёт PV при смене позиции/вариации/параметров — СТРИМИНГОМ
+    LaunchedEffect(currentPlyIndex, variationActive) {
+        if (!variationActive) {
+            val saved = positionSettings[currentPlyIndex]
+            if (saved != null) {
+                targetDepth = saved.first
+                targetMultiPv = saved.second
+            } else {
+                targetDepth = defaultDepth
+                targetMultiPv = defaultMultiPv
+            }
+        }
+    }
+
     LaunchedEffect(baseFenForPanel, targetDepth, targetMultiPv) {
         val fen = baseFenForPanel ?: return@LaunchedEffect
         pvBusy = true
         engineLines = emptyList()
-        // запуск стримингового расчёта
+
+        if (!variationActive) {
+            positionSettings[currentPlyIndex] = Pair(targetDepth, targetMultiPv)
+        }
+
         runCatching {
             val final = evaluateFenDetailedStreaming(
                 fen = fen,
@@ -358,7 +601,6 @@ fun GameReportScreen(
                 multiPv = targetMultiPv,
                 skillLevel = null
             ) { linesDto ->
-                // onUpdate — обновляем сразу (без ожидания)
                 engineLines = linesDto.map { l ->
                     LineEval(
                         pv = l.pv,
@@ -368,11 +610,18 @@ fun GameReportScreen(
                     )
                 }.take(targetMultiPv)
             }
-            // на выходе можно (необязательно) синхронизоваться с финальным снимком
-            engineLines = final.lines.map { l ->
-                LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
-            }.take(targetMultiPv)
-        }.onFailure {
+
+            if (final.lines.isNotEmpty()) {
+                engineLines = final.lines.map { l ->
+                    LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
+                }.take(targetMultiPv)
+
+                Log.d(TAG, "✓ Final lines set: ${engineLines.size} lines")
+            } else {
+                Log.w(TAG, "⚠ Final result is empty!")
+            }
+        }.onFailure { e ->
+            Log.e(TAG, "❌ Analysis failed: ${e.message}", e)
             engineLines = emptyList()
         }
         pvBusy = false
@@ -390,9 +639,9 @@ fun GameReportScreen(
     fun playMoveSound(cls: MoveClass?, isCapture: Boolean) {
         val resId = when {
             cls == MoveClass.INACCURACY || cls == MoveClass.MISTAKE || cls == MoveClass.BLUNDER ->
-                com.example.chessanalysis.R.raw.error
-            isCapture -> com.example.chessanalysis.R.raw.capture
-            else -> com.example.chessanalysis.R.raw.move
+                R.raw.error
+            isCapture -> R.raw.capture
+            else -> R.raw.move
         }
         try {
             MediaPlayer.create(ctx, resId)?.apply {
@@ -493,9 +742,9 @@ fun GameReportScreen(
                 variationBestUci = bestMove
                 playMoveSound(moveClass, captured)
 
-                // СТРИМИМ линии для новой позиции после хода:
                 pvBusy = true
                 engineLines = emptyList()
+
                 val final = evaluateFenDetailedStreaming(
                     fen = afterFen,
                     depth = targetDepth,
@@ -506,10 +755,14 @@ fun GameReportScreen(
                         LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
                     }.take(targetMultiPv)
                 }
-                engineLines = final.lines.map { l ->
-                    LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
-                }.take(targetMultiPv)
-            } catch (_: Exception) {
+
+                if (final.lines.isNotEmpty()) {
+                    engineLines = final.lines.map { l ->
+                        LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
+                    }.take(targetMultiPv)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in handleSquareClick", e)
                 variationEval = evalOfPosition(report.positions.getOrNull(currentPlyIndex))
                 variationMoveClass = MoveClass.OKAY
                 variationBestUci = null
@@ -578,9 +831,8 @@ fun GameReportScreen(
                 variationBestUci = bestMove
                 playMoveSound(moveClass, captured)
 
-                // СТРИМИМ линии для этой точки вариации:
                 pvBusy = true
-                engineLines = emptyList()
+
                 val final = evaluateFenDetailedStreaming(
                     fen = after,
                     depth = targetDepth,
@@ -590,14 +842,23 @@ fun GameReportScreen(
                     engineLines = linesDto.map { l ->
                         LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
                     }.take(targetMultiPv)
+                    Log.d(TAG, "📊 Streaming update in variation: ${linesDto.size} lines")
                 }
-                engineLines = final.lines.map { l ->
-                    LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
-                }.take(targetMultiPv)
-            } catch (_: Exception) {
+
+                if (final.lines.isNotEmpty()) {
+                    engineLines = final.lines.map { l ->
+                        LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
+                    }.take(targetMultiPv)
+                    Log.d(TAG, "✓ Final variation lines: ${engineLines.size}")
+                } else {
+                    Log.w(TAG, "⚠ Final variation lines empty!")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in onClickPvMove", e)
                 variationEval = evalOfPosition(report.positions.getOrNull(currentPlyIndex))
                 variationMoveClass = MoveClass.OKAY
                 variationBestUci = null
+                engineLines = emptyList()
             } finally {
                 pvBusy = false
                 isAnalyzing = false
@@ -624,15 +885,26 @@ fun GameReportScreen(
         containerColor = bgColor,
         topBar = {
             TopAppBar(
-                title = { Text("Анализ партии") },
+                title = { Text(stringResource(R.string.game_analysis)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Назад", tint = Color.White)
+                        Icon(
+                            Icons.Default.ArrowBack,
+                            contentDescription = stringResource(R.string.back),
+                            tint = Color.White
+                        )
                     }
                 },
                 actions = {
-                    IconButton(onClick = { if (!isAnalyzing) isWhiteBottom = !isWhiteBottom }, enabled = !isAnalyzing) {
-                        Icon(Icons.Default.ScreenRotation, contentDescription = "Перевернуть", tint = if (isAnalyzing) Color.Gray else Color.White)
+                    IconButton(
+                        onClick = { if (!isAnalyzing) isWhiteBottom = !isWhiteBottom },
+                        enabled = !isAnalyzing
+                    ) {
+                        Icon(
+                            Icons.Default.ScreenRotation,
+                            contentDescription = stringResource(R.string.flip_board),
+                            tint = if (isAnalyzing) Color.Gray else Color.White
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -642,7 +914,6 @@ fun GameReportScreen(
             )
         }
     ) { padding ->
-        // ГЛАВНАЯ ВЕРТИКАЛЬНАЯ ПРОКРУТКА
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -650,12 +921,20 @@ fun GameReportScreen(
                 .background(bgColor)
                 .verticalScroll(rememberScrollState())
         ) {
-            // Верхний игрок
             val topIsWhite = !isWhiteBottom
-            val topName = if (topIsWhite) (report.header.white ?: "White") else (report.header.black ?: "Black")
+            val topName = if (topIsWhite) {
+                report.header.white ?: stringResource(R.string.white)
+            } else {
+                report.header.black ?: stringResource(R.string.black)
+            }
             val topElo = if (topIsWhite) report.header.whiteElo else report.header.blackElo
-            val moveNumber = currentPlyIndex / 2
-            val topClock = if (topIsWhite) clockData?.white?.getOrNull(moveNumber) else clockData?.black?.getOrNull(moveNumber)
+
+            val topClock = if (topIsWhite) {
+                clockData?.white?.getOrNull(currentPlyIndex)
+            } else {
+                clockData?.black?.getOrNull(currentPlyIndex)
+            }
+
             val topActive = if (!variationActive) {
                 (currentPlyIndex % 2 == 0 && topIsWhite) || (currentPlyIndex % 2 == 1 && !topIsWhite)
             } else false
@@ -672,7 +951,6 @@ fun GameReportScreen(
                     .padding(horizontal = 12.dp, vertical = 4.dp)
             )
 
-            // Доска + Eval bar (квадрат)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -766,11 +1044,20 @@ fun GameReportScreen(
                 }
             }
 
-            // Нижний игрок
             val bottomIsWhite = isWhiteBottom
-            val bottomName = if (bottomIsWhite) (report.header.white ?: "White") else (report.header.black ?: "Black")
+            val bottomName = if (bottomIsWhite) {
+                report.header.white ?: stringResource(R.string.white)
+            } else {
+                report.header.black ?: stringResource(R.string.black)
+            }
             val bottomElo = if (bottomIsWhite) report.header.whiteElo else report.header.blackElo
-            val bottomClock = if (bottomIsWhite) clockData?.white?.getOrNull(moveNumber) else clockData?.black?.getOrNull(moveNumber)
+
+            val bottomClock = if (bottomIsWhite) {
+                clockData?.white?.getOrNull(currentPlyIndex)
+            } else {
+                clockData?.black?.getOrNull(currentPlyIndex)
+            }
+
             val bottomActive = if (!variationActive) {
                 (currentPlyIndex % 2 == 0 && bottomIsWhite) || (currentPlyIndex % 2 == 1 && !bottomIsWhite)
             } else false
@@ -787,7 +1074,6 @@ fun GameReportScreen(
                     .padding(horizontal = 12.dp, vertical = 4.dp)
             )
 
-            // Карусель ходов
             MovesCarousel(
                 report = report,
                 currentPlyIndex = currentPlyIndex,
@@ -797,19 +1083,6 @@ fun GameReportScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            // Карточка качества анализа (после ходов, до линий)
-            AnalysisQualityCard(
-                targetDepth = targetDepth,
-                onDepthChange = { targetDepth = it },
-                targetMultiPv = targetMultiPv,
-                onMultiPvChange = { targetMultiPv = it },
-                isBusy = pvBusy,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-            )
-
-            // Кнопки управления
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -819,10 +1092,18 @@ fun GameReportScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = { if (!isAnalyzing) seekTo(0) }, enabled = !isAnalyzing) {
-                    Icon(Icons.Default.SkipPrevious, contentDescription = "В начало", tint = if (isAnalyzing) Color.Gray else Color.White)
+                    Icon(
+                        Icons.Default.SkipPrevious,
+                        contentDescription = stringResource(R.string.to_start),
+                        tint = if (isAnalyzing) Color.Gray else Color.White
+                    )
                 }
                 IconButton(onClick = { goPrev() }, enabled = !isAnalyzing) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Назад", tint = if (isAnalyzing) Color.Gray else Color.White)
+                    Icon(
+                        Icons.Default.ArrowBack,
+                        contentDescription = stringResource(R.string.previous),
+                        tint = if (isAnalyzing) Color.Gray else Color.White
+                    )
                 }
                 IconButton(
                     onClick = {
@@ -835,36 +1116,73 @@ fun GameReportScreen(
                     enabled = !isAnalyzing,
                     modifier = Modifier
                         .size(56.dp)
-                        .background(if (isAnalyzing) Color.Gray else MaterialTheme.colorScheme.primary, CircleShape)
+                        .background(
+                            if (isAnalyzing) Color.Gray else MaterialTheme.colorScheme.primary,
+                            CircleShape
+                        )
                 ) {
                     Icon(
                         if (isAutoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isAutoPlaying) "Пауза" else "Играть",
+                        contentDescription = if (isAutoPlaying) {
+                            stringResource(R.string.pause)
+                        } else {
+                            stringResource(R.string.play)
+                        },
                         tint = Color.White
                     )
                 }
                 IconButton(onClick = { goNext() }, enabled = !isAnalyzing) {
-                    Icon(Icons.Default.ArrowForward, contentDescription = "Вперед", tint = if (isAnalyzing) Color.Gray else Color.White)
+                    Icon(
+                        Icons.Default.ArrowForward,
+                        contentDescription = stringResource(R.string.next),
+                        tint = if (isAnalyzing) Color.Gray else Color.White
+                    )
                 }
-                IconButton(onClick = { if (!isAnalyzing) seekTo(report.positions.lastIndex) }, enabled = !isAnalyzing) {
-                    Icon(Icons.Default.SkipNext, contentDescription = "В конец", tint = if (isAnalyzing) Color.Gray else Color.White)
+                IconButton(
+                    onClick = { if (!isAnalyzing) seekTo(report.positions.lastIndex) },
+                    enabled = !isAnalyzing
+                ) {
+                    Icon(
+                        Icons.Default.SkipNext,
+                        contentDescription = stringResource(R.string.to_end),
+                        tint = if (isAnalyzing) Color.Gray else Color.White
+                    )
                 }
             }
 
-            // ЛИНИИ ДВИЖКА — живые, стриминговые
-            EnginePvPanel(
+            EngineLinesPanel(
                 baseFen = baseFenForPanel ?: report.positions.firstOrNull()?.fen.orEmpty(),
                 lines = engineLines,
                 onClickMoveInLine = ::onClickPvMove,
                 isBusy = pvBusy,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 12.dp)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+
+            AnalysisSettingsPanel(
+                targetDepth = targetDepth,
+                onDepthChange = {
+                    targetDepth = it
+                    if (!variationActive) {
+                        positionSettings[currentPlyIndex] = Pair(targetDepth, targetMultiPv)
+                    }
+                },
+                targetMultiPv = targetMultiPv,
+                onMultiPvChange = {
+                    targetMultiPv = it
+                    if (!variationActive) {
+                        positionSettings[currentPlyIndex] = Pair(targetDepth, targetMultiPv)
+                    }
+                },
+                isBusy = pvBusy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
             )
 
             Spacer(Modifier.height(64.dp))
 
-            // Автоплей
             LaunchedEffect(isAutoPlaying, currentPlyIndex, isAnalyzing) {
                 if (isAutoPlaying && !isAnalyzing) {
                     delay(1500)
@@ -874,8 +1192,6 @@ fun GameReportScreen(
         }
     }
 }
-
-// --------- Вспомогательные компоненты / часы ---------
 
 @Composable
 private fun PlayerCard(
@@ -888,53 +1204,65 @@ private fun PlayerCard(
 ) {
     val animatedColor by animateColorAsState(
         targetValue = if (isActive) Color.White else Color.White.copy(alpha = 0.6f),
-        animationSpec = tween(250)
+        animationSpec = tween(250),
+        label = "playerCardColor"
     )
     Row(
         modifier = modifier
             .background(Color(0xFF1E1C1A), RoundedCornerShape(8.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
-                    .size(10.dp)
+                    .size(12.dp)
                     .background(if (inverted) Color.Black else Color.White, CircleShape)
             )
-            Spacer(Modifier.width(8.dp))
-            InitialAvatar(name = name, size = 28.dp)
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(10.dp))
+            InitialAvatar(name = name, size = 32.dp)
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Text(
+                    text = name,
+                    color = animatedColor,
+                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
+                    fontSize = 16.sp
+                )
+                if (rating != null) {
+                    Text(
+                        text = "($rating)",
+                        color = animatedColor.copy(alpha = 0.8f),
+                        fontSize = 13.sp
+                    )
+                }
+            }
+        }
+
+        if (clock != null) {
             Text(
-                text = buildString {
-                    append(name)
-                    if (rating != null) append(" ($rating)")
-                },
-                color = animatedColor,
-                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
-                fontSize = 15.sp
+                text = formatClock(clock),
+                color = animatedColor.copy(alpha = 0.9f),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold
             )
         }
-        Text(
-            text = clock?.let { formatClock(it) } ?: "",
-            color = animatedColor.copy(alpha = 0.9f),
-            fontSize = 14.sp
-        )
     }
 }
 
 private fun formatClock(centiseconds: Int): String {
-    val seconds = centiseconds / 100
-    val minutes = seconds / 60
-    val secs = seconds % 60
-    return "%d:%02d".format(minutes, secs)
-}
+    val totalSeconds = centiseconds / 100
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val secs = totalSeconds % 60
 
-data class ClockData(
-    val white: List<Int> = emptyList(),
-    val black: List<Int> = emptyList()
-)
+    return if (hours > 0) {
+        "%d:%02d:%02d".format(hours, minutes, secs)
+    } else {
+        "%d:%02d".format(minutes, secs)
+    }
+}
 
 @Composable
 private fun InitialAvatar(
@@ -953,81 +1281,8 @@ private fun InitialAvatar(
         Text(
             text = initial,
             color = fg,
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+            fontSize = 16.sp
         )
-    }
-}
-
-// ------------------ Карточка качества анализа ------------------
-
-@Composable
-private fun AnalysisQualityCard(
-    targetDepth: Int,
-    onDepthChange: (Int) -> Unit,
-    targetMultiPv: Int,
-    onMultiPvChange: (Int) -> Unit,
-    isBusy: Boolean,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1C1A)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Tune, contentDescription = null, tint = Color.White)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "Качество анализа позиции",
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Spacer(Modifier.weight(1f))
-                if (isBusy) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            color = MaterialTheme.colorScheme.primary,
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text("пересчёт…", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
-                    }
-                } else {
-                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF4CAF50))
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            Text("Depth: $targetDepth", color = Color.White.copy(alpha = 0.9f), fontWeight = FontWeight.Medium)
-            Slider(
-                value = targetDepth.toFloat(),
-                onValueChange = { onDepthChange(it.toInt().coerceIn(6, 40)) },
-                valueRange = 6f..40f,
-                steps = (40 - 6) - 1,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            Text("Линий (MultiPV): $targetMultiPv", color = Color.White.copy(alpha = 0.9f), fontWeight = FontWeight.Medium)
-            Slider(
-                value = targetMultiPv.toFloat(),
-                onValueChange = { onMultiPvChange(it.toInt().coerceIn(1, 5)) },
-                valueRange = 1f..5f,
-                steps = (5 - 1) - 1,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Повышайте глубину для точности, увеличивайте число линий для большего числа вариантов. Изменения применяются мгновенно к текущей позиции.",
-                color = Color.White.copy(alpha = 0.7f),
-                fontSize = 12.sp
-            )
-        }
     }
 }

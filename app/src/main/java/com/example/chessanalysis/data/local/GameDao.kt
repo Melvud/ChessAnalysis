@@ -11,12 +11,14 @@ import androidx.room.Update
 @Dao
 interface GameDao {
 
+    // --------------- BOT GAMES ---------------
     @Insert
     suspend fun insertBotGame(entity: BotGameEntity): Long
 
-    @Query("SELECT * FROM bot_games ORDER BY id DESC")
+    @Query("SELECT * FROM bot_games ORDER BY gameTimestamp DESC, addedTimestamp DESC")
     suspend fun getAllBotGames(): List<BotGameEntity>
 
+    // --------------- EXTERNAL GAMES ---------------
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertExternalIgnore(entity: ExternalGameEntity): Long
 
@@ -29,15 +31,17 @@ interface GameDao {
     @Query("UPDATE external_games SET pgn = :pgn WHERE headerKey = :key")
     suspend fun updateExternalPgnByKey(key: String, pgn: String)
 
-    @Query("SELECT * FROM external_games ORDER BY rowid DESC")
+    @Query("SELECT * FROM external_games ORDER BY gameTimestamp DESC, addedTimestamp DESC")
     suspend fun getAllExternal(): List<ExternalGameEntity>
 
+    // --------------- REPORT CACHE ---------------
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertReport(entity: ReportCacheEntity)
 
     @Query("SELECT * FROM report_cache WHERE pgnHash = :hash LIMIT 1")
     suspend fun getReportByHash(hash: String): ReportCacheEntity?
 
+    // --------------- COMBINED LIST (НОВЫЕ СВЕРХУ) ---------------
     data class ListRow(
         val provider: String,
         val dateIso: String?,
@@ -51,8 +55,12 @@ interface GameDao {
         val addedTimestamp: Long
     )
 
-    // ИСПРАВЛЕНО: сортировка сначала по addedTimestamp DESC (вручную добавленные наверху),
-    // затем по gameTimestamp DESC (самые новые игры наверху)
+    /**
+     * Объединяет external_games и bot_games.
+     * Сортировка:
+     * 1) gameTimestamp DESC — новые партии сверху (по времени игры)
+     * 2) addedTimestamp DESC — если время партии одинаковое, недавно добавленные выше
+     */
     @Query(
         """
         SELECT 
@@ -67,7 +75,9 @@ interface GameDao {
             gameTimestamp AS gameTimestamp,
             addedTimestamp AS addedTimestamp
         FROM external_games
+        
         UNION ALL
+        
         SELECT 
             'BOT'    AS provider,
             dateIso  AS dateIso,
@@ -80,7 +90,8 @@ interface GameDao {
             gameTimestamp AS gameTimestamp,
             addedTimestamp AS addedTimestamp
         FROM bot_games
-        ORDER BY addedTimestamp DESC, gameTimestamp DESC
+        
+        ORDER BY gameTimestamp DESC, addedTimestamp DESC
         """
     )
     suspend fun getAllForListByGameTime(): List<ListRow>

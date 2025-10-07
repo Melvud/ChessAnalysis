@@ -5,7 +5,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -34,7 +33,6 @@ fun BoardCanvas(
     bestMoveUci: String? = null,
     showBestArrow: Boolean = false,
     isWhiteBottom: Boolean = true,
-    // Новое: подсветка выбранной клетки и возможных ходов
     selectedSquare: String? = null,
     legalMoves: Set<String> = emptySet(),
     onSquareClick: ((String) -> Unit)? = null,
@@ -51,8 +49,11 @@ fun BoardCanvas(
     val board = fen.substringBefore(' ')
     val ranks = board.split('/')
 
-    // Правильный переворот доски
-    val displayRanks = if (isWhiteBottom) ranks else ranks.reversed()
+    val displayRanks = if (isWhiteBottom) {
+        ranks
+    } else {
+        ranks.reversed()
+    }
 
     var boardPx by remember { mutableStateOf(androidx.compose.ui.geometry.Size.Zero) }
 
@@ -61,7 +62,7 @@ fun BoardCanvas(
             .aspectRatio(1f)
             .onSizeChanged { boardPx = it.toSize() }
     ) {
-        // 1) клетки и подсветка
+        // 1) Клетки и подсветка
         Canvas(modifier = Modifier.fillMaxSize()) {
             val squareSize = size.minDimension / 8f
             val lightColor = Color(0xFFF0D9B5)
@@ -69,27 +70,30 @@ fun BoardCanvas(
             val defaultHl = Color(0xFFB58863)
             val classColor = moveClass?.let { mc -> moveClassBadgeRes(mc).container } ?: defaultHl
 
-            // клетки
+            // ИСПРАВЛЕНО: клетка a1 (левый нижний угол для белых) должна быть ТЁМНОЙ
+            // rank=0 это 8-я горизонталь (сверху), rank=7 это 1-я горизонталь (снизу)
+            // file=0 это вертикаль 'a'
+            // Светлая клетка когда сумма (rank + file) ЧЁТНАЯ
             for (rank in 0..7) {
                 for (file in 0..7) {
-                    val isDark = (rank + file) % 2 == 0
+                    val isLight = (rank + file) % 2 == 0
                     val x = file * squareSize
                     val y = rank * squareSize
                     drawRect(
-                        color = if (isDark) darkColor else lightColor,
+                        color = if (isLight) lightColor else darkColor,
                         topLeft = Offset(x, y),
                         size = androidx.compose.ui.geometry.Size(squareSize, squareSize)
                     )
                 }
             }
 
-            // подсветка from/to
+            // Подсветка последнего хода
             lastMove?.let { (from, to) ->
-                val fromSquare = squareFromNotation(from)
-                val toSquare = squareFromNotation(to)
+                val fromSquare = squareFromNotation(from, isWhiteBottom)
+                val toSquare = squareFromNotation(to, isWhiteBottom)
                 if (fromSquare != null && toSquare != null) {
-                    val (ff, fr) = if (isWhiteBottom) fromSquare else Pair(fromSquare.first, 7 - fromSquare.second)
-                    val (tf, tr) = if (isWhiteBottom) toSquare else Pair(toSquare.first, 7 - toSquare.second)
+                    val (ff, fr) = fromSquare
+                    val (tf, tr) = toSquare
 
                     val fromX = ff * squareSize
                     val fromY = fr * squareSize
@@ -109,12 +113,11 @@ fun BoardCanvas(
                 }
             }
 
-            // подсветка выбранной клетки (тонкая рамка)
+            // Подсветка выбранной клетки
             selectedSquare?.let { sel ->
-                squareFromNotation(sel)?.let { (sf, srBoard) ->
-                    val (f, r) = if (isWhiteBottom) Pair(sf, srBoard) else Pair(sf, 7 - srBoard)
-                    val x = f * squareSize
-                    val y = r * squareSize
+                squareFromNotation(sel, isWhiteBottom)?.let { (sf, sr) ->
+                    val x = sf * squareSize
+                    val y = sr * squareSize
                     drawRect(
                         color = Color(0xFF2B7FFF).copy(alpha = 0.65f),
                         topLeft = Offset(x, y),
@@ -125,16 +128,16 @@ fun BoardCanvas(
             }
         }
 
-        // 2) фигуры (с минимальным отступом)
+        // 2) Фигуры
         Column(modifier = Modifier.fillMaxSize()) {
-            displayRanks.forEach { rank ->
+            displayRanks.forEachIndexed { rankIndex, rank ->
                 Row(Modifier.weight(1f)) {
-                    var file = 0
+                    var fileIndex = 0
                     for (ch in rank) {
                         if (ch.isDigit()) {
                             repeat(ch.code - '0'.code) {
                                 Box(Modifier.weight(1f).fillMaxHeight())
-                                file++
+                                fileIndex++
                             }
                         } else {
                             val pieceName = when (ch) {
@@ -164,14 +167,14 @@ fun BoardCanvas(
                                     )
                                 }
                             }
-                            file++
+                            fileIndex++
                         }
                     }
                 }
             }
         }
 
-        // 3) кружки возможных ходов (после отрисовки фигур, чтобы были сверху)
+        // 3) Кружки легальных ходов
         if (legalMoves.isNotEmpty()) {
             Canvas(modifier = Modifier.fillMaxSize().zIndex(1f)) {
                 val squareSize = size.minDimension / 8f
@@ -179,8 +182,7 @@ fun BoardCanvas(
                 val color = Color.Black.copy(alpha = 0.28f)
 
                 legalMoves.forEach { target ->
-                    squareFromNotation(target)?.let { (tfBoard, trBoard) ->
-                        val (tf, tr) = if (isWhiteBottom) Pair(tfBoard, trBoard) else Pair(tfBoard, 7 - trBoard)
+                    squareFromNotation(target, isWhiteBottom)?.let { (tf, tr) ->
                         val cx = tf * squareSize + squareSize / 2
                         val cy = tr * squareSize + squareSize / 2
                         drawCircle(
@@ -193,13 +195,11 @@ fun BoardCanvas(
             }
         }
 
-        // 4) значок класса хода (правый верхний угол клетки назначения)
+        // 4) Иконка классификации хода
         if (lastMove != null && moveClass != null && boardPx.width > 0f) {
             val badge = moveClassBadgeRes(moveClass)
-            val to = squareFromNotation(lastMove.second)
-            if (to != null) {
+            squareFromNotation(lastMove.second, isWhiteBottom)?.let { (tf, tr) ->
                 val sq = boardPx.minDimension / 8f
-                val (tf, tr) = if (isWhiteBottom) to else Pair(to.first, 7 - to.second)
                 val x = (tf * sq + sq * 0.62f).toInt()
                 val y = (tr * sq + sq * 0.08f).toInt()
                 Image(
@@ -213,32 +213,30 @@ fun BoardCanvas(
             }
         }
 
-        // 5) стрелка лучшего хода
-        if (showBestArrow && bestMoveUci != null) {
+        // 5) Стрелка лучшего хода
+        if (showBestArrow && bestMoveUci != null && bestMoveUci.length >= 4) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val squareSize = size.minDimension / 8f
-                if (bestMoveUci.length >= 4) {
-                    val from = squareFromNotation(bestMoveUci.substring(0, 2))
-                    val to = squareFromNotation(bestMoveUci.substring(2, 4))
-                    if (from != null && to != null) {
-                        val (ff, fr) = if (isWhiteBottom) from else Pair(from.first, 7 - from.second)
-                        val (tf, tr) = if (isWhiteBottom) to else Pair(to.first, 7 - to.second)
-                        val fromX = ff * squareSize + squareSize / 2
-                        val fromY = fr * squareSize + squareSize / 2
-                        val toX = tf * squareSize + squareSize / 2
-                        val toY = tr * squareSize + squareSize / 2
-                        drawArrow(
-                            start = Offset(fromX, fromY),
-                            end = Offset(toX, toY),
-                            color = Color(0xFF3FA64A).copy(alpha = 0.85f),
-                            strokeWidth = 4.dp.toPx()
-                        )
-                    }
+                val from = squareFromNotation(bestMoveUci.substring(0, 2), isWhiteBottom)
+                val to = squareFromNotation(bestMoveUci.substring(2, 4), isWhiteBottom)
+                if (from != null && to != null) {
+                    val (ff, fr) = from
+                    val (tf, tr) = to
+                    val fromX = ff * squareSize + squareSize / 2
+                    val fromY = fr * squareSize + squareSize / 2
+                    val toX = tf * squareSize + squareSize / 2
+                    val toY = tr * squareSize + squareSize / 2
+                    drawArrow(
+                        start = Offset(fromX, fromY),
+                        end = Offset(toX, toY),
+                        color = Color(0xFF3FA64A).copy(alpha = 0.85f),
+                        strokeWidth = 4.dp.toPx()
+                    )
                 }
             }
         }
 
-        // 6) клики по клеткам (detectTapGestures)
+        // 6) Обработка кликов
         if (onSquareClick != null) {
             val sizeSnapshot = boardPx
             Box(
@@ -249,18 +247,14 @@ fun BoardCanvas(
                             val size = sizeSnapshot
                             if (size.width <= 0f) return@detectTapGestures
                             val sq = size.minDimension / 8f
-                            val file = (pos.x / sq).toInt().coerceIn(0, 7)
-                            val rank = (pos.y / sq).toInt().coerceIn(0, 7)
+                            val col = (pos.x / sq).toInt().coerceIn(0, 7)
+                            val row = (pos.y / sq).toInt().coerceIn(0, 7)
 
-                            // Преобразование координат с учетом ориентации доски
-                            val (realFile, realRank) = if (isWhiteBottom) {
-                                Pair(file, 7 - rank)
-                            } else {
-                                Pair(file, rank)
-                            }
+                            val file = if (isWhiteBottom) col else (7 - col)
+                            val rank = if (isWhiteBottom) (7 - row) else row
 
-                            val nf = ('a'.code + realFile).toChar()
-                            val nr = ('1'.code + realRank).toChar()
+                            val nf = ('a'.code + file).toChar()
+                            val nr = ('1'.code + rank).toChar()
                             onSquareClick("$nf$nr")
                         }
                     }
@@ -269,11 +263,16 @@ fun BoardCanvas(
     }
 }
 
-private fun squareFromNotation(notation: String): Pair<Int, Int>? {
+private fun squareFromNotation(notation: String, isWhiteBottom: Boolean): Pair<Int, Int>? {
     if (notation.length != 2) return null
-    val file = notation[0] - 'a'
-    val rank = 7 - (notation[1] - '1')
-    return if (file in 0..7 && rank in 0..7) Pair(file, rank) else null
+    val fileBoard = notation[0] - 'a'
+    val rankBoard = notation[1] - '1'
+    if (fileBoard !in 0..7 || rankBoard !in 0..7) return null
+
+    val col = if (isWhiteBottom) fileBoard else (7 - fileBoard)
+    val row = if (isWhiteBottom) (7 - rankBoard) else rankBoard
+
+    return Pair(col, row)
 }
 
 private fun DrawScope.drawArrow(

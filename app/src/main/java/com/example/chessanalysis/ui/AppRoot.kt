@@ -38,6 +38,9 @@ fun AppRoot() {
     var games by rememberSaveable { mutableStateOf<List<GameHeader>>(emptyList()) }
     var openingFens by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
 
+    // НОВОЕ: флаг первой загрузки
+    var isFirstLoad by rememberSaveable { mutableStateOf(true) }
+
     val json = remember {
         Json { ignoreUnknownKeys = true; explicitNulls = false }
     }
@@ -83,10 +86,12 @@ fun AppRoot() {
             LoginScreen(
                 onLoginSuccess = { profile ->
                     currentUserProfile = profile
+                    isFirstLoad = true // Сбрасываем флаг при логине
                     rootNav.navigate("home") { popUpTo("login") { inclusive = true } }
                 },
                 onRegisterSuccess = { profile ->
                     currentUserProfile = profile
+                    isFirstLoad = true // Сбрасываем флаг при регистрации
                     rootNav.navigate("home") { popUpTo("login") { inclusive = true } }
                 }
             )
@@ -102,6 +107,8 @@ fun AppRoot() {
                     profile = profile,
                     games = games,
                     openingFens = openingFens,
+                    isFirstLoad = isFirstLoad, // ПЕРЕДАЕМ ФЛАГ
+                    onFirstLoadComplete = { isFirstLoad = false }, // КОЛБЭК
                     onOpenReport = { report ->
                         val packed = json.encodeToString(report)
                         rootNav.currentBackStackEntry?.savedStateHandle?.set("reportJson", packed)
@@ -115,6 +122,7 @@ fun AppRoot() {
                         currentUserProfile = null
                         games = emptyList()
                         openingFens = emptySet()
+                        isFirstLoad = true
                         rootNav.navigate("login") {
                             popUpTo("home") { inclusive = true }
                         }
@@ -140,6 +148,7 @@ fun AppRoot() {
                         currentUserProfile = null
                         games = emptyList()
                         openingFens = emptySet()
+                        isFirstLoad = true
                         rootNav.navigate("login") { popUpTo("home") { inclusive = true } }
                     },
                     onBack = { rootNav.popBackStack() }

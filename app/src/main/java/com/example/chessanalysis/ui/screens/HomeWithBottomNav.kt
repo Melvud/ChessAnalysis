@@ -1,5 +1,6 @@
 package com.example.chessanalysis.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
@@ -12,6 +13,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -19,6 +21,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.chessanalysis.FullReport
 import com.example.chessanalysis.GameHeader
+import com.example.chessanalysis.R
 import com.example.chessanalysis.ui.UserProfile
 
 private const val TAB_GAMES = "tab/games"
@@ -33,6 +36,8 @@ fun HomeWithBottomNav(
     profile: UserProfile,
     games: List<GameHeader>,
     openingFens: Set<String>,
+    isFirstLoad: Boolean,
+    onFirstLoadComplete: () -> Unit,
     onOpenReport: (FullReport) -> Unit,
     onSaveProfile: (UserProfile) -> Unit,
     onLogout: () -> Unit
@@ -42,20 +47,32 @@ fun HomeWithBottomNav(
     val items = listOf(
         BottomItem(
             route = TAB_GAMES,
-            label = "Партии",
-            icon = { Icon(Icons.Default.List, contentDescription = "Партии") }
+            labelRes = R.string.nav_games,
+            icon = { Icon(Icons.Default.List, contentDescription = stringResource(R.string.nav_games)) }
         ),
         BottomItem(
             route = TAB_PROFILE,
-            label = "Профиль",
-            icon = { Icon(Icons.Default.AccountCircle, contentDescription = "Профиль") }
+            labelRes = R.string.nav_profile,
+            icon = { Icon(Icons.Default.AccountCircle, contentDescription = stringResource(R.string.nav_profile)) }
         )
     )
 
+    // Отслеживаем текущий маршрут для BackHandler
+    val backStack by tabsNav.currentBackStackEntryAsState()
+    val currentRoute = backStack?.destination?.route
+
+    // Обработка кнопки "Назад": возвращает на вкладку "Партии"
+    BackHandler(enabled = currentRoute != TAB_GAMES) {
+        if (currentRoute == TAB_PROFILE) {
+            tabsNav.navigate(TAB_GAMES) {
+                popUpTo(TAB_GAMES) { inclusive = false }
+                launchSingleTop = true
+            }
+        }
+    }
+
     Scaffold(
         bottomBar = {
-            val backStack by tabsNav.currentBackStackEntryAsState()
-            val currentRoute = backStack?.destination?.route
             NavigationBar {
                 items.forEach { item ->
                     NavigationBarItem(
@@ -69,7 +86,7 @@ fun HomeWithBottomNav(
                             }
                         },
                         icon = item.icon,
-                        label = { Text(item.label) }
+                        label = { Text(stringResource(item.labelRes)) }
                     )
                 }
             }
@@ -84,12 +101,21 @@ fun HomeWithBottomNav(
                 profile = profile,
                 games = games,
                 openingFens = openingFens,
+                isFirstLoad = isFirstLoad,
+                onFirstLoadComplete = onFirstLoadComplete,
                 onOpenReport = onOpenReport
             )
             addProfileTab(
                 profile = profile,
                 onSave = onSaveProfile,
-                onLogout = onLogout
+                onLogout = onLogout,
+                onBack = {
+                    // При нажатии "Назад" в профиле возвращаемся на партии
+                    tabsNav.navigate(TAB_GAMES) {
+                        popUpTo(TAB_GAMES) { inclusive = false }
+                        launchSingleTop = true
+                    }
+                }
             )
         }
     }
@@ -97,7 +123,7 @@ fun HomeWithBottomNav(
 
 private data class BottomItem(
     val route: String,
-    val label: String,
+    val labelRes: Int,
     val icon: @Composable () -> Unit
 )
 
@@ -105,6 +131,8 @@ private fun NavGraphBuilder.addGamesTab(
     profile: UserProfile,
     games: List<GameHeader>,
     openingFens: Set<String>,
+    isFirstLoad: Boolean,
+    onFirstLoadComplete: () -> Unit,
     onOpenReport: (FullReport) -> Unit
 ) {
     composable(TAB_GAMES) {
@@ -112,6 +140,8 @@ private fun NavGraphBuilder.addGamesTab(
             profile = profile,
             games = games,
             openingFens = openingFens,
+            isFirstLoad = isFirstLoad,
+            onFirstLoadComplete = onFirstLoadComplete,
             onOpenReport = onOpenReport
         )
     }
@@ -120,15 +150,15 @@ private fun NavGraphBuilder.addGamesTab(
 private fun NavGraphBuilder.addProfileTab(
     profile: UserProfile,
     onSave: (UserProfile) -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    onBack: () -> Unit
 ) {
     composable(TAB_PROFILE) {
-        // Вкладка профиля внутри нижнего меню: кнопки «назад» нет.
         ProfileScreen(
             profile = profile,
             onSave = onSave,
             onLogout = onLogout,
-            onBack = { /* игнорируем, профиль — вкладка */ }
+            onBack = onBack
         )
     }
 }

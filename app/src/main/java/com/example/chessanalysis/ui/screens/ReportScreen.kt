@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -46,10 +47,14 @@ fun ReportScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Отчёт о партии", color = Color.White) },
+                title = { Text(stringResource(R.string.game_report), color = Color.White) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = null, tint = Color.White)
+                        Icon(
+                            Icons.Default.ArrowBack,
+                            contentDescription = stringResource(R.string.back),
+                            tint = Color.White
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -79,19 +84,27 @@ fun ReportScreen(
             ) {
                 Column(Modifier.fillMaxWidth().padding(12.dp)) {
                     Text(
-                        "Оценка перформанса",
+                        stringResource(R.string.performance_evaluation),
                         color = Color.White,
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(report.header.white ?: "White", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                report.header.white ?: stringResource(R.string.white),
+                                color = Color.LightGray,
+                                style = MaterialTheme.typography.bodySmall
+                            )
                             Spacer(Modifier.height(4.dp))
                             StatBox(value = report.estimatedElo.whiteEst?.toString() ?: "—", dark = false)
                         }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(report.header.black ?: "Black", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                report.header.black ?: stringResource(R.string.black),
+                                color = Color.LightGray,
+                                style = MaterialTheme.typography.bodySmall
+                            )
                             Spacer(Modifier.height(4.dp))
                             StatBox(value = report.estimatedElo.blackEst?.toString() ?: "—", dark = true)
                         }
@@ -99,7 +112,7 @@ fun ReportScreen(
                 }
             }
 
-            // 2) Точность игроков + АВАТАРЫ (с фолбэком-инициалом)
+            // 2) Точность игроков + АВАТАРЫ
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -109,24 +122,24 @@ fun ReportScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 PlayerColumnWithAvatar(
-                    name = report.header.white ?: "White",
+                    name = report.header.white ?: stringResource(R.string.white),
                     acc = report.accuracy.whiteMovesAcc,
                     providerHint = guessProvider(report),
                     inverted = false
                 )
                 Spacer(Modifier.width(16.dp))
                 PlayerColumnWithAvatar(
-                    name = report.header.black ?: "Black",
+                    name = report.header.black ?: stringResource(R.string.black),
                     acc = report.accuracy.blackMovesAcc,
                     providerHint = guessProvider(report),
                     inverted = true
                 )
             }
 
-            // 3) Классификация ходов (с иконками)
+            // 3) Классификация ходов
             ClassificationTable(report)
 
-            // 4) График (внизу)
+            // 4) График
             EvalSparkline(report)
 
             // 5) Кнопка
@@ -139,7 +152,15 @@ fun ReportScreen(
                     containerColor = ChessComGreen,
                     contentColor = Color.White
                 )
-            ) { Text(if (onOpenBoard == null) "Вернуться" else "Смотреть отчёт") }
+            ) {
+                Text(
+                    if (onOpenBoard == null) {
+                        stringResource(R.string.return_back)
+                    } else {
+                        stringResource(R.string.view_report)
+                    }
+                )
+            }
 
             Spacer(Modifier.height(8.dp))
         }
@@ -199,7 +220,7 @@ private fun PlayerColumnWithAvatar(
         Text(name, color = Color.LightGray)
         Spacer(Modifier.height(8.dp))
 
-        // Только itera — без harm/ACPL
+        // Только itera
         StatBox(value = String.format("%.1f%%", acc.itera), dark = inverted)
     }
 }
@@ -208,7 +229,7 @@ private fun PlayerColumnWithAvatar(
 private fun InitialAvatar(
     name: String,
     size: androidx.compose.ui.unit.Dp,
-    bg: Color = Color(0xFF6D5E4A), // близкий к chesscom бедж
+    bg: Color = Color(0xFF6D5E4A),
     fg: Color = Color(0xFFF5F3EF)
 ) {
     val initial = name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
@@ -250,17 +271,18 @@ private fun StatBox(value: String, dark: Boolean = false) {
 
 @Composable
 private fun ClassificationTable(report: FullReport) {
+    val context = LocalContext.current
     val rows = listOf(
-        Triple("Блестящий ход!!", R.drawable.splendid, MoveClass.SPLENDID),
-        Triple("Замечательный!", R.drawable.perfect, MoveClass.PERFECT),
-        Triple("Лучший", R.drawable.best, MoveClass.BEST),
-        Triple("Отличный", R.drawable.excellent, MoveClass.EXCELLENT),
-        Triple("Хороший", R.drawable.okay, MoveClass.OKAY),
-        Triple("Теория", R.drawable.opening, MoveClass.OPENING),
-        Triple("Неточность", R.drawable.inaccuracy, MoveClass.INACCURACY),
-        Triple("Ошибка", R.drawable.mistake, MoveClass.MISTAKE),
-        Triple("Единственный", R.drawable.forced, MoveClass.FORCED),
-        Triple("Зевок", R.drawable.blunder, MoveClass.BLUNDER)
+        Triple(stringResource(R.string.move_splendid), R.drawable.splendid, MoveClass.SPLENDID),
+        Triple(stringResource(R.string.move_perfect), R.drawable.perfect, MoveClass.PERFECT),
+        Triple(stringResource(R.string.move_best), R.drawable.best, MoveClass.BEST),
+        Triple(stringResource(R.string.move_excellent), R.drawable.excellent, MoveClass.EXCELLENT),
+        Triple(stringResource(R.string.move_okay), R.drawable.okay, MoveClass.OKAY),
+        Triple(stringResource(R.string.move_opening), R.drawable.opening, MoveClass.OPENING),
+        Triple(stringResource(R.string.move_inaccuracy), R.drawable.inaccuracy, MoveClass.INACCURACY),
+        Triple(stringResource(R.string.move_mistake), R.drawable.mistake, MoveClass.MISTAKE),
+        Triple(stringResource(R.string.move_forced), R.drawable.forced, MoveClass.FORCED),
+        Triple(stringResource(R.string.move_blunder), R.drawable.blunder, MoveClass.BLUNDER)
     )
 
     val whiteMovesMap = mutableMapOf<MoveClass, Int>().withDefault { 0 }
@@ -282,7 +304,7 @@ private fun ClassificationTable(report: FullReport) {
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("Шахматисты", color = Color.LightGray)
+                Text(stringResource(R.string.move_classification), color = Color.LightGray)
                 Row {
                     Text(" ", modifier = Modifier.width(36.dp))
                     Spacer(Modifier.width(24.dp))
