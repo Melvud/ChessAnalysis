@@ -11,6 +11,9 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.Inet4Address
 import java.net.InetAddress
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
 object GameLoaders {
@@ -57,6 +60,93 @@ object GameLoaders {
         return rx.findAll(pgn).associate { it.groupValues[1] to it.groupValues[2] }
     }
 
+    // --- Унифицированный парсер времени партии (UTCDate/UTCTime -> Date -> dateIso) ---
+    private fun parseGameTimestamp(pgn: String, dateIsoFallback: String?): Long {
+        try {
+            // 1) UTCDate+UTCTime
+            val utcDate = Regex("""\[UTCDate\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
+            val utcTime = Regex("""\[UTCTime\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
+            if (!utcDate.isNullOrBlank() && !utcTime.isNullOrBlank()) {
+                val f = SimpleDateFormat("yyyy.MM.dd HH:mm:ss", Locale.US)
+                f.timeZone = TimeZone.getTimeZone("UTC")
+                f.parse("$utcDate $utcTime")?.time?.let { return it }
+            }
+
+            // 2) Date
+            val date = Regex("""\[Date\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
+            if (!date.isNullOrBlank()) {
+                val f = SimpleDateFormat("yyyy.MM.dd", Locale.US)
+                f.parse(date)?.time?.let { return it }
+            }
+
+            // 3) Fallback на переданное dateIso
+            if (!dateIsoFallback.isNullOrBlank()) {
+                val formats = listOf(
+                    SimpleDateFormat("yyyy.MM.dd", Locale.US),
+                    SimpleDateFormat("yyyy-MM-dd", Locale.US),
+                    SimpleDateFormat("dd.MM.yyyy", Locale.US)
+                )
+                for (f in formats) {
+                    runCatching { f.parse(dateIsoFallback)?.time }.getOrNull()?.let { return it }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        return System.currentTimeMillis()
+    }
+
+    // ----------------------- ВАЛИДАЦИЯ НИКНЕЙМОВ -----------------------
+    suspend fun checkLichessUserExists(username: String): Boolean = withContext(Dispatchers.IO) {
+        if (username.isBlank()) return@withContext true
+        val url = "https://lichess.org/api/user/${username.trim()}"
+        val req = Request.Builder()
+            .url(url)
+            .header("User-Agent", UA)
+            .build()
+        try {
+            clientPreferV4.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) return@withContext true
+                // 404 — не найден
+                if (resp.code == 404) return@withContext false
+            }
+        } catch (_: Exception) {
+            // пробуем v4-only
+            return@withContext try {
+                clientV4Fallback.newCall(req).execute().use { resp ->
+                    resp.isSuccessful
+                }
+            } catch (_: Exception) {
+                false
+            }
+        }
+        false
+    }
+
+    suspend fun checkChessComUserExists(username: String): Boolean = withContext(Dispatchers.IO) {
+        if (username.isBlank()) return@withContext true
+        val norm = username.trim().lowercase()
+        val url = "https://api.chess.com/pub/player/$norm"
+        val req = Request.Builder()
+            .url(url)
+            .header("User-Agent", UA)
+            .build()
+        try {
+            clientPreferV4.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) return@withContext true
+                if (resp.code == 404) return@withContext false
+            }
+        } catch (_: Exception) {
+            return@withContext try {
+                clientV4Fallback.newCall(req).execute().use { resp ->
+                    resp.isSuccessful
+                }
+            } catch (_: Exception) {
+                false
+            }
+        }
+        false
+    }
+
     suspend fun ensureFullPgn(header: GameHeader): String = withContext(Dispatchers.IO) {
         val src = header.pgn.orEmpty()
         if (src.isNotBlank() && hasMoves(src)) return@withContext src
@@ -68,7 +158,8 @@ object GameLoaders {
             ?: tags["GameId"]
 
         if (!lichessId.isNullOrBlank()) {
-            val url = "https://lichess.org/game/export/$lichessId?moves=true&tags=true&opening=true&clocks=true&evals=false"
+            val url =
+                "https://lichess.org/game/export/$lichessId?moves=true&tags=true&opening=true&clocks=true&evals=false"
             val req = Request.Builder().url(url).header("User-Agent", UA).build()
             val body = execWithIpv6SafeClient(req)
             if (body != null && hasMoves(body)) {
@@ -80,12 +171,13 @@ object GameLoaders {
         return@withContext src
     }
 
-    // --------------------- LICHESS: УВЕЛИЧИЛИ ДО 50 ---------------------
+    // --------------------- LICHESS: теперь берём самые новые ---------------------
     suspend fun loadLichess(username: String, max: Int = 50): List<GameHeader> =
         withContext(Dispatchers.IO) {
             Log.d(TAG, "🔄 Loading Lichess games for user: $username (max=$max)")
 
-            val ndUrl = "https://lichess.org/api/games/user/${username.trim()}?max=$max&perfType=blitz,bullet,rapid,classical&analysed=false&clocks=true&evals=false&opening=true&pgnInJson=true"
+            val ndUrl =
+                "https://lichess.org/api/games/user/${username.trim()}?max=$max&perfType=blitz,bullet,rapid,classical&analysed=false&clocks=true&evals=false&opening=true&pgnInJson=true"
             val ndReq = Request.Builder()
                 .url(ndUrl)
                 .header("Accept", "application/x-ndjson")
@@ -94,7 +186,8 @@ object GameLoaders {
 
             execWithIpv6SafeClient(ndReq)?.let { body ->
                 val list = mutableListOf<GameHeader>()
-                val isNdjson = body.lineSequence().take(1).firstOrNull()?.trim()?.startsWith("{") == true
+                val isNdjson =
+                    body.lineSequence().take(1).firstOrNull()?.trim()?.startsWith("{") == true
 
                 if (isNdjson) {
                     body.lineSequence().forEach { line ->
@@ -102,31 +195,38 @@ object GameLoaders {
                         runCatching {
                             val el = json.parseToJsonElement(line).jsonObject
                             val pgn = el["pgn"]?.jsonPrimitive?.content
-                            if (!pgn.isNullOrBlank()) {
-                                list += PgnChess.headerFromPgn(pgn).copy(site = Provider.LICHESS, pgn = pgn)
+                            if (!pgn.isNullOrBlank() && hasMoves(pgn)) {
+                                list += PgnChess.headerFromPgn(pgn)
+                                    .copy(site = Provider.LICHESS, pgn = pgn)
                             }
                         }
                     }
-                    Log.d(TAG, "✅ Lichess NDJSON: loaded ${list.size} games")
-                    if (list.isNotEmpty()) return@withContext list
                 } else {
-                    val rx = Regex("""(?s)(\[Event[^\[]*(?:\[[^\]]*\][^\[]*)*?1-0|0-1|1/2-1/2|\*)""")
+                    // fallback: обычный PGN-дамп
+                    val rx =
+                        Regex("""(?s)(\[Event[^\[]*(?:\[[^\]]*\][^\[]*)*?(?:1-0|0-1|1/2-1/2|\*))""")
                     rx.findAll(body).forEach { m ->
                         val pgn = m.groupValues[1].trim()
                         if (pgn.isNotEmpty() && hasMoves(pgn)) {
                             list += PgnChess.headerFromPgn(pgn).copy(site = Provider.LICHESS, pgn = pgn)
                         }
                     }
-                    Log.d(TAG, "✅ Lichess PGN dump: loaded ${list.size} games")
-                    if (list.isNotEmpty()) return@withContext list
                 }
+
+                // ВАЖНО: сортируем по времени партии и берём самые новые
+                val sorted = list.sortedByDescending { gh ->
+                    parseGameTimestamp(gh.pgn ?: "", gh.date)
+                }.take(max)
+
+                Log.d(TAG, "✅ Lichess: loaded ${sorted.size} (newest first)")
+                return@withContext sorted
             }
 
             Log.w(TAG, "⚠ Lichess returned 0 games")
             emptyList()
         }
 
-    // --------------------- CHESS.COM: УВЕЛИЧИЛИ ДО 50 ---------------------
+    // --------------------- CHESS.COM: теперь берём самые новые ---------------------
     suspend fun loadChessCom(username: String, max: Int = 50): List<GameHeader> =
         withContext(Dispatchers.IO) {
             Log.d(TAG, "🔄 Loading Chess.com games for user: $username (max=$max)")
@@ -147,7 +247,7 @@ object GameLoaders {
                 return@withContext emptyList()
             }
 
-            // Берем последние 3 месяца (чтобы точно получить 50 партий)
+            // Берём последние 3 месяца, но позже всё равно отсортируем по времени и усечём
             val lastArchives = archiveUrls.takeLast(3)
             val allGames = mutableListOf<GameHeader>()
 
@@ -162,19 +262,21 @@ object GameLoaders {
                         allGames += PgnChess.headerFromPgn(pgn).copy(site = Provider.CHESSCOM, pgn = pgn)
                     }
                 }
-
-                if (allGames.size >= max) break
             }
 
-            val result = allGames.takeLast(max)
-            Log.d(TAG, "✅ Chess.com: loaded ${result.size} games")
+            // Ключевое изменение: сортируем по времени партии и берём самые новые
+            val result = allGames.sortedByDescending { gh ->
+                parseGameTimestamp(gh.pgn ?: "", gh.date)
+            }.take(max)
+
+            Log.d(TAG, "✅ Chess.com: loaded ${result.size} (newest first)")
             result
         }
 
     private fun execWithIpv6SafeClient(req: Request): String? {
         try {
             clientPreferV4.newCall(req).execute().use { resp ->
-                val body = resp.body?.string().orEmpty()
+                val body = resp.body?.string().orElseBlank()
                 if (resp.isSuccessful && body.isNotBlank()) return body
                 if (body.isNotBlank()) return body
             }
@@ -188,7 +290,7 @@ object GameLoaders {
 
         return try {
             clientV4Fallback.newCall(req).execute().use { resp ->
-                val body = resp.body?.string().orEmpty()
+                val body = resp.body?.string().orElseBlank()
                 if (resp.isSuccessful && body.isNotBlank()) body else body.ifBlank { null }
             }
         } catch (e: Exception) {
@@ -204,4 +306,6 @@ object GameLoaders {
                 ("connection reset by peer" in msg) ||
                 (e is java.net.ConnectException)
     }
+
+    private fun String?.orElseBlank(): String = this ?: ""
 }

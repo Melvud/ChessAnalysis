@@ -49,6 +49,7 @@ fun BoardCanvas(
     val board = fen.substringBefore(' ')
     val ranks = board.split('/')
 
+    // ИСПРАВЛЕНО: Переворачиваем ранги если черные снизу
     val displayRanks = if (isWhiteBottom) {
         ranks
     } else {
@@ -70,10 +71,7 @@ fun BoardCanvas(
             val defaultHl = Color(0xFFB58863)
             val classColor = moveClass?.let { mc -> moveClassBadgeRes(mc).container } ?: defaultHl
 
-            // ИСПРАВЛЕНО: клетка a1 (левый нижний угол для белых) должна быть ТЁМНОЙ
-            // rank=0 это 8-я горизонталь (сверху), rank=7 это 1-я горизонталь (снизу)
-            // file=0 это вертикаль 'a'
-            // Светлая клетка когда сумма (rank + file) ЧЁТНАЯ
+            // Рисуем клетки
             for (rank in 0..7) {
                 for (file in 0..7) {
                     val isLight = (rank + file) % 2 == 0
@@ -89,8 +87,8 @@ fun BoardCanvas(
 
             // Подсветка последнего хода
             lastMove?.let { (from, to) ->
-                val fromSquare = squareFromNotation(from, isWhiteBottom)
-                val toSquare = squareFromNotation(to, isWhiteBottom)
+                val fromSquare = squareToCanvas(from, isWhiteBottom)
+                val toSquare = squareToCanvas(to, isWhiteBottom)
                 if (fromSquare != null && toSquare != null) {
                     val (ff, fr) = fromSquare
                     val (tf, tr) = toSquare
@@ -115,7 +113,7 @@ fun BoardCanvas(
 
             // Подсветка выбранной клетки
             selectedSquare?.let { sel ->
-                squareFromNotation(sel, isWhiteBottom)?.let { (sf, sr) ->
+                squareToCanvas(sel, isWhiteBottom)?.let { (sf, sr) ->
                     val x = sf * squareSize
                     val y = sr * squareSize
                     drawRect(
@@ -128,28 +126,39 @@ fun BoardCanvas(
             }
         }
 
-        // 2) Фигуры
+        // 2) ИСПРАВЛЕНО: Фигуры с правильной обработкой переворота
         Column(modifier = Modifier.fillMaxSize()) {
             displayRanks.forEachIndexed { rankIndex, rank ->
                 Row(Modifier.weight(1f)) {
-                    var fileIndex = 0
+                    // Парсим ранг в список фигур
+                    val pieces = mutableListOf<Char?>()
                     for (ch in rank) {
                         if (ch.isDigit()) {
                             repeat(ch.code - '0'.code) {
-                                Box(Modifier.weight(1f).fillMaxHeight())
-                                fileIndex++
+                                pieces.add(null)
                             }
                         } else {
-                            val pieceName = when (ch) {
-                                'P' -> "wP"; 'N' -> "wN"; 'B' -> "wB"; 'R' -> "wR"; 'Q' -> "wQ"; 'K' -> "wK"
-                                'p' -> "bP"; 'n' -> "bN"; 'b' -> "bB"; 'r' -> "bR"; 'q' -> "bQ"; 'k' -> "bK"
-                                else -> null
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight()
-                            ) {
+                            pieces.add(ch)
+                        }
+                    }
+
+                    // КРИТИЧНО: Переворачиваем порядок фигур если черные снизу
+                    val displayPieces = if (isWhiteBottom) pieces else pieces.reversed()
+
+                    displayPieces.forEach { piece ->
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                        ) {
+                            piece?.let { ch ->
+                                val pieceName = when (ch) {
+                                    'P' -> "wP"; 'N' -> "wN"; 'B' -> "wB"
+                                    'R' -> "wR"; 'Q' -> "wQ"; 'K' -> "wK"
+                                    'p' -> "bP"; 'n' -> "bN"; 'b' -> "bB"
+                                    'r' -> "bR"; 'q' -> "bQ"; 'k' -> "bK"
+                                    else -> null
+                                }
                                 pieceName?.let {
                                     val painter = rememberAsyncImagePainter(
                                         model = ImageRequest.Builder(context)
@@ -167,7 +176,6 @@ fun BoardCanvas(
                                     )
                                 }
                             }
-                            fileIndex++
                         }
                     }
                 }
@@ -182,7 +190,7 @@ fun BoardCanvas(
                 val color = Color.Black.copy(alpha = 0.28f)
 
                 legalMoves.forEach { target ->
-                    squareFromNotation(target, isWhiteBottom)?.let { (tf, tr) ->
+                    squareToCanvas(target, isWhiteBottom)?.let { (tf, tr) ->
                         val cx = tf * squareSize + squareSize / 2
                         val cy = tr * squareSize + squareSize / 2
                         drawCircle(
@@ -198,7 +206,7 @@ fun BoardCanvas(
         // 4) Иконка классификации хода
         if (lastMove != null && moveClass != null && boardPx.width > 0f) {
             val badge = moveClassBadgeRes(moveClass)
-            squareFromNotation(lastMove.second, isWhiteBottom)?.let { (tf, tr) ->
+            squareToCanvas(lastMove.second, isWhiteBottom)?.let { (tf, tr) ->
                 val sq = boardPx.minDimension / 8f
                 val x = (tf * sq + sq * 0.62f).toInt()
                 val y = (tr * sq + sq * 0.08f).toInt()
@@ -217,8 +225,8 @@ fun BoardCanvas(
         if (showBestArrow && bestMoveUci != null && bestMoveUci.length >= 4) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val squareSize = size.minDimension / 8f
-                val from = squareFromNotation(bestMoveUci.substring(0, 2), isWhiteBottom)
-                val to = squareFromNotation(bestMoveUci.substring(2, 4), isWhiteBottom)
+                val from = squareToCanvas(bestMoveUci.substring(0, 2), isWhiteBottom)
+                val to = squareToCanvas(bestMoveUci.substring(2, 4), isWhiteBottom)
                 if (from != null && to != null) {
                     val (ff, fr) = from
                     val (tf, tr) = to
@@ -263,10 +271,14 @@ fun BoardCanvas(
     }
 }
 
-private fun squareFromNotation(notation: String, isWhiteBottom: Boolean): Pair<Int, Int>? {
+/**
+ * Преобразует шахматную нотацию (например, "e4") в координаты Canvas (col, row)
+ * с учётом ориентации доски.
+ */
+private fun squareToCanvas(notation: String, isWhiteBottom: Boolean): Pair<Int, Int>? {
     if (notation.length != 2) return null
-    val fileBoard = notation[0] - 'a'
-    val rankBoard = notation[1] - '1'
+    val fileBoard = notation[0] - 'a'  // 0..7 (a..h)
+    val rankBoard = notation[1] - '1'  // 0..7 (1..8)
     if (fileBoard !in 0..7 || rankBoard !in 0..7) return null
 
     val col = if (isWhiteBottom) fileBoard else (7 - fileBoard)

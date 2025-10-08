@@ -20,8 +20,13 @@ import com.example.chessanalysis.EngineClient
 import com.example.chessanalysis.util.LocaleManager
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,8 +50,49 @@ fun ProfileScreen(
     var isSaving by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    // Подписываемся на текущий режим работы движка
     val engineMode by EngineClient.engineMode.collectAsState()
+
+    // Функция для проверки существования пользователя на Lichess
+    suspend fun checkLichessUserExists(username: String): Boolean = withContext(Dispatchers.IO) {
+        if (username.isBlank()) return@withContext true // пустой ник считаем валидным
+        try {
+            val client = OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.SECONDS)
+                .build()
+
+            val request = Request.Builder()
+                .url("https://lichess.org/api/user/$username")
+                .get()
+                .build()
+
+            val response = client.newCall(request).execute()
+            response.isSuccessful
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    // Функция для проверки существования пользователя на Chess.com
+    suspend fun checkChessComUserExists(username: String): Boolean = withContext(Dispatchers.IO) {
+        if (username.isBlank()) return@withContext true // пустой ник считаем валидным
+        try {
+            val client = OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.SECONDS)
+                .build()
+
+            val request = Request.Builder()
+                .url("https://api.chess.com/pub/player/$username")
+                .get()
+                .build()
+
+            val response = client.newCall(request).execute()
+            response.isSuccessful
+        } catch (e: Exception) {
+            false
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -142,58 +188,36 @@ fun ProfileScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Server Mode
+                    // Server Mode (DISABLED - только показываем, но нельзя выбрать)
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable(enabled = !isSaving) {
-                                scope.launch {
-                                    try {
-                                        EngineClient.setEngineMode(EngineClient.EngineMode.SERVER)
-                                    } catch (e: Exception) {
-                                        errorMessage = context.getString(
-                                            R.string.switch_error,
-                                            e.message ?: ""
-                                        )
-                                    }
-                                }
-                            }
                             .padding(vertical = 8.dp)
                     ) {
                         RadioButton(
                             selected = engineMode == EngineClient.EngineMode.SERVER,
-                            onClick = {
-                                scope.launch {
-                                    try {
-                                        EngineClient.setEngineMode(EngineClient.EngineMode.SERVER)
-                                    } catch (e: Exception) {
-                                        errorMessage = context.getString(
-                                            R.string.switch_error,
-                                            e.message ?: ""
-                                        )
-                                    }
-                                }
-                            },
-                            enabled = !isSaving
+                            onClick = null, // Нельзя нажать
+                            enabled = false // Заблокировано
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
                             Text(
                                 text = stringResource(R.string.engine_server),
-                                style = MaterialTheme.typography.bodyLarge
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                             )
                             Text(
                                 text = stringResource(R.string.engine_server_desc),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                             )
                         }
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Local Mode
+                    // Local Mode (единственный доступный вариант)
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
@@ -276,6 +300,32 @@ fun ProfileScreen(
 
                         scope.launch {
                             try {
+                                // Проверка существования никнеймов
+                                val lichessTrimed = lichessName.trim()
+                                val chessTrimed = chessName.trim()
+
+                                if (lichessTrimed.isNotEmpty()) {
+                                    val lichessExists = checkLichessUserExists(lichessTrimed)
+                                    if (!lichessExists) {
+                                        errorMessage = context.getString(
+                                            R.string.user_not_found_error
+                                        ) + " (Lichess: $lichessTrimed)"
+                                        isSaving = false
+                                        return@launch
+                                    }
+                                }
+
+                                if (chessTrimed.isNotEmpty()) {
+                                    val chessComExists = checkChessComUserExists(chessTrimed)
+                                    if (!chessComExists) {
+                                        errorMessage = context.getString(
+                                            R.string.user_not_found_error
+                                        ) + " (Chess.com: $chessTrimed)"
+                                        isSaving = false
+                                        return@launch
+                                    }
+                                }
+
                                 val user = FirebaseAuth.getInstance().currentUser
                                 val uid = user?.uid
 
@@ -290,8 +340,8 @@ fun ProfileScreen(
                                     // Update Firestore
                                     val data = mapOf(
                                         "nickname" to nickname.trim(),
-                                        "lichessUsername" to lichessName.trim(),
-                                        "chessUsername" to chessName.trim(),
+                                        "lichessUsername" to lichessTrimed,
+                                        "chessUsername" to chessTrimed,
                                         "language" to selectedLanguage.code
                                     )
 
@@ -308,8 +358,8 @@ fun ProfileScreen(
                                     val updatedProfile = UserProfile(
                                         email = newEmail,
                                         nickname = nickname.trim(),
-                                        lichessUsername = lichessName.trim(),
-                                        chessUsername = chessName.trim(),
+                                        lichessUsername = lichessTrimed,
+                                        chessUsername = chessTrimed,
                                         language = selectedLanguage.code
                                     )
 

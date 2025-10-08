@@ -45,6 +45,7 @@ import com.github.bhlangonijr.chesslib.*
 import com.github.bhlangonijr.chesslib.move.Move
 import com.github.bhlangonijr.chesslib.move.MoveGenerator
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -53,9 +54,16 @@ import okhttp3.Request
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import com.example.chessanalysis.R
+
 private const val TAG = "GameReportScreen"
 
-// ---------------- Вспомогательные типы для PV-панели ----------------
+// Состояние линий для позиции
+private data class PositionLinesState(
+    val lines: List<LineEval>,
+    val isAnalyzing: Boolean,
+    val depth: Int,
+    val multiPv: Int
+)
 
 private data class PvToken(
     val iconAsset: String,
@@ -158,6 +166,8 @@ private fun PvRow(
     onClickMoveAtIndex: (idx: Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    if (line.pv.isEmpty()) return
+
     val tokens = remember(baseFen, line.pv) { buildIconTokens(baseFen, line.pv) }
     Row(
         modifier = modifier
@@ -321,6 +331,10 @@ private fun EngineLinesPanel(
         label = "chevron"
     )
 
+    val validLines = remember(lines) {
+        lines.filter { it.pv.isNotEmpty() }
+    }
+
     Card(
         modifier = modifier,
         colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1C1A)),
@@ -350,12 +364,12 @@ private fun EngineLinesPanel(
                         strokeWidth = 2.dp
                     )
                     Spacer(Modifier.width(8.dp))
-                } else if (lines.isNotEmpty()) {
+                } else if (validLines.isNotEmpty()) {
                     Badge(
                         containerColor = Color(0xFF4CAF50).copy(alpha = 0.2f),
                         contentColor = Color(0xFF4CAF50)
                     ) {
-                        Text("${lines.size}", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("${validLines.size}", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                     Spacer(Modifier.width(8.dp))
                 }
@@ -381,8 +395,8 @@ private fun EngineLinesPanel(
                     Spacer(Modifier.height(12.dp))
 
                     when {
-                        lines.isNotEmpty() -> {
-                            lines.forEachIndexed { li, line ->
+                        validLines.isNotEmpty() -> {
+                            validLines.forEachIndexed { li, line ->
                                 PvRow(
                                     baseFen = baseFen,
                                     line = line,
@@ -510,7 +524,12 @@ fun GameReportScreen(
     var legalTargets by remember { mutableStateOf<Set<String>>(emptySet()) }
     var isAnalyzing by remember { mutableStateOf(false) }
 
-    var engineLines by remember { mutableStateOf<List<LineEval>>(emptyList()) }
+    // НОВАЯ СИСТЕМА: Хранилище состояний линий для каждой позиции
+    val linesStateMap = remember { mutableStateMapOf<String, PositionLinesState>() }
+
+    // Текущие отображаемые линии
+    var displayedLines by remember { mutableStateOf<List<LineEval>>(emptyList()) }
+    var isAnalysisRunning by remember { mutableStateOf(false) }
 
     val positionSettings = remember { mutableStateMapOf<Int, Pair<Int, Int>>() }
 
@@ -521,11 +540,34 @@ fun GameReportScreen(
 
     var targetDepth by remember { mutableStateOf(defaultDepth) }
     var targetMultiPv by remember { mutableStateOf(defaultMultiPv) }
-    var pvBusy by remember { mutableStateOf(false) }
+
+    var analysisJob by remember { mutableStateOf<Job?>(null) }
 
     val bgColor = Color(0xFF161512)
     val surfaceColor = Color(0xFF262522)
     val cardColor = Color(0xFF1E1C1A)
+
+    // Инициализация: загружаем линии из отчёта в хранилище
+    LaunchedEffect(report) {
+        Log.d(TAG, "🔄 Initializing lines from report...")
+        report.positions.forEachIndexed { index, posEval ->
+            if (posEval.lines.isNotEmpty()) {
+                val key = "${posEval.fen}-${posEval.lines.firstOrNull()?.depth ?: defaultDepth}-${report.positions.firstOrNull()?.lines?.size ?: defaultMultiPv}"
+                linesStateMap[key] = PositionLinesState(
+                    lines = posEval.lines,
+                    isAnalyzing = false,
+                    depth = posEval.lines.firstOrNull()?.depth ?: defaultDepth,
+                    multiPv = posEval.lines.size
+                )
+                Log.d(TAG, "✅ Initialized position $index with ${posEval.lines.size} lines")
+            }
+        }
+
+        // Установка начальных линий
+        val initialLines = report.positions.getOrNull(0)?.lines ?: emptyList()
+        displayedLines = initialLines
+        Log.d(TAG, "✅ Set initial displayed lines: ${initialLines.size}")
+    }
 
     LaunchedEffect(report) {
         Log.d(TAG, "🕐 LaunchedEffect: checking clocks...")
@@ -567,13 +609,20 @@ fun GameReportScreen(
         }
     }
 
-    val baseFenForPanel by derivedStateOf {
-        if (variationActive) (variationFen ?: report.positions.getOrNull(currentPlyIndex)?.fen)
-        else report.positions.getOrNull(currentPlyIndex)?.fen
+    val currentFen by derivedStateOf {
+        if (variationActive) {
+            variationFen ?: report.positions.getOrNull(currentPlyIndex)?.fen ?: ""
+        } else {
+            report.positions.getOrNull(currentPlyIndex)?.fen ?: ""
+        }
     }
 
+    val baseFenForPanel by derivedStateOf { currentFen }
+
+    // Загрузка настроек и линий при смене позиции
     LaunchedEffect(currentPlyIndex, variationActive) {
         if (!variationActive) {
+            // Восстанавливаем настройки
             val saved = positionSettings[currentPlyIndex]
             if (saved != null) {
                 targetDepth = saved.first
@@ -582,49 +631,130 @@ fun GameReportScreen(
                 targetDepth = defaultDepth
                 targetMultiPv = defaultMultiPv
             }
+
+            // КРИТИЧНО: Мгновенно показываем линии из отчёта
+            val reportLines = report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList()
+            if (reportLines.isNotEmpty()) {
+                displayedLines = reportLines
+                Log.d(TAG, "📋 Instantly displayed ${reportLines.size} lines from report for ply $currentPlyIndex")
+            }
         }
     }
 
-    LaunchedEffect(baseFenForPanel, targetDepth, targetMultiPv) {
-        val fen = baseFenForPanel ?: return@LaunchedEffect
-        pvBusy = true
-        engineLines = emptyList()
-
-        if (!variationActive) {
-            positionSettings[currentPlyIndex] = Pair(targetDepth, targetMultiPv)
+    // Функция для запуска/обновления анализа
+    fun startAnalysis(fen: String, depth: Int, multiPv: Int) {
+        if (fen.isBlank()) {
+            Log.w(TAG, "⚠ Cannot analyze: empty FEN")
+            return
         }
 
-        runCatching {
-            val final = evaluateFenDetailedStreaming(
-                fen = fen,
-                depth = targetDepth,
-                multiPv = targetMultiPv,
-                skillLevel = null
-            ) { linesDto ->
-                engineLines = linesDto.map { l ->
-                    LineEval(
-                        pv = l.pv,
-                        cp = l.cp,
-                        mate = l.mate,
-                        best = l.pv.firstOrNull()
+        val stateKey = "$fen-$depth-$multiPv"
+
+        // Проверяем кеш
+        val cached = linesStateMap[stateKey]
+        if (cached != null && !cached.isAnalyzing) {
+            displayedLines = cached.lines
+            isAnalysisRunning = false
+            Log.d(TAG, "✅ Using cached analysis: ${cached.lines.size} lines")
+            return
+        }
+
+        // Отменяем предыдущий анализ
+        analysisJob?.cancel()
+
+        isAnalysisRunning = true
+        Log.d(TAG, "🔍 Starting analysis for: $stateKey")
+
+        analysisJob = scope.launch {
+            try {
+                // Сохраняем текущие линии как базовые
+                val baseLines = displayedLines.toList()
+                var hasUpdates = false
+
+                val finalResult = evaluateFenDetailedStreaming(
+                    fen = fen,
+                    depth = depth,
+                    multiPv = multiPv,
+                    skillLevel = null
+                ) { linesDto ->
+                    val validLines = linesDto.filter { l ->
+                        l.pv.isNotEmpty() && (l.cp != null || l.mate != null)
+                    }
+
+                    if (validLines.isNotEmpty()) {
+                        val newLines = validLines.map { l ->
+                            LineEval(
+                                pv = l.pv,
+                                cp = l.cp,
+                                mate = l.mate,
+                                best = l.pv.firstOrNull(),
+                                depth = l.depth,
+                                multiPv = l.multiPv
+                            )
+                        }.take(multiPv)
+
+                        // Обновляем только если линии изменились
+                        if (newLines != displayedLines) {
+                            displayedLines = newLines
+                            hasUpdates = true
+                            Log.d(TAG, "📊 Updated lines: ${newLines.size}, depth=${validLines.firstOrNull()?.depth}")
+                        }
+                    }
+                }
+
+                // Финальное сохранение
+                val finalValidLines = finalResult.lines.filter { l ->
+                    l.pv.isNotEmpty() && (l.cp != null || l.mate != null)
+                }
+
+                if (finalValidLines.isNotEmpty()) {
+                    val finalLines = finalValidLines.map { l ->
+                        LineEval(
+                            pv = l.pv,
+                            cp = l.cp,
+                            mate = l.mate,
+                            best = l.pv.firstOrNull(),
+                            depth = l.depth,
+                            multiPv = l.multiPv
+                        )
+                    }.take(multiPv)
+
+                    displayedLines = finalLines
+
+                    // Сохраняем в кеш
+                    linesStateMap[stateKey] = PositionLinesState(
+                        lines = finalLines,
+                        isAnalyzing = false,
+                        depth = depth,
+                        multiPv = multiPv
                     )
-                }.take(targetMultiPv)
-            }
 
-            if (final.lines.isNotEmpty()) {
-                engineLines = final.lines.map { l ->
-                    LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
-                }.take(targetMultiPv)
+                    Log.d(TAG, "✅ Analysis complete: ${finalLines.size} lines cached")
+                } else if (!hasUpdates) {
+                    // Если не получили обновлений, восстанавливаем базовые линии
+                    displayedLines = baseLines
+                    Log.w(TAG, "⚠ No updates, restored base lines: ${baseLines.size}")
+                }
 
-                Log.d(TAG, "✓ Final lines set: ${engineLines.size} lines")
-            } else {
-                Log.w(TAG, "⚠ Final result is empty!")
+            } catch (e: Exception) {
+                if (e !is kotlinx.coroutines.CancellationException) {
+                    Log.e(TAG, "❌ Analysis error: ${e.message}", e)
+                } else {
+                    Log.d(TAG, "🚫 Analysis cancelled")
+                }
+            } finally {
+                isAnalysisRunning = false
             }
-        }.onFailure { e ->
-            Log.e(TAG, "❌ Analysis failed: ${e.message}", e)
-            engineLines = emptyList()
         }
-        pvBusy = false
+    }
+
+    // Триггер анализа при изменении настроек
+    LaunchedEffect(currentFen, targetDepth, targetMultiPv, variationActive) {
+        if (currentFen.isNotBlank()) {
+            // Небольшая задержка для предотвращения лишних запусков
+            delay(100)
+            startAnalysis(currentFen, targetDepth, targetMultiPv)
+        }
     }
 
     fun evalOfPosition(pos: PositionEval?): Float {
@@ -654,8 +784,7 @@ fun GameReportScreen(
     fun handleSquareClick(square: String) {
         if (isAnalyzing) return
 
-        val baseFen = if (variationActive)
-            (variationFen ?: report.positions.getOrNull(currentPlyIndex)?.fen)
+        val baseFen = if (variationActive) variationFen
         else report.positions.getOrNull(currentPlyIndex)?.fen
         val boardFenNow = baseFen ?: return
 
@@ -742,42 +871,23 @@ fun GameReportScreen(
                 variationBestUci = bestMove
                 playMoveSound(moveClass, captured)
 
-                pvBusy = true
-                engineLines = emptyList()
+                Log.d(TAG, "✓ Move analyzed, variation active")
 
-                val final = evaluateFenDetailedStreaming(
-                    fen = afterFen,
-                    depth = targetDepth,
-                    multiPv = targetMultiPv,
-                    skillLevel = null
-                ) { linesDto ->
-                    engineLines = linesDto.map { l ->
-                        LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
-                    }.take(targetMultiPv)
-                }
-
-                if (final.lines.isNotEmpty()) {
-                    engineLines = final.lines.map { l ->
-                        LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
-                    }.take(targetMultiPv)
-                }
             } catch (e: Exception) {
                 Log.e(TAG, "Error in handleSquareClick", e)
                 variationEval = evalOfPosition(report.positions.getOrNull(currentPlyIndex))
                 variationMoveClass = MoveClass.OKAY
                 variationBestUci = null
             } finally {
-                pvBusy = false
                 isAnalyzing = false
             }
         }
     }
 
     fun onClickPvMove(lineIdx: Int, moveIdx: Int) {
-        val baseFen = if (variationActive)
-            (variationFen ?: report.positions.getOrNull(currentPlyIndex)?.fen)
+        val baseFen = if (variationActive) variationFen
         else report.positions.getOrNull(currentPlyIndex)?.fen
-        val line = engineLines.getOrNull(lineIdx) ?: return
+        val line = displayedLines.getOrNull(lineIdx) ?: return
         val fen0 = baseFen ?: return
         val pv = line.pv
         if (moveIdx !in pv.indices) return
@@ -831,39 +941,38 @@ fun GameReportScreen(
                 variationBestUci = bestMove
                 playMoveSound(moveClass, captured)
 
-                pvBusy = true
+                Log.d(TAG, "✓ PV move analyzed")
 
-                val final = evaluateFenDetailedStreaming(
-                    fen = after,
-                    depth = targetDepth,
-                    multiPv = targetMultiPv,
-                    skillLevel = null
-                ) { linesDto ->
-                    engineLines = linesDto.map { l ->
-                        LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
-                    }.take(targetMultiPv)
-                    Log.d(TAG, "📊 Streaming update in variation: ${linesDto.size} lines")
-                }
-
-                if (final.lines.isNotEmpty()) {
-                    engineLines = final.lines.map { l ->
-                        LineEval(pv = l.pv, cp = l.cp, mate = l.mate, best = l.pv.firstOrNull())
-                    }.take(targetMultiPv)
-                    Log.d(TAG, "✓ Final variation lines: ${engineLines.size}")
-                } else {
-                    Log.w(TAG, "⚠ Final variation lines empty!")
-                }
             } catch (e: Exception) {
                 Log.e(TAG, "Error in onClickPvMove", e)
                 variationEval = evalOfPosition(report.positions.getOrNull(currentPlyIndex))
                 variationMoveClass = MoveClass.OKAY
                 variationBestUci = null
-                engineLines = emptyList()
             } finally {
-                pvBusy = false
                 isAnalyzing = false
             }
         }
+    }
+
+    fun exitVariation() {
+        if (!variationActive) return
+        variationActive = false
+        variationFen = null
+        variationEval = null
+        variationBestUci = null
+        variationMoveClass = null
+        variationLastMove = null
+        selectedSquare = null
+        legalTargets = emptySet()
+
+        // Восстанавливаем линии из отчёта
+        val reportLines = report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList()
+        if (reportLines.isNotEmpty()) {
+            displayedLines = reportLines
+            Log.d(TAG, "✓ Restored ${reportLines.size} lines from report")
+        }
+
+        Log.d(TAG, "✓ Exited variation")
     }
 
     fun seekTo(index: Int) {
@@ -872,6 +981,7 @@ fun GameReportScreen(
         legalTargets = emptySet()
         isAnalyzing = false
         currentPlyIndex = index.coerceIn(0, report.positions.lastIndex)
+
         if (currentPlyIndex > 0) {
             val mv = report.moves.getOrNull(currentPlyIndex - 1)
             playMoveSound(mv?.classification, mv?.san?.contains('x') == true)
@@ -1150,11 +1260,53 @@ fun GameReportScreen(
                 }
             }
 
+            if (variationActive) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFF9800).copy(alpha = 0.2f)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.variation_mode),
+                                color = Color(0xFFFF9800),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                            Text(
+                                text = stringResource(R.string.variation_hint),
+                                color = Color.White.copy(alpha = 0.7f),
+                                fontSize = 12.sp
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        OutlinedButton(
+                            onClick = { if (!isAnalyzing) exitVariation() },
+                            enabled = !isAnalyzing,
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = Color(0xFFFF9800)
+                            )
+                        ) {
+                            Text(stringResource(R.string.exit_variation))
+                        }
+                    }
+                }
+            }
+
             EngineLinesPanel(
-                baseFen = baseFenForPanel ?: report.positions.firstOrNull()?.fen.orEmpty(),
-                lines = engineLines,
+                baseFen = baseFenForPanel,
+                lines = displayedLines,
                 onClickMoveInLine = ::onClickPvMove,
-                isBusy = pvBusy,
+                isBusy = isAnalysisRunning,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 8.dp)
@@ -1175,7 +1327,7 @@ fun GameReportScreen(
                         positionSettings[currentPlyIndex] = Pair(targetDepth, targetMultiPv)
                     }
                 },
-                isBusy = pvBusy,
+                isBusy = isAnalysisRunning,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 8.dp)

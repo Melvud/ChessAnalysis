@@ -1,5 +1,6 @@
 package com.example.chessanalysis.ui.screens
 
+import android.content.Context
 import android.media.MediaPlayer
 import android.net.Uri
 import android.util.Log
@@ -22,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
@@ -45,8 +47,10 @@ import androidx.compose.ui.unit.sp
 import com.example.chessanalysis.EngineClient.analyzeGameByPgnWithProgress
 import com.example.chessanalysis.FullReport
 import com.example.chessanalysis.GameHeader
+import com.example.chessanalysis.LineEval
 import com.example.chessanalysis.MoveClass
 import com.example.chessanalysis.PgnChess
+import com.example.chessanalysis.PositionEval
 import com.example.chessanalysis.Provider
 import com.example.chessanalysis.R
 import com.example.chessanalysis.data.local.gameRepository
@@ -56,6 +60,8 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 
 private const val TAG = "GamesListScreen"
+private const val PREFS_NAME = "games_list_prefs"
+private const val KEY_SHOW_EVAL_BAR = "show_eval_bar"
 
 enum class GameFilter { ALL, LICHESS, CHESSCOM, MANUAL }
 
@@ -74,6 +80,10 @@ fun GamesListScreen(
     val json = remember { Json { ignoreUnknownKeys = true; explicitNulls = false } }
     val repo = remember { context.gameRepository(json) }
 
+    val prefs = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+    var showEvalBar by remember { mutableStateOf(prefs.getBoolean(KEY_SHOW_EVAL_BAR, false)) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
+
     var items by remember { mutableStateOf<List<GameHeader>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
     var analyzedGames by remember { mutableStateOf<Map<String, FullReport>>(emptyMap()) }
@@ -84,6 +94,10 @@ fun GamesListScreen(
     var liveFen by remember { mutableStateOf<String?>(null) }
     var liveUciMove by remember { mutableStateOf<String?>(null) }
     var liveMoveClass by remember { mutableStateOf<String?>(null) }
+    var analysisProgress by remember { mutableStateOf(0f) }
+    var analysisStage by remember { mutableStateOf<String?>(null) }
+    var livePositions by remember { mutableStateOf<List<PositionEval>>(emptyList()) }
+    var currentPlyForEval by remember { mutableStateOf(0) }
 
     var prevFenForSound by remember { mutableStateOf<String?>(null) }
     var lastSoundedUci by remember { mutableStateOf<String?>(null) }
@@ -261,8 +275,15 @@ fun GamesListScreen(
                 liveMoveClass = null
                 prevFenForSound = null
                 lastSoundedUci = null
+                analysisProgress = 0f
+                analysisStage = null
+                livePositions = emptyList()
+                currentPlyForEval = 0
 
                 val header = runCatching { PgnChess.headerFromPgn(fullPgn) }.getOrNull()
+
+                // Создаём изменяемый список для накопления позиций
+                val accumulatedPositions = mutableMapOf<Int, PositionEval>()
 
                 val report = analyzeGameByPgnWithProgress(
                     pgn = fullPgn,
@@ -273,6 +294,10 @@ fun GamesListScreen(
                     val newFen = snap.fen
                     val newUci = snap.currentUci
                     val cls = snap.currentClass?.let { runCatching { MoveClass.valueOf(it) }.getOrNull() }
+
+                    // Обновляем прогресс
+                    analysisProgress = (snap.percent ?: 0.0).toFloat() / 100f
+                    analysisStage = snap.stage
 
                     if (!newUci.isNullOrBlank() && newUci != lastSoundedUci) {
                         val captureNow = isCapture(prevFenForSound, newUci)
@@ -285,7 +310,43 @@ fun GamesListScreen(
                     liveFen = newFen ?: liveFen
                     liveUciMove = newUci ?: liveUciMove
                     liveMoveClass = snap.currentClass ?: liveMoveClass
+
+                    // Обновляем индекс хода для эвал-бара
+                    if (snap.done > 0) {
+                        currentPlyForEval = snap.done - 1
+                    }
+
+                    // КРИТИЧНО: Накапливаем позиции во время стриминга
+                    if (newFen != null && (snap.evalCp != null || snap.evalMate != null)) {
+                        val line = LineEval(
+                            pv = emptyList(),
+                            cp = snap.evalCp,
+                            mate = snap.evalMate,
+                            best = null,
+                            depth = depth,
+                            multiPv = 1
+                        )
+                        val pos = PositionEval(
+                            fen = newFen,
+                            idx = snap.done - 1,
+                            lines = listOf(line)
+                        )
+
+                        // Обновляем или добавляем позицию
+                        accumulatedPositions[pos.idx] = pos
+
+                        // КРИТИЧНО: Обновляем livePositions для отображения эвал-бара
+                        livePositions = accumulatedPositions.values
+                            .sortedBy { it.idx }
+                            .toList()
+
+                        Log.d(TAG, "📊 Streaming: positions=${livePositions.size}, ply=${currentPlyForEval}, cp=${snap.evalCp}, mate=${snap.evalMate}")
+                    }
                 }
+
+                // Финальное обновление позиций из отчёта
+                livePositions = report.positions
+                Log.d(TAG, "✅ Analysis complete, final positions count: ${livePositions.size}")
 
                 repo.saveReport(fullPgn, report)
                 showAnalysis = false
@@ -293,6 +354,7 @@ fun GamesListScreen(
                 onOpenReport(report)
             } catch (t: Throwable) {
                 showAnalysis = false
+                Log.e(TAG, "Analysis error: ${t.message}", t)
                 Toast.makeText(
                     context,
                     context.getString(R.string.analysis_error, t.message ?: ""),
@@ -316,6 +378,12 @@ fun GamesListScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.games_list)) },
                 actions = {
+                    IconButton(onClick = { showSettingsDialog = true }) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = stringResource(R.string.settings)
+                        )
+                    }
                     IconButton(onClick = { showAddDialog = true }) {
                         Icon(
                             Icons.Default.Add,
@@ -329,8 +397,6 @@ fun GamesListScreen(
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             Column(Modifier.fillMaxSize()) {
                 // ФИЛЬТРЫ
-                // Замените секцию ФИЛЬТРЫ на это:
-
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -362,7 +428,7 @@ fun GamesListScreen(
                     )
                     FilterChip(
                         selected = currentFilter == GameFilter.CHESSCOM,
-                        onClick = { currentFilter == GameFilter.CHESSCOM },
+                        onClick = { currentFilter = GameFilter.CHESSCOM },
                         label = {
                             Text(
                                 stringResource(R.string.filter_chesscom),
@@ -469,51 +535,168 @@ fun GamesListScreen(
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.7f)),
+                        .background(Color.Black.copy(alpha = 0.75f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 12.dp),
+                        shape = RoundedCornerShape(20.dp),
                         modifier = Modifier
-                            .padding(32.dp)
-                            .size(280.dp)
+                            .padding(24.dp)
+                            .width(320.dp)
                     ) {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            if (!liveFen.isNullOrBlank()) {
-                                val lastMovePair = if (!liveUciMove.isNullOrBlank() && liveUciMove!!.length >= 4) {
-                                    liveUciMove!!.substring(0, 2) to liveUciMove!!.substring(2, 4)
-                                } else null
+                            // Текст "Идет анализ" - УВЕЛИЧЕН
+                            Text(
+                                text = stringResource(R.string.analyzing),
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 22.sp
+                            )
 
-                                val moveClassEnum = liveMoveClass?.let {
-                                    runCatching { MoveClass.valueOf(it) }.getOrNull()
+                            Spacer(Modifier.height(4.dp))
+
+                            // Процент (если есть)
+                            if (analysisProgress > 0f) {
+                                Text(
+                                    text = "${(analysisProgress * 100).toInt()}%",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+
+                            Spacer(Modifier.height(12.dp))
+
+                            // УЛУЧШЕННЫЙ Прогресс-бар с градиентом
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(10.dp)
+                                    .clip(RoundedCornerShape(5.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .fillMaxWidth(analysisProgress.coerceIn(0f, 1f))
+                                        .clip(RoundedCornerShape(5.dp))
+                                        .background(
+                                            androidx.compose.ui.graphics.Brush.horizontalGradient(
+                                                colors = listOf(
+                                                    Color(0xFF4CAF50),
+                                                    Color(0xFF66BB6A),
+                                                    Color(0xFF81C784)
+                                                )
+                                            )
+                                        )
+                                )
+                            }
+
+                            Spacer(Modifier.height(20.dp))
+
+                            // Доска с опциональным эвал-баром
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // ИСПРАВЛЕНО: Эвал-бар слева (если включен И есть позиции)
+                                if (showEvalBar && livePositions.isNotEmpty()) {
+                                    Log.d(TAG, "Drawing eval bar: positions=${livePositions.size}, ply=$currentPlyForEval")
+                                    MiniEvalBar(
+                                        positions = livePositions,
+                                        currentPlyIndex = currentPlyForEval,
+                                        modifier = Modifier
+                                            .width(14.dp)
+                                            .height(280.dp)
+                                    )
+                                    Spacer(Modifier.width(12.dp))
                                 }
 
-                                BoardCanvas(
-                                    fen = liveFen!!,
-                                    lastMove = lastMovePair,
-                                    moveClass = moveClassEnum,
-                                    bestMoveUci = null,
-                                    showBestArrow = false,
-                                    isWhiteBottom = true,
-                                    selectedSquare = null,
-                                    legalMoves = emptySet(),
-                                    onSquareClick = null,
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .padding(8.dp)
-                                )
-                            } else {
-                                CircularProgressIndicator()
+                                // Мини-доска
+                                Box(
+                                    modifier = Modifier.size(280.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (!liveFen.isNullOrBlank()) {
+                                        val lastMovePair = if (!liveUciMove.isNullOrBlank() && liveUciMove!!.length >= 4) {
+                                            liveUciMove!!.substring(0, 2) to liveUciMove!!.substring(2, 4)
+                                        } else null
+
+                                        val moveClassEnum = liveMoveClass?.let {
+                                            runCatching { MoveClass.valueOf(it) }.getOrNull()
+                                        }
+
+                                        BoardCanvas(
+                                            fen = liveFen!!,
+                                            lastMove = lastMovePair,
+                                            moveClass = moveClassEnum,
+                                            bestMoveUci = null,
+                                            showBestArrow = false,
+                                            isWhiteBottom = true,
+                                            selectedSquare = null,
+                                            legalMoves = emptySet(),
+                                            onSquareClick = null,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    } else {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(48.dp),
+                                            strokeWidth = 4.dp,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    // Диалог настроек
+    if (showSettingsDialog) {
+        AlertDialog(
+            onDismissRequest = { showSettingsDialog = false },
+            title = { Text(stringResource(R.string.settings)) },
+            text = {
+                Column {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = showEvalBar,
+                            onCheckedChange = { checked ->
+                                showEvalBar = checked
+                                prefs.edit().putBoolean(KEY_SHOW_EVAL_BAR, checked).apply()
+                            }
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.show_eval_bar_mini),
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSettingsDialog = false }) {
+                    Text(stringResource(R.string.close))
+                }
+            }
+        )
     }
 
     if (showAddDialog) {
@@ -630,6 +813,76 @@ fun GamesListScreen(
                 ) { Text(stringResource(R.string.reanalyze)) }
                 Spacer(Modifier.height(24.dp))
             }
+        }
+    }
+}
+
+@Composable
+private fun MiniEvalBar(
+    positions: List<PositionEval>,
+    currentPlyIndex: Int,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(0xFF2B2A27))
+    ) {
+        androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+            val height = size.height
+            val width = size.width
+
+            if (positions.isEmpty()) {
+                Log.w(TAG, "MiniEvalBar: no positions!")
+                return@Canvas
+            }
+
+            val safeIndex = currentPlyIndex.coerceIn(0, positions.lastIndex)
+            val pos = positions[safeIndex]
+            val line = pos.lines.firstOrNull()
+
+            val evalCp = when {
+                line?.cp != null -> line.cp.toFloat()
+                line?.mate != null -> if (line.mate!! > 0) 3000f else -3000f
+                else -> 0f
+            }
+
+            val clamped = evalCp.coerceIn(-800f, 800f)
+            val whiteRatio = (clamped + 800f) / 1600f
+
+            val whiteHeight = height * whiteRatio
+            val blackHeight = height - whiteHeight
+
+            // Черная часть (сверху)
+            drawRect(
+                color = Color(0xFF1E1E1E),
+                topLeft = androidx.compose.ui.geometry.Offset(0f, 0f),
+                size = androidx.compose.ui.geometry.Size(width, blackHeight)
+            )
+
+            // Белая часть (снизу)
+            drawRect(
+                color = Color(0xFFF5F5F5),
+                topLeft = androidx.compose.ui.geometry.Offset(0f, blackHeight),
+                size = androidx.compose.ui.geometry.Size(width, whiteHeight)
+            )
+
+            // Тонкая линия посередине (граница)
+            drawLine(
+                color = Color(0xFF666666),
+                start = androidx.compose.ui.geometry.Offset(0f, height / 2f),
+                end = androidx.compose.ui.geometry.Offset(width, height / 2f),
+                strokeWidth = 1.5.dp.toPx()
+            )
+
+            // Линия текущей оценки
+            val currentY = height - whiteHeight
+            drawLine(
+                color = if (evalCp > 0) Color(0xFF4CAF50) else Color(0xFFF44336),
+                start = androidx.compose.ui.geometry.Offset(0f, currentY),
+                end = androidx.compose.ui.geometry.Offset(width, currentY),
+                strokeWidth = 2.dp.toPx()
+            )
         }
     }
 }

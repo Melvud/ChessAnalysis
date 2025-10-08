@@ -1,7 +1,6 @@
 package com.example.chessanalysis.analysis
 
 import com.example.chessanalysis.*
-import com.example.chessanalysis.analysis.*
 import kotlinx.coroutines.*
 import java.util.UUID
 import android.util.Log
@@ -43,7 +42,7 @@ class LocalGameAnalyzer(
         val startFen = parsed.firstOrNull()?.beforeFen
             ?: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
-        notify(progressId, 0, total, "preparing", startedAt, onProgress, null, null, null, null, null)
+        notify(progressId, 0, total, "preparing", startedAt, onProgress, null, null, null, null, null, null, null)
 
         // 1) Evaluate all positions (including start)
         val positions = mutableListOf<EngineClient.PositionDTO>()
@@ -52,7 +51,7 @@ class LocalGameAnalyzer(
         val pos0 = EngineClient.evaluateFenDetailed(startFen, depth, multiPv, null)
         positions.add(pos0)
 
-        notify(progressId, 0, total, "evaluating", startedAt, onProgress, null, null, null, null, null)
+        notify(progressId, 0, total, "evaluating", startedAt, onProgress, null, null, null, null, null, null, null)
 
         // Evaluate each move's resulting position
         for (i in 0 until total) {
@@ -65,7 +64,27 @@ class LocalGameAnalyzer(
             val posAfter = EngineClient.evaluateFenDetailed(afterFen, depth, multiPv, null)
             positions.add(posAfter)
 
-            // ИСПОЛЬЗУЕМ MoveClassification для получения правильной классификации
+            // Определяем, чей ход в позиции ПОСЛЕ
+            val whiteToPlayAfter = afterFen.split(" ").getOrNull(1) == "w"
+            val topLine = posAfter.lines.firstOrNull()
+
+            // КРИТИЧНО: Инвертируем ВСЁ для чёрных (и CP, и mate)
+            // Stockfish всегда даёт оценку с точки зрения стороны, которая ходит
+            // Мы нормализуем всё к точке зрения белых
+            val evalCp = if (!whiteToPlayAfter && topLine?.cp != null) {
+                -topLine.cp
+            } else {
+                topLine?.cp
+            }
+
+            val evalMate = if (!whiteToPlayAfter && topLine?.mate != null) {
+                -topLine.mate  // ИНВЕРТИРУЕМ МАТ для чёрных!
+            } else {
+                topLine?.mate
+            }
+
+            Log.d(TAG, "Position after move $i: whiteToPlay=$whiteToPlayAfter, cp=${topLine?.cp}, mate=${topLine?.mate} -> evalCp=$evalCp, evalMate=$evalMate")
+
             val cls = classifyMoveUsingMoveClassifier(
                 beforeFen = beforeFen,
                 afterFen = afterFen,
@@ -74,7 +93,6 @@ class LocalGameAnalyzer(
                 uciMove = uci
             )
 
-            // Обновляем прогресс + живые поля для доски
             val doneNow = i + 1
             val elapsed = System.currentTimeMillis() - startedAt
             val eta = if (doneNow > 0) {
@@ -93,13 +111,15 @@ class LocalGameAnalyzer(
                 fen = afterFen,
                 san = san,
                 cls = cls.name,
-                uci = uci
+                uci = uci,
+                evalCp = evalCp,
+                evalMate = evalMate
             )
         }
 
-        notify(progressId, total, total, "postprocess", startedAt, onProgress, 0L, null, null, null, null)
+        notify(progressId, total, total, "postprocess", startedAt, onProgress, 0L, null, null, null, null, null, null)
 
-        // 2) Build PositionEval list with PROPER CP/MATE INVERSION
+        // 2) Build PositionEval list с ПРАВИЛЬНОЙ инверсией
         val fens = listOf(startFen) + parsed.map { it.afterFen }
         val uciMoves = parsed.map { it.uci }
 
@@ -108,6 +128,7 @@ class LocalGameAnalyzer(
             val whiteToPlay = currentFen.split(" ").getOrNull(1) == "w"
 
             val linesEval = pos.lines.map { line ->
+                // ИНВЕРТИРУЕМ ВСЁ для чёрных
                 val invertedCp = if (!whiteToPlay && line.cp != null) -line.cp else line.cp
                 val invertedMate = if (!whiteToPlay && line.mate != null) -line.mate else line.mate
 
@@ -130,8 +151,8 @@ class LocalGameAnalyzer(
             )
         }
 
-        // 3) ACPL calculation
-        val acpl = ACPL.calculateACPL(positions)
+        // 3) ACPL calculation — ИСПОЛЬЗУЕМ НОРМАЛИЗОВАННЫЕ PositionEval
+        val acpl = ACPL.calculateACPLFromPositionEvals(positionEvals)
 
         // 4) Win percentages
         val winPercents = positionEvals.map { pos ->
@@ -153,7 +174,7 @@ class LocalGameAnalyzer(
         val whiteAcc = computePlayerAccuracy(movesAccuracy, weightsAcc, "white")
         val blackAcc = computePlayerAccuracy(movesAccuracy, weightsAcc, "black")
 
-        // 8) Move classification - ИСПОЛЬЗУЕМ ПОЛНЫЙ MoveClassification
+        // 8) Move classification
         val classifiedPositions = MoveClassification.getMovesClassification(
             positionEvals,
             uciMoves,
@@ -175,7 +196,7 @@ class LocalGameAnalyzer(
         val hdr = header ?: tagsHeader
         val est = EstimateElo.computeEstimatedElo(positionEvals, hdr.whiteElo, hdr.blackElo)
 
-        notify(progressId, total, total, "done", startedAt, onProgress, 0L, null, null, null, null)
+        notify(progressId, total, total, "done", startedAt, onProgress, 0L, null, null, null, null, null, null)
 
         FullReport(
             header = hdr,
@@ -205,6 +226,8 @@ class LocalGameAnalyzer(
         val whiteToPlayAfter = afterFen.split(" ").getOrNull(1) == "w"
 
         val topLine = posAfter.lines.firstOrNull()
+
+        // ИНВЕРТИРУЕМ ВСЁ для чёрных
         val cpAfter = if (!whiteToPlayAfter && topLine?.cp != null) -topLine.cp else topLine?.cp
         val mateAfter = if (!whiteToPlayAfter && topLine?.mate != null) -topLine.mate else topLine?.mate
 
@@ -219,7 +242,7 @@ class LocalGameAnalyzer(
                 EngineClient.LineDTO(
                     pv = line.pv,
                     cp = line.cp?.let { -it },
-                    mate = line.mate?.let { -it },
+                    mate = line.mate?.let { -it },  // ИНВЕРТИРУЕМ МАТ
                     depth = line.depth,
                     multiPv = line.multiPv
                 )
@@ -252,7 +275,6 @@ class LocalGameAnalyzer(
             bestMove = null
         )
 
-        // ИСПОЛЬЗУЕМ MoveClassification
         val classified = MoveClassification.getMovesClassification(
             listOf(posEvalBefore, posEvalAfter),
             listOf(uciMove),
@@ -269,7 +291,6 @@ class LocalGameAnalyzer(
         )
     }
 
-    // НОВАЯ функция: использует MoveClassification для получения правильной классификации
     private fun classifyMoveUsingMoveClassifier(
         beforeFen: String,
         afterFen: String,
@@ -277,8 +298,7 @@ class LocalGameAnalyzer(
         posAfter: EngineClient.PositionDTO,
         uciMove: String
     ): MoveClass {
-        try {
-            // Создаём PositionEval с правильной инвертацией
+        return try {
             val whiteToPlayBefore = beforeFen.split(" ").getOrNull(1) == "w"
             val whiteToPlayAfter = afterFen.split(" ").getOrNull(1) == "w"
 
@@ -316,17 +336,16 @@ class LocalGameAnalyzer(
                 bestMove = null
             )
 
-            // ИСПОЛЬЗУЕМ полный MoveClassification
             val classified = MoveClassification.getMovesClassification(
                 listOf(posEvalBefore, posEvalAfter),
                 listOf(uciMove),
                 listOf(beforeFen, afterFen)
             )
 
-            return classified.getOrNull(1)?.moveClassification ?: MoveClass.OKAY
+            classified.getOrNull(1)?.moveClassification ?: MoveClass.OKAY
         } catch (e: Exception) {
             Log.e(TAG, "Error classifying move: ${e.message}", e)
-            return MoveClass.OKAY
+            MoveClass.OKAY
         }
     }
 
@@ -341,7 +360,9 @@ class LocalGameAnalyzer(
         fen: String? = null,
         san: String? = null,
         cls: String? = null,
-        uci: String? = null
+        uci: String? = null,
+        evalCp: Int? = null,
+        evalMate: Int? = null
     ) {
         val percent = if (total > 0) done.toDouble() * 100.0 / total else null
         val snap = EngineClient.ProgressSnapshot(
@@ -356,14 +377,15 @@ class LocalGameAnalyzer(
             fen = fen,
             currentSan = san,
             currentClass = cls,
-            currentUci = uci
+            currentUci = uci,
+            evalCp = evalCp,
+            evalMate = evalMate
         )
         onProgress(snap)
         progressHook(id, percent, stage)
         delay(1)
     }
 
-    // Helpers from server logic
     private fun getAccuracyWeights(winPercents: List<Double>): List<Double> {
         val windowSize = MathUtils.ceilsNumber(
             kotlin.math.ceil(winPercents.size / 10.0),

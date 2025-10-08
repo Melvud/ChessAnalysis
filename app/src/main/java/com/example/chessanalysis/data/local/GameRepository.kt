@@ -68,8 +68,13 @@ class GameRepository(
     suspend fun mergeExternal(provider: Provider, incoming: List<GameHeader>): Int {
         Log.d(TAG, "mergeExternal: provider=$provider, incoming size=${incoming.size}")
 
+        // СОРТИРУЕМ ВХОДЯЩИЕ ИГРЫ ОТ НОВЫХ К СТАРЫМ
+        val sortedIncoming = incoming.sortedByDescending { gh ->
+            parseGameTimestamp(gh.pgn ?: "", gh.date)
+        }
+
         var added = 0
-        for (gh in incoming) {
+        for (gh in sortedIncoming) {
             val key = headerKeyFor(provider, gh)
             Log.d(TAG, "Processing game: ${gh.white} vs ${gh.black}, key=$key")
 
@@ -186,13 +191,11 @@ class GameRepository(
     fun pgnHash(pgn: String): String = sha256Hex(pgn)
 
     fun headerKeyFor(provider: Provider, gh: GameHeader): String {
-        // ИСПРАВЛЕНО: приоритет внешним ID
         val extId = gh.pgn?.let { extractExternalIdFromPgn(it) }
 
         val raw = if (!extId.isNullOrBlank()) {
             "${provider.name}|id:$extId"
         } else {
-            // ИСПРАВЛЕНО: используем более стабильные поля
             buildString {
                 append(provider.name).append('|')
                 append(gh.date ?: "").append('|')
@@ -214,34 +217,17 @@ class GameRepository(
     }
 
     private fun extractExternalIdFromPgn(pgn: String): String? {
-        // lichess: ...lichess.org/abcdefgh
         Regex("""\[(?:Site|Link)\s+"[^"]*lichess\.org/([a-zA-Z0-9]{8})""")
             .find(pgn)?.groupValues?.getOrNull(1)?.let { return it }
 
-        // chess.com: ...chess.com/game/live/1234567890 или game/daily/123...
         Regex("""\[(?:Site|Link)\s+"https?://(?:www\.)?chess\.com/game/(?:live|daily)/(\d+)""")
             .find(pgn)?.groupValues?.getOrNull(1)?.let { return it }
 
-        // Иногда бывает отдельный тег GameId
         Regex("""\[GameId\s+"([^"]+)"]""")
             .find(pgn)?.groupValues?.getOrNull(1)?.let { return it }
 
         return null
     }
-
-    private fun movesFingerprint(pgn: String?): String {
-        if (pgn.isNullOrBlank()) return ""
-        val body = pgn
-            .lines()
-            .filterNot { it.trimStart().startsWith('[') }
-            .joinToString("\n")
-            .replace(Regex("""\s+(1-0|0-1|1/2-1/2|\*)\s*$"""), "")
-            .trim()
-        val normalized = body.replace(Regex("""\s+"""), " ")
-        return sha256Hex(normalized)
-    }
-
-    // --------------- Вспомогательное: время партии ----------------
 
     private fun parseGameTimestamp(pgn: String, dateIso: String?): Long {
         try {
@@ -287,6 +273,5 @@ class GameRepository(
     }
 }
 
-// Удобный экстеншен
 fun Context.gameRepository(json: Json): GameRepository =
     GameRepository(AppDatabase.getInstance(this), json)

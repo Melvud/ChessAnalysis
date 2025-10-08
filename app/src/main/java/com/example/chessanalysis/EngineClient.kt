@@ -185,7 +185,9 @@ object EngineClient {
         val fen: String? = null,
         val currentSan: String? = null,
         val currentClass: String? = null,
-        val currentUci: String? = null
+        val currentUci: String? = null,
+        val evalCp: Int? = null,
+        val evalMate: Int? = null
     )
 
     @Serializable
