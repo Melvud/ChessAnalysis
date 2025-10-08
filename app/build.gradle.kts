@@ -6,20 +6,20 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
     id("com.google.gms.google-services")
-    id("org.jetbrains.kotlin.kapt")
+    id("com.google.devtools.ksp")
     id ("kotlin-parcelize")
 }
 
 android {
-    namespace = "com.example.chessanalysis"
+    namespace = "com.github.movesense"
     compileSdk = 36
     ndkVersion = "27.0.12077973"
     defaultConfig {
-        applicationId = "com.example.chessanalysis"
+        applicationId = "com.github.movesense"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.0.1"
     }
     fun AndroidResources.() {
         @Suppress("DEPRECATION")
@@ -27,12 +27,32 @@ android {
     }
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true  // Можно оставить true, но нужны правила
+            isShrinkResources = false  // ВАЖНО: отключите сжатие ресурсов
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
         }
+    }
+    packaging {
+        resources {
+            // Не сжимать эти файлы
+            excludes += listOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/NOTICE"
+            )
+        }
+
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
+
+    // ВАЖНО: не сжимать WASM и NNUE
+    androidResources {
+        noCompress += listOf("wasm", "nnue", "json", "js", "html")
     }
 
     buildFeatures {
@@ -118,10 +138,10 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
 
-    // Room — обновлено до 2.8.1 (совместим с метаданными Kotlin 2.1.*)
+
     implementation("androidx.room:room-runtime:2.8.1")
     implementation("androidx.room:room-ktx:2.8.1")
-    kapt("androidx.room:room-compiler:2.8.1")
+    ksp("androidx.room:room-compiler:2.8.1")
 
     // Vico charts (Compose + Material3) — графики
     implementation("com.patrykandpatrick.vico:compose:2.0.3")

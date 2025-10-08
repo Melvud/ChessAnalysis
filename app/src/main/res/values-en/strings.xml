@@ -1,0 +1,172 @@
+<resources>
+    <string name="app_name">MoveSense</string>
+
+    <!-- Common -->
+    <string name="ok">OK</string>
+    <string name="cancel">Cancel</string>
+    <string name="save">Save</string>
+    <string name="back">Back</string>
+    <string name="delete">Delete</string>
+    <string name="close">Close</string>
+    <string name="loading">Loading…</string>
+    <string name="error">Error</string>
+
+    <!-- Login Screen -->
+    <string name="welcome">Welcome</string>
+    <string name="login_title">Login to MoveSense</string>
+    <string name="email">Email</string>
+    <string name="password">Password</string>
+    <string name="login">Login</string>
+    <string name="register">Register</string>
+    <string name="no_account">No account?</string>
+    <string name="have_account">Already have an account?</string>
+    <string name="login_error">Login error: %s</string>
+    <string name="register_error">Registration error: %s</string>
+
+    <!-- Profile Screen -->
+    <string name="profile">Profile</string>
+    <string name="nickname">Nickname</string>
+    <string name="lichess_username">Lichess username</string>
+    <string name="chesscom_username">Chess.com username</string>
+    <string name="language">Language</string>
+    <string name="logout">Logout</string>
+    <string name="save_profile">Save Profile</string>
+    <string name="profile_updated">Profile updated</string>
+
+    <!-- Games List Screen -->
+    <string name="games_list">Games List</string>
+    <string name="add_game">Add Game</string>
+    <string name="no_games">No games found</string>
+    <string name="filter_all">All (%d)</string>
+    <string name="filter_lichess">Lichess</string>
+    <string name="filter_chesscom">Chess.com</string>
+    <string name="filter_manual">Uploaded</string>
+    <string name="syncing">Syncing…</string>
+    <string name="games_added">New games added: %d</string>
+    <string name="sync_error">Sync error: %s</string>
+    <string name="analyzed">Analysis</string>
+
+    <!-- Add Game Dialog -->
+    <string name="add_game_title">Add Game</string>
+    <string name="paste_pgn_hint">Paste full PGN or select a .pgn file</string>
+    <string name="select_file">Select .pgn file</string>
+    <string name="game_added">Game added</string>
+    <string name="empty_pgn">PGN is empty</string>
+    <string name="add_error">Error: %s</string>
+
+    <!-- Game Report Screen -->
+    <string name="game_analysis">Game Analysis</string>
+    <string name="flip_board">Flip</string>
+    <string name="to_start">To start</string>
+    <string name="previous">Previous</string>
+    <string name="play">Play</string>
+    <string name="pause">Pause</string>
+    <string name="next">Next</string>
+    <string name="to_end">To end</string>
+
+    <!-- Analysis Settings -->
+    <string name="analysis_settings">Analysis Settings</string>
+    <string name="depth">Depth: %d</string>
+    <string name="multipv">Lines (MultiPV): %d</string>
+    <string name="settings_note">💡 Settings are saved for each position separately</string>
+
+    <!-- Engine Lines Panel -->
+    <string name="engine_lines">Computer Lines</string>
+    <string name="calculating">Calculating lines…</string>
+    <string name="no_lines">No available lines for this position</string>
+
+    <!-- Report Screen -->
+    <string name="game_report">Game Report</string>
+    <string name="performance_evaluation">Performance Evaluation</string>
+    <string name="view_report">View Report</string>
+    <string name="return_back">Return</string>
+
+    <!-- Move Classifications -->
+    <string name="move_splendid">Brilliant!!</string>
+    <string name="move_perfect">Great!</string>
+    <string name="move_best">Best</string>
+    <string name="move_excellent">Excellent</string>
+    <string name="move_okay">Good</string>
+    <string name="move_opening">Book</string>
+    <string name="move_inaccuracy">Inaccuracy</string>
+    <string name="move_mistake">Mistake</string>
+    <string name="move_forced">Forced</string>
+    <string name="move_blunder">Blunder</string>
+
+    <!-- Time Control -->
+    <string name="bullet">bullet</string>
+    <string name="blitz">blitz</string>
+    <string name="rapid">rapid</string>
+    <string name="classical">classical</string>
+
+    <!-- Player Info -->
+    <string name="white">White</string>
+    <string name="black">Black</string>
+    <string name="rating">(%d)</string>
+
+    <!-- Navigation -->
+    <string name="nav_games">Games</string>
+    <string name="nav_profile">Profile</string>
+
+    <!-- Re-analyze -->
+    <string name="reanalyze">Re-analyze</string>
+    <string name="reanalyze_title">Re-analyze</string>
+
+    <!-- Language Names -->
+    <string name="lang_russian">Русский</string>
+    <string name="lang_english">English</string>
+    <string name="lang_spanish">Español</string>
+
+    <!-- Missing strings for English -->
+
+    <!-- GameReportScreen -->
+    <string name="depth_label">Depth</string>
+    <string name="multipv_label">Lines (MultiPV)</string>
+
+    <!-- GamesListScreen -->
+    <string name="analysis_error">Analysis error: %s</string>
+    <string name="pgn_not_found">PGN not found</string>
+
+    <!-- LoginScreen -->
+    <string name="show_password">Show password</string>
+    <string name="hide_password">Hide password</string>
+    <string name="profile_load_error">Profile loading error</string>
+    <string name="profile_save_error">Profile save error</string>
+
+    <!-- ProfileScreen -->
+    <string name="engine_mode">Engine Mode</string>
+    <string name="engine_server">Server</string>
+    <string name="engine_server_desc">Fast analysis on server</string>
+    <string name="engine_local">Local</string>
+    <string name="engine_local_desc">Analysis on device</string>
+    <string name="switch_error">Switch error: %s</string>
+    <string name="empty_fields_error">Email and name must not be empty</string>
+    <string name="user_not_found_error">Unable to identify user</string>
+    <string name="save_error">Save error: %s</string>
+    <string name="saving">Saving…</string>
+    <string name="unknown">unknown</string>
+
+    <!-- ReportScreen -->
+    <string name="move_classification">Move Classification</string>
+
+    <string name="analyzing">Analyzing</string>
+    <string name="show_eval_bar_mini">Show eval bar on mini board</string>
+    <string name="settings">Settings</string>
+
+    <string name="variation_mode">Variation mode</string>
+    <string name="variation_hint">You are in variation. Tap "Exit" to return</string>
+    <string name="exit_variation">Exit</string>
+
+    <!-- Game termination types -->
+    <string name="checkmate">♔ Checkmate</string>
+    <string name="checkmate_by">♔ Checkmate by %1$s</string>
+    <string name="timeout">⏱ Time out</string>
+    <string name="timeout_lost">⏱ Time out: %1$s</string>
+    <string name="resigned">🏳 Resigned: %1$s</string>
+    <string name="resignation">🏳 Resignation</string>
+    <string name="stalemate">= Stalemate</string>
+    <string name="draw">= Draw</string>
+    <string name="insufficient_material">= Insufficient material</string>
+    <string name="threefold_repetition">= Threefold repetition</string>
+    <string name="fifty_move_rule">= 50-move rule</string>
+</resources>

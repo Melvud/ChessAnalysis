@@ -1,21 +1,41 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# Сохраняем все классы с @JavascriptInterface
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Сохраняем EngineWebView и его JavascriptInterface
+-keep class com.github.movesense.engine.EngineWebView { *; }
+-keep class com.github.movesense.engine.EngineWebView$* { *; }
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# Kotlinx Serialization
+-keepattributes *Annotation*, InnerClasses
+-dontnote kotlinx.serialization.**
+-keep,includedescriptorclasses class com.github.movesense.**$$serializer { *; }
+-keepclassmembers class com.github.movesense.** {
+    *** Companion;
+}
+-keepclasseswithmembers class com.github.movesense.** {
+    kotlinx.serialization.KSerializer serializer(...);
+}
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Firebase
+-keep class com.google.firebase.** { *; }
+-keep class com.google.android.gms.** { *; }
+
+# OkHttp/Retrofit
+-dontwarn okhttp3.**
+-dontwarn retrofit2.**
+-keep class retrofit2.** { *; }
+
+# Chesslib
+-keep class com.github.bhlangonijr.chesslib.** { *; }
+
+# Room
+-keep class * extends androidx.room.RoomDatabase
+-keep @androidx.room.Entity class *
+-dontwarn androidx.room.paging.**
+
+# WebView debugging (если нужен remote debugging)
+-keepclassmembers class * extends android.webkit.WebView {
+   public *;
+}
