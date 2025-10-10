@@ -167,4 +167,16 @@
     <string name="insufficient_material">= Недостаточно материала</string>
     <string name="threefold_repetition">= Троекратное повторение</string>
     <string name="fifty_move_rule">= Правило 50 ходов</string>
+
+    <!-- Добавьте эти строки -->
+    <string name="engine_native">Нативный Stockfish</string>
+    <string name="engine_native_desc">Максимальная производительность</string>
+    <string name="install_native_engine">Установить нативный движок</string>
+    <string name="uninstall_native_engine">Удалить нативный движок</string>
+    <string name="engine_installed">Движок установлен</string>
+    <string name="downloading">Скачивание…</string>
+    <string name="installing">Установка…</string>
+    <string name="install_complete">Установка завершена</string>
+    <string name="install_failed">Ошибка установки</string>
+    <string name="saved">Сохранить</string>
 </resources>
