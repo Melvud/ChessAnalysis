@@ -1,53 +1,98 @@
 package com.github.movesense.engine
 
-/**
- * Тонкая JNI-обёртка над knightvision-stockfish (lib "stockfish").
- * Методы и сигнатуры соответствуют их uci_wrapper.cpp.
- *
- * Библиотека "stockfish" должна собираться через CMake (как у Knightvision)
- * и располагаться в APK (jniLibs) для нужных ABI.
- */
 object StockfishBridge {
 
-    init {
-        // Имя lib — ровно "stockfish" (как в CMake add_library(stockfish SHARED ...))
-        System.loadLibrary("stockfish")
-    }
+    init { System.loadLibrary("stockfish") }
 
-    /** Указатель на инстанс движка в нативной части. */
+    @Volatile
     private var enginePtr: Long = 0L
 
-    // --- Native API (из uci_wrapper.cpp) ---
+    private val initLock = Any()
+
+    // ==== ОРИГИНАЛЬНЫЕ МЕТОДЫ (для обратной совместимости) ====
+
     private external fun initEngine(): Long
     private external fun runCmd(ptr: Long, cmd: String): String
-    private external fun goBlocking(ptr: Long, depth: Int): String
-    external fun validFen(fen: String): Boolean
+    private external fun goAsync(ptr: Long, depth: Int)
+    private external fun stopSearch(ptr: Long)
+    private external fun destroyEngine(ptr: Long)
+    private external fun readOutputNative(): String
 
-    /**
-     * Инициализация движка (одноразовая); опционально задаём путь к NNUE.
-     * Вызывает UCI и подготавливает инстанс.
-     */
-    @Synchronized
-    fun ensureStarted(evalFilePath: String? = null) {
-        if (enginePtr == 0L) {
-            enginePtr = initEngine()
-            // UCI-инициализация
-            runCmd(enginePtr, "uci")
-        }
-        if (!evalFilePath.isNullOrBlank()) {
-            runCmd(enginePtr, "setoption name EvalFile value $evalFilePath")
+    fun ensureStarted() {
+        if (enginePtr != 0L) return
+        synchronized(initLock) {
+            if (enginePtr != 0L) return
+            val p = initEngine()
+            require(p != 0L) { "Failed to init Stockfish" }
+            enginePtr = p
+            runCmd(p, "uci")
+            runCmd(p, "isready")
         }
     }
 
-    /** Отправить произвольную UCI-команду и получить полный вывод. */
     fun send(cmd: String): String {
-        check(enginePtr != 0L) { "StockfishBridge not initialized. Call ensureStarted() first." }
-        return runCmd(enginePtr, cmd)
+        val p = enginePtr
+        require(p != 0L) { "Engine not initialized" }
+        return runCmd(p, cmd)
     }
 
-    /** Выполнить поиск до depth и вернуть весь консольный вывод (info/bestmove). */
-    fun go(depth: Int): String {
-        check(enginePtr != 0L) { "StockfishBridge not initialized. Call ensureStarted() first." }
-        return goBlocking(enginePtr, depth)
+    fun go(depth: Int) {
+        val p = enginePtr
+        require(p != 0L) { "Engine not initialized" }
+        goAsync(p, depth)
+    }
+
+    fun stop() {
+        val p = enginePtr
+        if (p != 0L) stopSearch(p)
+    }
+
+    fun shutdown() {
+        synchronized(initLock) {
+            val p = enginePtr
+            if (p != 0L) {
+                runCatching { stopSearch(p); runCmd(p, "isready") }
+                runCatching { destroyEngine(p) }
+                enginePtr = 0L
+            }
+        }
+    }
+
+    fun readOutput(): String = readOutputNative()
+
+    // ==== НОВЫЕ МЕТОДЫ ДЛЯ ПУЛА ====
+
+    fun initEngineInstance(): Long {
+        val ptr = initEngine()
+        require(ptr != 0L) { "Failed to init engine instance" }
+        return ptr
+    }
+
+    fun sendToInstance(ptr: Long, cmd: String): String {
+        require(ptr != 0L) { "Invalid engine instance" }
+        return runCmd(ptr, cmd)
+    }
+
+    fun goAsyncInstance(ptr: Long, depth: Int) {
+        require(ptr != 0L) { "Invalid engine instance" }
+        goAsync(ptr, depth)
+    }
+
+    fun stopSearchInstance(ptr: Long) {
+        if (ptr != 0L) stopSearch(ptr)
+    }
+
+    fun destroyEngineInstance(ptr: Long) {
+        if (ptr != 0L) {
+            runCatching { stopSearch(ptr); runCmd(ptr, "isready") }
+            runCatching { destroyEngine(ptr) }
+        }
+    }
+
+    fun readOutputFromInstance(ptr: Long): String {
+        // Каждый экземпляр имеет свой буфер вывода
+        // Но в текущей реализации uci_wrapper.cpp у нас один глобальный буфер
+        // Нужно переписать под множественные экземпляры
+        return readOutputNative()
     }
 }

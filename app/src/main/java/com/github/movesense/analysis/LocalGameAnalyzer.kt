@@ -9,6 +9,12 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
 class LocalGameAnalyzer(
     private val progressHook: (id: String, percent: Double?, stage: String?) -> Unit = { _, _, _ -> }
@@ -16,6 +22,215 @@ class LocalGameAnalyzer(
 
     companion object {
         private const val TAG = "LocalGameAnalyzer"
+
+        // Кеш для FEN оценок
+        private val fenCache = ConcurrentHashMap<String, CachedPosition>()
+        private const val MAX_CACHE_SIZE = 5000
+
+        // HTTP клиент для Lichess API
+        private val lichessClient = OkHttpClient.Builder()
+            .connectTimeout(3, TimeUnit.SECONDS)
+            .readTimeout(5, TimeUnit.SECONDS)
+            .build()
+
+        private val json = Json {
+            ignoreUnknownKeys = true
+            explicitNulls = false
+            coerceInputValues = true
+        }
+    }
+
+    private data class CachedPosition(
+        val position: EngineClient.PositionDTO,
+        val timestamp: Long = System.currentTimeMillis()
+    )
+
+    @Serializable
+    data class LichessCloudEval(
+        val fen: String? = null,
+        val knodes: Int? = null,
+        val depth: Int? = null,
+        val pvs: List<LichessPv>? = null
+    )
+
+    @Serializable
+    data class LichessPv(
+        val moves: String? = null,
+        val cp: Int? = null,
+        val mate: Int? = null
+    )
+
+    // Проверка, является ли позиция терминальной (мат/пат)
+    private fun isTerminalPosition(fen: String): Boolean {
+        return try {
+            // Используем PgnChess для проверки
+            val legalMoves = PgnChess.getLegalMoves(fen)
+            legalMoves.isEmpty()
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    // Создать пустую оценку для терминальной позиции
+    private fun createTerminalPositionEval(fen: String): EngineClient.PositionDTO {
+        // Для мата/пата возвращаем mate 0
+        val lines = listOf(
+            EngineClient.LineDTO(
+                pv = emptyList(),
+                cp = null,
+                mate = 0,
+                depth = 0,
+                multiPv = 1
+            )
+        )
+        return EngineClient.PositionDTO(lines, null)
+    }
+
+    // Адаптивная глубина в зависимости от стадии партии
+    private fun adaptiveDepth(moveNumber: Int, totalMoves: Int, baseDepth: Int): Int {
+        return when {
+            moveNumber < 10 -> (baseDepth - 4).coerceAtLeast(10)  // Дебют: быстрее
+            moveNumber > totalMoves - 10 -> (baseDepth - 2).coerceAtLeast(12)  // Эндшпиль: средне
+            else -> baseDepth  // Миттельшпиль: полная глубина
+        }
+    }
+
+    // Получить кеш-ключ
+    private fun getCacheKey(fen: String, depth: Int): String = "$fen|$depth"
+
+    // Очистка старого кеша
+    private fun cleanupCache() {
+        if (fenCache.size > MAX_CACHE_SIZE) {
+            val now = System.currentTimeMillis()
+            val toRemove = fenCache.entries
+                .filter { now - it.value.timestamp > 3600_000 } // Старше 1 часа
+                .take(MAX_CACHE_SIZE / 2)
+                .map { it.key }
+            toRemove.forEach { fenCache.remove(it) }
+            Log.d(TAG, "🧹 Cache cleaned: removed ${toRemove.size} old entries")
+        }
+    }
+
+    // Попытка получить оценку из Lichess Cloud
+    private suspend fun tryLichessCloudEval(fen: String, multiPv: Int): EngineClient.PositionDTO? = withContext(Dispatchers.IO) {
+        return@withContext try {
+            val encodedFen = java.net.URLEncoder.encode(fen, "UTF-8")
+            val url = "https://lichess.org/api/cloud-eval?fen=$encodedFen&multiPv=$multiPv"
+
+            val request = Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                .get()
+                .build()
+
+            val response = lichessClient.newCall(request).execute()
+
+            if (!response.isSuccessful) {
+                Log.d(TAG, "Lichess API returned ${response.code}")
+                return@withContext null
+            }
+
+            val body = response.body?.string() ?: return@withContext null
+
+            val cloudEval = json.decodeFromString<LichessCloudEval>(body)
+
+            if (cloudEval.pvs.isNullOrEmpty()) {
+                Log.d(TAG, "Lichess: no cloud eval for this position")
+                return@withContext null
+            }
+
+            // Конвертируем Lichess формат в наш PositionDTO
+            val lines = cloudEval.pvs.mapIndexed { idx, pv ->
+                val moves = pv.moves?.trim()?.split(" ") ?: emptyList()
+                EngineClient.LineDTO(
+                    pv = moves,
+                    cp = pv.cp,
+                    mate = pv.mate,
+                    depth = cloudEval.depth,
+                    multiPv = idx + 1
+                )
+            }
+
+            val bestMove = lines.firstOrNull()?.pv?.firstOrNull()
+
+            Log.i(TAG, "✅ Lichess cloud eval: depth=${cloudEval.depth}, knodes=${cloudEval.knodes}")
+
+            EngineClient.PositionDTO(lines, bestMove)
+
+        } catch (e: Exception) {
+            Log.d(TAG, "Lichess API error: ${e.message}")
+            null
+        }
+    }
+
+    // ПАКЕТНАЯ загрузка из Lichess Cloud - параллельно!
+    private suspend fun batchLoadLichessEvals(
+        fens: List<String>,
+        multiPv: Int
+    ): Map<String, EngineClient.PositionDTO> = coroutineScope {
+        Log.i(TAG, "🌐 Batch loading ${fens.size} positions from Lichess Cloud...")
+
+        val results = fens.map { fen ->
+            async(Dispatchers.IO) {
+                delay((0..100).random().toLong()) // Небольшая рандомизация для rate limit
+                fen to tryLichessCloudEval(fen, multiPv)
+            }
+        }.awaitAll()
+
+        val successCount = results.count { it.second != null }
+        Log.i(TAG, "✅ Lichess: loaded $successCount/${fens.size} positions from cloud")
+
+        results.mapNotNull { (fen, result) ->
+            result?.let { fen to it }
+        }.toMap()
+    }
+
+    // Умная оценка позиции: сначала кеш, потом Lichess, потом локально
+    private suspend fun evaluatePositionSmart(
+        fen: String,
+        depth: Int,
+        multiPv: Int,
+        skillLevel: Int?,
+        lichessPreloaded: Map<String, EngineClient.PositionDTO> = emptyMap()
+    ): EngineClient.PositionDTO {
+        // 0. Проверяем, не является ли позиция терминальной
+        if (isTerminalPosition(fen)) {
+            Log.i(TAG, "🏁 Terminal position detected (mate/stalemate), skipping analysis")
+            return createTerminalPositionEval(fen)
+        }
+
+        // 1. Проверяем кеш
+        val cacheKey = getCacheKey(fen, depth)
+        fenCache[cacheKey]?.let {
+            Log.d(TAG, "💾 Cache hit for position")
+            return it.position
+        }
+
+        // 2. Проверяем предзагруженные Lichess данные
+        lichessPreloaded[fen]?.let { cloudResult ->
+            fenCache[cacheKey] = CachedPosition(cloudResult)
+            cleanupCache()
+            return cloudResult
+        }
+
+        // 3. Пробуем Lichess Cloud (если не было предзагрузки)
+        if (skillLevel == null && lichessPreloaded.isEmpty()) {
+            tryLichessCloudEval(fen, multiPv)?.let { cloudResult ->
+                fenCache[cacheKey] = CachedPosition(cloudResult)
+                cleanupCache()
+                return cloudResult
+            }
+        }
+
+        // 4. Локальный анализ
+        Log.d(TAG, "🔧 Local analysis: depth=$depth")
+        val localResult = EngineClient.evaluateFenDetailed(fen, depth, multiPv, skillLevel)
+
+        // Кешируем результат
+        fenCache[cacheKey] = CachedPosition(localResult)
+        cleanupCache()
+
+        return localResult
     }
 
     suspend fun evaluateGameByPgn(
@@ -49,39 +264,50 @@ class LocalGameAnalyzer(
 
         notify(progressId, 0, total, "preparing", startedAt, onProgress, null, null, null, null, null, null, null)
 
-        // 1) Evaluate all positions (including start)
-        val positions = mutableListOf<EngineClient.PositionDTO>()
+        // БАТЧИНГ: Предзагрузка всех позиций из Lichess параллельно
+        val allFens = listOf(startFen) + parsed.map { it.afterFen }
 
-        // Start position
-        val pos0 = EngineClient.evaluateFenDetailed(startFen, depth, multiPv, null)
-        positions.add(pos0)
+        Log.i(TAG, "🚀 Starting batch preload from Lichess for ${allFens.size} positions...")
+        val lichessPreloaded = batchLoadLichessEvals(allFens, multiPv)
+        Log.i(TAG, "✅ Preload complete: ${lichessPreloaded.size} positions cached")
 
         notify(progressId, 0, total, "evaluating", startedAt, onProgress, null, null, null, null, null, null, null)
 
-        // Evaluate each move's resulting position
+        // 1) Evaluate all positions with adaptive depth and smart caching
+        val positions = mutableListOf<EngineClient.PositionDTO>()
+
+        // Start position with adaptive depth
+        val startDepth = adaptiveDepth(0, total, depth)
+        Log.i(TAG, "🎯 Analyzing start position with depth=$startDepth")
+        val pos0 = evaluatePositionSmart(startFen, startDepth, multiPv, null, lichessPreloaded)
+        positions.add(pos0)
+
+        // Evaluate each move's resulting position with adaptive depth
         for (i in 0 until total) {
             val beforeFen = if (i == 0) startFen else parsed[i - 1].afterFen
             val afterFen = parsed[i].afterFen
             val san = parsed[i].san
             val uci = parsed[i].uci
 
+            val currentDepth = adaptiveDepth(i + 1, total, depth)
+
+            Log.d(TAG, "📍 Move ${i + 1}/$total: depth=$currentDepth")
+
             val posBefore = positions.last()
-            val posAfter = EngineClient.evaluateFenDetailed(afterFen, depth, multiPv, null)
+            val posAfter = evaluatePositionSmart(afterFen, currentDepth, multiPv, null, lichessPreloaded)
             positions.add(posAfter)
 
-            // Нормализуем топ-линию для ПОСЛЕ-хода по её FEN
+            // Normalize evaluation
             val whiteToPlayAfter = sideToMoveIsWhite(afterFen)
             val topLine = posAfter.lines.firstOrNull()
 
-            // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: правильная обработка мата
             val evalCp = topLine?.cp?.let { if (!whiteToPlayAfter) -it else it }
             val evalMate = topLine?.mate?.let { m ->
                 when {
-                    // mate: 0 означает, что сторона ХОД КОТОРОЙ уже заматована
-                    m == 0 && !whiteToPlayAfter -> 1  // Чёрные заматованы → белые выиграли (+M1)
-                    m == 0 && whiteToPlayAfter -> -1  // Белые заматованы → чёрные выиграли (-M1)
-                    !whiteToPlayAfter -> -m  // Обычная инверсия для перспективы чёрных
-                    else -> m  // Перспектива белых без изменений
+                    m == 0 && !whiteToPlayAfter -> 1  // Чёрные заматованы
+                    m == 0 && whiteToPlayAfter -> -1  // Белые заматованы
+                    !whiteToPlayAfter -> -m
+                    else -> m
                 }
             }
 
@@ -121,7 +347,7 @@ class LocalGameAnalyzer(
 
         notify(progressId, total, total, "postprocess", startedAt, onProgress, 0L, null, null, null, null, null, null)
 
-        // 2) Build PositionEval list с ПРАВИЛЬНОЙ инверсией (индекс позиции = номер полухода)
+        // 2) Build PositionEval list with proper inversion
         val fens = listOf(startFen) + parsed.map { it.afterFen }
         val uciMoves = parsed.map { it.uci }
 
@@ -135,10 +361,10 @@ class LocalGameAnalyzer(
             )
         }
 
-        // 3) ACPL calculation — ИСПОЛЬЗУЕМ НОРМАЛИЗОВАННЫЕ PositionEval
+        // 3) ACPL calculation
         val acpl = ACPL.calculateACPLFromPositionEvals(positionEvals)
 
-        // 4) Win percentages — приоритет mate над cp внутри WinPercentage
+        // 4) Win percentages
         val winPercents = positionEvals.map { pos ->
             val first = pos.lines.firstOrNull()
             if (first != null && (first.cp != null || first.mate != null)) {
@@ -158,7 +384,7 @@ class LocalGameAnalyzer(
         val whiteAcc = computePlayerAccuracy(movesAccuracy, weightsAcc, "white")
         val blackAcc = computePlayerAccuracy(movesAccuracy, weightsAcc, "black")
 
-        // 8) Move classification (по нормализованным позициям)
+        // 8) Move classification
         val classifiedPositions = MoveClassification.getMovesClassification(
             positionEvals,
             uciMoves,
@@ -182,6 +408,9 @@ class LocalGameAnalyzer(
 
         notify(progressId, total, total, "done", startedAt, onProgress, 0L, null, null, null, null, null, null)
 
+        val totalTime = System.currentTimeMillis() - startedAt
+        Log.i(TAG, "✅ Analysis complete! Time: ${totalTime}ms, Positions: ${positionEvals.size}, Cache size: ${fenCache.size}, Lichess hits: ${lichessPreloaded.size}")
+
         FullReport(
             header = hdr,
             positions1 = positions,
@@ -204,22 +433,27 @@ class LocalGameAnalyzer(
         multiPv: Int,
         skillLevel: Int?
     ): EngineClient.MoveRealtimeResult = withContext(Dispatchers.IO) {
-        val posBefore = EngineClient.evaluateFenDetailed(beforeFen, depth, multiPv, skillLevel)
-        val posAfter = EngineClient.evaluateFenDetailed(afterFen, depth, multiPv, skillLevel)
+        // Для real-time анализа пробуем параллельно загрузить обе позиции из Lichess
+        val lichessData = if (skillLevel == null) {
+            batchLoadLichessEvals(listOf(beforeFen, afterFen), multiPv)
+        } else {
+            emptyMap()
+        }
 
-        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Stockfish дает оценку со стороны того, кто ходит
+        val posBefore = evaluatePositionSmart(beforeFen, depth, multiPv, skillLevel, lichessData)
+        val posAfter = evaluatePositionSmart(afterFen, depth, multiPv, skillLevel, lichessData)
+
         val whiteToPlayAfter = afterFen.split(" ").getOrNull(1) == "w"
 
         val topLine = posAfter.lines.firstOrNull()
 
-        // Нормализуем к перспективе белых (+ = белые выигрывают, - = чёрные выигрывают)
         val cpAfter = if (whiteToPlayAfter) topLine?.cp else topLine?.cp?.let { -it }
         val mateAfter = topLine?.mate?.let { m ->
             when {
-                m == 0 && whiteToPlayAfter -> -1  // Белые заматованы
-                m == 0 && !whiteToPlayAfter -> 1  // Чёрные заматованы
-                whiteToPlayAfter -> m  // Ход белых: без инверсии
-                else -> -m  // Ход чёрных: инвертируем
+                m == 0 && whiteToPlayAfter -> -1
+                m == 0 && !whiteToPlayAfter -> 1
+                whiteToPlayAfter -> m
+                else -> -m
             }
         }
 
@@ -229,7 +463,6 @@ class LocalGameAnalyzer(
             else -> 0f
         }
 
-        // Нормализуем все линии к перспективе белых
         val linesAfter = posAfter.lines.map { line ->
             val normalizedCp = if (whiteToPlayAfter) line.cp else line.cp?.let { -it }
             val normalizedMate = line.mate?.let { m ->
@@ -249,7 +482,6 @@ class LocalGameAnalyzer(
             )
         }
 
-        // Нормализуем позицию ПЕРЕД ходом для классификации
         val whiteToPlayBefore = beforeFen.split(" ").getOrNull(1) == "w"
 
         val posEvalBefore = PositionEval(
@@ -487,16 +719,9 @@ class LocalGameAnalyzer(
         }
     }
 
-    // ====== ДОПОЛНИТЕЛЬНЫЕ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======
-
     private fun sideToMoveIsWhite(fen: String): Boolean =
         fen.split(" ").getOrNull(1) == "w"
 
-    /**
-     * Нормализует весь PositionDTO в белую перспективу по КОНКРЕТНОМУ FEN позиции:
-     * если ход чёрных — инвертируем знаки у cp и mate для всех линий.
-     * КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: правильная обработка mate: 0
-     */
     private fun normalizeToWhitePOV(
         fen: String,
         pos: EngineClient.PositionDTO,
@@ -509,11 +734,10 @@ class LocalGameAnalyzer(
             val cp = line.cp?.let { if (!whiteToPlay) -it else it }
             val mate = line.mate?.let { m ->
                 when {
-                    // mate: 0 означает, что сторона ХОД КОТОРОЙ уже заматована
-                    m == 0 && !whiteToPlay -> 1  // Чёрные заматованы → белые выиграли (+M1)
-                    m == 0 && whiteToPlay -> -1  // Белые заматованы → чёрные выиграли (-M1)
-                    !whiteToPlay -> -m  // Обычная инверсия для перспективы чёрных
-                    else -> m  // Перспектива белых без изменений
+                    m == 0 && !whiteToPlay -> 1  // Чёрные заматованы
+                    m == 0 && whiteToPlay -> -1  // Белые заматованы
+                    !whiteToPlay -> -m
+                    else -> m
                 }
             }
             LineEval(

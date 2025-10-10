@@ -155,6 +155,32 @@ object PgnChess {
         return MoveGenerator.generateLegalMoves(b).size
     }
 
+    /**
+     * Возвращает список легальных ходов в UCI формате для данной FEN позиции
+     */
+    fun getLegalMoves(fen: String): List<String> {
+        return try {
+            val board = Board()
+            board.loadFromFen(fen)
+            val legalMoves = MoveGenerator.generateLegalMoves(board)
+            legalMoves.map { move ->
+                val from = move.from.toString().lowercase(Locale.ROOT)
+                val to = move.to.toString().lowercase(Locale.ROOT)
+                val promo = move.promotion
+                val promoChar = when (promo?.pieceType) {
+                    PieceType.QUEEN -> "q"
+                    PieceType.ROOK -> "r"
+                    PieceType.BISHOP -> "b"
+                    PieceType.KNIGHT -> "n"
+                    else -> ""
+                }
+                from + to + promoChar
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
     fun isSimpleRecapture(prevUci: String?, curUci: String): Boolean {
         if (prevUci == null || prevUci.length < 4 || curUci.length < 4) return false
         val prevTo = prevUci.substring(2, 4)
@@ -187,8 +213,8 @@ object PgnChess {
             .replace("\r\n", "\n")
             .replace("\r", "\n")
         s = s.replace("0-0-0", "O-O-O").replace("0-0", "O-O")
-        s = s.replace("1–0", "1-0").replace("0–1", "0-1")
-            .replace("½–½", "1/2-1/2").replace("½-½", "1/2-1/2")
+        s = s.replace("1—0", "1-0").replace("0—1", "0-1")
+            .replace("½—½", "1/2-1/2").replace("½-½", "1/2-1/2")
         s = s.replace(Regex("""\{\[%clk [^}]+\]\}"""), "")
         s = s.replace(Regex("""\s\$\d+"""), "")
         s = buildString(s.length) {

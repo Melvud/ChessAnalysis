@@ -27,12 +27,16 @@ android {
     }
     buildTypes {
         release {
-            isMinifyEnabled = true  // Можно оставить true, но нужны правила
+            isMinifyEnabled = false  // Можно оставить true, но нужны правила
             isShrinkResources = false  // ВАЖНО: отключите сжатие ресурсов
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+        debug {
+            // КРИТИЧНО: используй релизную нативную библиотеку даже в debug!
+            isJniDebuggable = false
         }
     }
     packaging {

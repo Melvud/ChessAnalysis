@@ -29,6 +29,45 @@ import java.util.regex.Pattern
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import kotlin.math.max
+import kotlinx.coroutines.isActive // <— добавлено для использования isActive в стриминговом режиме
+
+// В начало файла, после imports:
+private suspend fun copyNNUEFromAssets(ctx: Context) = withContext(Dispatchers.IO) {
+    try {
+        val nnueDir = File(ctx.filesDir, "nnue")
+        if (!nnueDir.exists()) nnueDir.mkdirs()
+
+        // Проверяем, уже скопировано ли
+        if (nnueDir.listFiles()?.any { it.extension == "nnue" } == true) {
+            Log.d("NNUE", "✅ Already copied to filesDir")
+            return@withContext
+        }
+
+        // Копируем все .nnue файлы из assets/nnue/
+        val assetManager = ctx.assets
+        val nnueFiles = assetManager.list("nnue")?.filter { it.endsWith(".nnue") } ?: emptyList()
+
+        if (nnueFiles.isEmpty()) {
+            Log.w("NNUE", "⚠️ No .nnue files found in assets/nnue/")
+            return@withContext
+        }
+
+        nnueFiles.forEach { filename ->
+            val outputFile = File(nnueDir, filename)
+            assetManager.open("nnue/$filename").use { input ->
+                outputFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            Log.i("NNUE", "✅ Copied: $filename (${outputFile.length() / 1024}KB)")
+        }
+
+        Log.i("NNUE", "✅ Copied ${nnueFiles.size} NNUE file(s) to ${nnueDir.absolutePath}")
+    } catch (e: Exception) {
+        Log.e("NNUE", "❌ Failed to copy NNUE from assets", e)
+    }
+}
 
 @SuppressLint("StaticFieldLeak")
 object EngineClient {
@@ -869,21 +908,23 @@ object EngineClient {
     // ===========================================================
     //                     НАТИВНЫЙ ДВИЖОК (JNI)
     // ===========================================================
+    // Переписан под минимальный StockfishBridge и чтение Debug Log File.
+
+    // ... остальной файл без изменений ...
     private object NativeUciEngine {
         private const val NATIVE_TAG = "NativeUciEngine"
 
-        private val started = AtomicBoolean(false)
-        private val engineMutex = Mutex()
-        private val analysisCounter = AtomicInteger(0)
-        private var currentAnalysisJob: Job? = null
+        private val started = java.util.concurrent.atomic.AtomicBoolean(false)
+        private val engineMutex = kotlinx.coroutines.sync.Mutex()
+        private var currentAnalysisJob: kotlinx.coroutines.Job? = null
 
-        // Регексы для разбора info/bestmove
-        private val rxInfo = Pattern.compile("""^info\s+.*\bdepth\s+\d+.*""")
-        private val rxDepth = Pattern.compile("""\bdepth\s+(\d+)""")
-        private val rxMultiPv = Pattern.compile("""\bmultipv\s+(\d+)""")
-        private val rxScoreCp = Pattern.compile("""\bscore\s+cp\s+(-?\d+)""")
-        private val rxScoreMate = Pattern.compile("""\bscore\s+mate\s+(-?\d+)""")
-        private val rxPv = Pattern.compile("""\bpv\s+(.+)$""")
+        private val rxInfo = Regex("""^info\s+.*\bdepth\s+\d+.*""", RegexOption.MULTILINE)
+        private val rxDepth = Regex("""\bdepth\s+(\d+)""")
+        private val rxMultiPv = Regex("""\bmultipv\s+(\d+)""")
+        private val rxScoreCp = Regex("""\bscore\s+cp\s+(-?\d+)""")
+        private val rxScoreMate = Regex("""\bscore\s+mate\s+(-?\d+)""")
+        private val rxPv = Regex("""\bpv\s+(.+)$""")
+        private val rxBestmove = Regex("""^bestmove\s+(\S+)""", RegexOption.MULTILINE)
 
         private data class AccLine(
             var depth: Int? = null,
@@ -892,56 +933,148 @@ object EngineClient {
             var pv: List<String> = emptyList()
         )
 
-        fun ensureStarted(ctx: Context) {
-            if (started.getAndSet(true)) return
-            Log.d(NATIVE_TAG, "Native engine (JNI) starting...")
-
-            val assetDir = "nnue"
-            val assetManager = ctx.assets
-            val evalPath: String? = try {
-                val names = assetManager.list(assetDir)?.filter { it.endsWith(".nnue") }.orEmpty()
-                if (names.isEmpty()) null else {
-                    val chosen = names.sorted().last()
-                    val dstDir = File(ctx.filesDir, assetDir).apply { mkdirs() }
-                    val dst = File(dstDir, chosen)
-                    if (!dst.exists()) {
-                        assetManager.open("$assetDir/$chosen").use { input ->
-                            dst.outputStream().use { output -> input.copyTo(output) }
-                        }
-                    }
-                    dst.absolutePath
-                }
-            } catch (t: Throwable) {
-                Log.w(NATIVE_TAG, "Failed to prepare NNUE from assets: ${t.message}")
-                null
+        fun ensureStarted(ctx: android.content.Context) {
+            if (started.getAndSet(true)) {
+                android.util.Log.d(NATIVE_TAG, "Native engine already started")
+                return
             }
 
-            StockfishBridge.ensureStarted(evalPath)
+            // КРИТИЧНО: Сначала копируем NNUE из assets!
+            kotlinx.coroutines.runBlocking {
+                copyNNUEFromAssets(ctx)
+            }
 
-            runCatching { send("isready") }
-            Log.d(NATIVE_TAG, "Native engine (JNI) started; EvalFile=${evalPath ?: "none"}")
+            StockfishBridge.ensureStarted()
+
+            // КРИТИЧНО: ПРАВИЛЬНАЯ НАСТРОЙКА!
+            val cores = Runtime.getRuntime().availableProcessors()
+            val threads = (cores - 1).coerceIn(1, 8) // Оставляем 1 ядро системе
+
+            android.util.Log.i(NATIVE_TAG, "🚀 Device has $cores cores, using $threads threads")
+
+            StockfishBridge.send("setoption name Threads value $threads")
+            StockfishBridge.send("setoption name Hash value 512") // 128MB хеш
+            StockfishBridge.send("setoption name Ponder value false")
+
+            // NNUE - КРИТИЧНО для скорости!
+            val nnueDir = File(ctx.filesDir, "nnue")
+            val nnueFile = nnueDir.listFiles()?.firstOrNull { it.extension.equals("nnue", true) }
+
+            if (nnueFile != null && nnueFile.exists()) {
+                StockfishBridge.send("setoption name EvalFile value ${nnueFile.absolutePath}")
+                android.util.Log.i(NATIVE_TAG, "✅ NNUE loaded: ${nnueFile.name} (${nnueFile.length() / 1024}KB)")
+            } else {
+                android.util.Log.e(NATIVE_TAG, "❌ NO NNUE FILE FOUND in ${nnueDir.absolutePath}")
+                android.util.Log.e(NATIVE_TAG, "⚠️ Performance will be 10-100x slower!")
+            }
+
+            StockfishBridge.send("isready")
+            android.util.Log.d(NATIVE_TAG, "Native engine configured and ready")
         }
-
 
         fun stop() {
-            // У knightvision API нет "quit"; lib живёт в процессе.
-            // Можно ничего не делать — при смене режима просто перестаём её звать.
-            started.set(false)
+            if (started.getAndSet(false)) {
+                currentAnalysisJob?.cancel()
+                runCatching { StockfishBridge.stop(); StockfishBridge.shutdown() }
+            }
         }
 
-        private fun send(cmd: String): String = StockfishBridge.send(cmd)
-        private fun go(depth: Int): String = StockfishBridge.go(depth)
-
-        /** Быстрая проверка готовности: isready -> "readyok" в ответе. */
-        private fun isReady(): Boolean = send("isready").lineSequence().any { it.trim() == "readyok" }
-
-        private suspend fun waitForReady(timeoutMs: Long = 20_000): Boolean = withContext(Dispatchers.IO) {
-            val start = System.currentTimeMillis()
-            while (!isReady()) {
-                if (System.currentTimeMillis() - start > timeoutMs) return@withContext false
-                delay(100)
+        private fun parseOutput(snapshot: String): Pair<List<EngineClient.LineDTO>, String?> {
+            val acc = mutableMapOf<Int, AccLine>()
+            var bestMove: String? = null
+            snapshot.lineSequence().forEach { line ->
+                when {
+                    rxInfo.matches(line) -> {
+                        val mp = rxMultiPv.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
+                        val slot = acc.getOrPut(mp) { AccLine() }
+                        slot.depth = rxDepth.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: slot.depth
+                        val mMate = rxScoreMate.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                        val mCp = rxScoreCp.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                        if (mMate != null) { slot.mate = mMate; slot.cp = null }
+                        else if (mCp != null) { slot.cp = mCp; slot.mate = null }
+                        rxPv.find(line)?.groupValues?.getOrNull(1)?.let { pv ->
+                            slot.pv = pv.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+                        }
+                    }
+                    line.startsWith("bestmove") -> {
+                        val m = rxBestmove.find(line)
+                        bestMove = m?.groupValues?.getOrNull(1)?.let { bm ->
+                            if (bm != "(none)" && bm != "0000") bm else null
+                        }
+                    }
+                }
             }
-            true
+            val lines = acc.entries.sortedBy { it.key }.map { (mp, a) ->
+                EngineClient.LineDTO(a.pv, a.cp, a.mate, a.depth, mp)
+            }
+            return lines to bestMove
+        }
+
+        private suspend fun pumpUntilBestmove(
+            wantedDepth: Int,
+            onPartial: ((List<EngineClient.LineDTO>) -> Unit)? = null,
+            timeoutMs: Long = 120_000
+        ): Pair<List<EngineClient.LineDTO>, String?> {
+            val start = System.currentTimeMillis()
+            val sb = StringBuilder()
+            var best: String? = null
+            var lastDepth = 0
+            var emptyCount = 0
+            var totalReads = 0
+
+            while (System.currentTimeMillis() - start < timeoutMs) {
+                val chunk = StockfishBridge.readOutput()
+                totalReads++
+
+                if (chunk.isNotEmpty()) {
+                    emptyCount = 0
+                    android.util.Log.d(NATIVE_TAG, "📥 Read ${chunk.length} bytes at iter $totalReads")
+
+                    sb.append(chunk)
+                    val (lines, bestMove) = parseOutput(sb.toString())
+
+                    if (lines.isNotEmpty()) {
+                        val maxDepth = lines.maxOfOrNull { it.depth ?: 0 } ?: 0
+                        if (maxDepth > lastDepth) {
+                            lastDepth = maxDepth
+                            android.util.Log.i(NATIVE_TAG, "⬆️ Depth: $maxDepth")
+                            onPartial?.invoke(lines)
+                        }
+                    }
+
+                    if (bestMove != null) {
+                        android.util.Log.i(NATIVE_TAG, "✅ bestmove: $bestMove at depth $lastDepth")
+                        best = bestMove
+                        break
+                    }
+
+                    // КРИТИЧНО: Обработка терминальных позиций
+                    if (sb.contains("bestmove (none)")) {
+                        android.util.Log.i(NATIVE_TAG, "🏁 Terminal position: bestmove (none)")
+                        best = null
+                        break
+                    }
+
+                    if (wantedDepth > 0 && lastDepth >= wantedDepth) {
+                        android.util.Log.i(NATIVE_TAG, "🛑 Reached depth $wantedDepth, stopping")
+                        StockfishBridge.stop()
+                    }
+                } else {
+                    emptyCount++
+                    if (emptyCount % 50 == 0) {
+                        android.util.Log.w(NATIVE_TAG, "⏳ $emptyCount empty reads, elapsed: ${System.currentTimeMillis() - start}ms")
+                    }
+                    kotlinx.coroutines.delay(if (emptyCount < 5) 20 else if (emptyCount < 20) 50 else 100)
+                }
+            }
+
+            android.util.Log.i(NATIVE_TAG, "📊 pump finished: totalReads=$totalReads, depth=$lastDepth, best=$best")
+
+            return parseOutput(sb.toString()).let { (lines, bm) ->
+                val finalBest = best ?: bm
+                val safe = if (lines.isEmpty()) listOf(EngineClient.LineDTO(pv = emptyList(), cp = null, mate = 0)) else lines
+                safe to finalBest
+            }
         }
 
         suspend fun evaluateFenDetailedLocal(
@@ -949,129 +1082,68 @@ object EngineClient {
             depth: Int,
             multiPv: Int,
             skillLevel: Int?
-        ): PositionDTO = withTimeout(120_000) {
-            currentAnalysisJob?.cancel()
+        ): EngineClient.PositionDTO = withTimeout(120_000) {
             val ctx = appCtx ?: throw IllegalStateException("Context not set")
             ensureStarted(ctx)
             engineMutex.withLock {
-                if (!waitForReady()) throw IllegalStateException("Native engine not ready")
+                StockfishBridge.readOutput() // Очистка
+                StockfishBridge.send("stop")
+                StockfishBridge.send("isready")
+                StockfishBridge.send("ucinewgame")
+                StockfishBridge.send("isready")
 
-                // Настройка
-                if (skillLevel != null) send("setoption name Skill Level value $skillLevel")
-                if (multiPv > 1)      send("setoption name MultiPV value $multiPv")
-                send("ucinewgame")
-                send("position fen $fen")
-
-                // Запуск поиска
-                val output = go(depth)
-
-                // Парс всего вывода (info/bestmove)
-                val acc = mutableMapOf<Int, AccLine>()
-                var bestMove: String? = null
-                output.lineSequence().forEach { line ->
-                    when {
-                        rxInfo.matcher(line).matches() -> {
-                            val mp = rxMultiPv.matcher(line).let { if (it.find()) it.group(1).toIntOrNull() ?: 1 else 1 }
-                            val slot = acc.getOrPut(mp) { AccLine() }
-                            rxDepth.matcher(line).apply { if (find()) slot.depth = group(1).toIntOrNull() }
-                            val mMate = rxScoreMate.matcher(line); val mCp = rxScoreCp.matcher(line)
-                            slot.mate = if (mMate.find()) mMate.group(1).toIntOrNull() else null
-                            slot.cp   = if (slot.mate == null && mCp.find()) mCp.group(1).toIntOrNull() else slot.cp
-                            rxPv.matcher(line).apply {
-                                if (find()) slot.pv = group(1).trim().split(Regex("\\s+")).filter { it.isNotBlank() }
-                            }
-                        }
-                        line.startsWith("bestmove") -> {
-                            val parts = line.split(Regex("\\s+"))
-                            if (parts.size >= 2) bestMove = parts[1]
-                        }
-                    }
+                if (skillLevel != null) {
+                    StockfishBridge.send("setoption name Skill Level value $skillLevel")
                 }
+                StockfishBridge.send("setoption name MultiPV value ${multiPv.coerceAtLeast(1)}")
+                StockfishBridge.send("isready")
 
-                val lines = acc.entries.sortedBy { it.key }.map { (mp, a) ->
-                    LineDTO(a.pv, a.cp, a.mate, a.depth, mp)
-                }
-                PositionDTO(lines.ifEmpty { listOf(LineDTO(pv = emptyList(), cp = 0)) }, bestMove ?: lines.firstOrNull()?.pv?.firstOrNull())
+                StockfishBridge.send("position fen $fen")
+                StockfishBridge.go(depth)
+
+                val (lines, best) = pumpUntilBestmove(depth, onPartial = null)
+                EngineClient.PositionDTO(lines, best ?: lines.firstOrNull()?.pv?.firstOrNull())
             }
         }
 
-        /**
-         * "Стриминговая" версия — имитируем поток, ломая поиск на итерации по глубине.
-         * Чтобы не дергать движок слишком часто, растём крупными шагами.
-         */
         suspend fun evaluateFenDetailedStreamingLocal(
             fen: String,
             depth: Int,
             multiPv: Int,
             skillLevel: Int?,
-            onUpdate: (List<LineDTO>) -> Unit
-        ): PositionDTO = coroutineScope {
-            currentAnalysisJob?.cancel()
+            onUpdate: (List<EngineClient.LineDTO>) -> Unit
+        ): EngineClient.PositionDTO = coroutineScope {
             val ctx = appCtx ?: throw IllegalStateException("Context not set")
             ensureStarted(ctx)
-            val finalResult = CompletableDeferred<PositionDTO>()
+
+            val res = CompletableDeferred<EngineClient.PositionDTO>()
+            currentAnalysisJob?.cancel()
             currentAnalysisJob = launch(Dispatchers.IO) {
                 engineMutex.withLock {
-                    if (!waitForReady()) throw IllegalStateException("Native engine not ready")
+                    StockfishBridge.readOutput()
+                    StockfishBridge.send("stop")
+                    StockfishBridge.send("isready")
+                    StockfishBridge.send("ucinewgame")
+                    StockfishBridge.send("isready")
 
-                    if (skillLevel != null) send("setoption name Skill Level value $skillLevel")
-                    send("setoption name MultiPV value ${multiPv.coerceAtLeast(1)}")
-                    send("ucinewgame")
-                    send("position fen $fen")
-
-                    val acc = mutableMapOf<Int, AccLine>()
-                    var bestMove: String? = null
-
-                    // шаг по глубине: 4, 8, ..., depth
-                    val step = maxOf(1, depth / 6)
-                    var d = step
-                    while (d < depth) {
-                        val out = go(d)
-                        parseOutput(out, acc).also { bm -> if (bm != null) bestMove = bm }
-                        val snapshot = acc.entries.sortedBy { it.key }.map { (mp, a) ->
-                            LineDTO(a.pv, a.cp, a.mate, a.depth, mp)
-                        }
-                        if (snapshot.isNotEmpty()) onUpdate(snapshot)
-                        d += step
+                    if (skillLevel != null) {
+                        StockfishBridge.send("setoption name Skill Level value $skillLevel")
                     }
-                    // финальный прогон до целевой глубины
-                    val finalOut = go(depth)
-                    parseOutput(finalOut, acc).also { bm -> if (bm != null) bestMove = bm }
-                    val lines = acc.entries.sortedBy { it.key }.map { (mp, a) ->
-                        LineDTO(a.pv, a.cp, a.mate, a.depth, mp)
-                    }
-                    finalResult.complete(
-                        PositionDTO(lines.ifEmpty { listOf(LineDTO(pv = emptyList(), cp = 0)) }, bestMove ?: lines.firstOrNull()?.pv?.firstOrNull())
-                    )
+                    StockfishBridge.send("setoption name MultiPV value ${multiPv.coerceAtLeast(1)}")
+                    StockfishBridge.send("isready")
+
+                    StockfishBridge.send("position fen $fen")
+                    StockfishBridge.go(depth)
+
+                    val (lines, best) = pumpUntilBestmove(depth, onPartial = { snap ->
+                        if (snap.isNotEmpty()) onUpdate(snap)
+                    })
+                    val pos = EngineClient.PositionDTO(lines, best ?: lines.firstOrNull()?.pv?.firstOrNull())
+                    onUpdate(pos.lines)
+                    res.complete(pos)
                 }
             }
-            try { finalResult.await() } catch (_: CancellationException) {
-                PositionDTO(listOf(LineDTO(pv = emptyList(), cp = 0)), null)
-            }
-        }
-
-        private fun parseOutput(out: String, acc: MutableMap<Int, AccLine>): String? {
-            var best: String? = null
-            out.lineSequence().forEach { line ->
-                when {
-                    rxInfo.matcher(line).matches() -> {
-                        val mp = rxMultiPv.matcher(line).let { if (it.find()) it.group(1).toIntOrNull() ?: 1 else 1 }
-                        val slot = acc.getOrPut(mp) { AccLine() }
-                        rxDepth.matcher(line).apply { if (find()) slot.depth = group(1).toIntOrNull() }
-                        val mMate = rxScoreMate.matcher(line); val mCp = rxScoreCp.matcher(line)
-                        slot.mate = if (mMate.find()) mMate.group(1).toIntOrNull() else null
-                        slot.cp   = if (slot.mate == null && mCp.find()) mCp.group(1).toIntOrNull() else slot.cp
-                        rxPv.matcher(line).apply {
-                            if (find()) slot.pv = group(1).trim().split(Regex("\\s+")).filter { it.isNotBlank() }
-                        }
-                    }
-                    line.startsWith("bestmove") -> {
-                        val parts = line.split(Regex("\\s+"))
-                        if (parts.size >= 2) best = parts[1]
-                    }
-                }
-            }
-            return best
+            res.await()
         }
     }
 
