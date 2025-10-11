@@ -1,130 +1,195 @@
 package com.github.movesense.engine
 
-import android.content.Context
 import android.util.Log
 import com.github.movesense.EngineClient
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Semaphore
+import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Пул нативных Stockfish движков для параллельного анализа позиций
+ *
+ * КРИТИЧЕСКАЯ ОПТИМИЗАЦИЯ: Позволяет анализировать 3-4 позиции одновременно!
  */
 class EnginePool(
-    private val context: Context,
-    private val poolSize: Int = 4
+    private val context: android.content.Context,
+    private val poolSize: Int = 3 // 3-4 движка параллельно
 ) {
     companion object {
         private const val TAG = "EnginePool"
+
+        @Volatile
+        private var INSTANCE: EnginePool? = null
+
+        fun getInstance(context: android.content.Context, size: Int = 3): EnginePool {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: EnginePool(context.applicationContext, size).also {
+                    INSTANCE = it
+                }
+            }
+        }
+
+        fun destroyInstance() {
+            synchronized(this) {
+                INSTANCE?.shutdown()
+                INSTANCE = null
+            }
+        }
     }
 
-    private data class EngineInstance(
+    private data class EngineWorker(
         val id: Int,
-        val bridgePtr: Long,
+        val ptr: Long,
         var isBusy: Boolean = false
     )
 
-    private val engines = mutableListOf<EngineInstance>()
+    private data class AnalysisRequest(
+        val fen: String,
+        val depth: Int,
+        val multiPv: Int,
+        val result: CompletableDeferred<EngineClient.PositionDTO>
+    )
+
+    private val workers = mutableListOf<EngineWorker>()
+    private val requestChannel = Channel<AnalysisRequest>(Channel.UNLIMITED)
     private val semaphore = Semaphore(poolSize)
     private val activeAnalyses = AtomicInteger(0)
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     @Volatile
     private var isInitialized = false
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    init {
+        Log.i(TAG, "🏊 Initializing engine pool with $poolSize workers")
 
-    suspend fun initialize() = withContext(Dispatchers.IO) {
-        if (isInitialized) {
-            Log.d(TAG, "Pool already initialized")
-            return@withContext
+        // Копируем NNUE синхронно
+        runBlocking(Dispatchers.IO) {
+            copyNNUEFromAssets(context)
         }
 
+        // Создаем workers
+        scope.launch {
+            initializeWorkers()
+        }
+    }
+
+    private suspend fun initializeWorkers() = withContext(Dispatchers.IO) {
         val cores = Runtime.getRuntime().availableProcessors()
-        val threadsPerEngine = (cores / poolSize).coerceAtLeast(1)
+        val threadsPerWorker = (cores / poolSize).coerceAtLeast(1)
+        val hashPerWorker = calculateHashPerWorker()
 
-        Log.i(TAG, "🏊 Initializing engine pool: size=$poolSize, threads per engine=$threadsPerEngine")
+        Log.i(TAG, "📊 Device: $cores cores, ${threadsPerWorker} threads/worker, ${hashPerWorker}MB hash/worker")
 
-        // Копируем NNUE файл если нужно
-        copyNNUEFromAssets(context)
+        repeat(poolSize) { workerId ->
+            try {
+                val ptr = StockfishBridge.initEngineInstance()
+                require(ptr != 0L) { "Failed to init worker #$workerId" }
 
-        // Создаем пул движков
-        repeat(poolSize) { index ->
-            val ptr = initSingleEngine(index, threadsPerEngine)
-            engines.add(EngineInstance(id = index, bridgePtr = ptr))
-            Log.i(TAG, "✅ Engine #$index initialized (ptr=$ptr)")
+                val worker = EngineWorker(id = workerId, ptr = ptr)
+                workers.add(worker)
+
+                // Настройка движка
+                configureEngine(ptr, workerId, threadsPerWorker, hashPerWorker)
+
+                // Запускаем обработчик запросов для этого worker
+                scope.launch {
+                    processRequests(worker)
+                }
+
+                Log.i(TAG, "✅ Worker #$workerId ready (ptr=$ptr)")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Failed to create worker #$workerId", e)
+            }
         }
 
         isInitialized = true
-        Log.i(TAG, "🎉 Engine pool ready! $poolSize engines with $threadsPerEngine threads each")
+        Log.i(TAG, "🎉 Engine pool fully initialized with ${workers.size} workers")
     }
 
-    private suspend fun initSingleEngine(id: Int, threads: Int): Long = withContext(Dispatchers.IO) {
-        // Создаем отдельный экземпляр через JNI
-        val ptr = StockfishBridge.initEngineInstance()
-        require(ptr != 0L) { "Failed to init engine #$id" }
+    private fun calculateHashPerWorker(): Int {
+        val runtime = Runtime.getRuntime()
+        val maxMemory = runtime.maxMemory() / (1024 * 1024) // MB
 
-        // Настраиваем движок
-        StockfishBridge.sendToInstance(ptr, "uci")
-        delay(50)
-        StockfishBridge.sendToInstance(ptr, "setoption name Threads value $threads")
+        // Выделяем 25% памяти для движков, делим на количество workers
+        val totalHashBudget = (maxMemory * 0.25).toInt().coerceIn(256, 4096)
+        val hashPerWorker = (totalHashBudget / poolSize).coerceAtLeast(64).coerceAtMost(1024)
 
-        // Hash делим между движками
-        val hashPerEngine = (256 / poolSize).coerceAtLeast(16)
-        StockfishBridge.sendToInstance(ptr, "setoption name Hash value $hashPerEngine")
-
-        StockfishBridge.sendToInstance(ptr, "setoption name Ponder value false")
-
-        // NNUE
-        val nnueDir = java.io.File(context.filesDir, "nnue")
-        val nnueFile = nnueDir.listFiles()?.firstOrNull { it.extension.equals("nnue", true) }
-        if (nnueFile != null) {
-            StockfishBridge.sendToInstance(ptr, "setoption name EvalFile value ${nnueFile.absolutePath}")
-            Log.d(TAG, "Engine #$id: NNUE loaded")
-        }
-
-        StockfishBridge.sendToInstance(ptr, "isready")
-        delay(100)
-
-        ptr
+        Log.d(TAG, "💾 Memory budget: totalHash=${totalHashBudget}MB, perWorker=${hashPerWorker}MB")
+        return hashPerWorker
     }
 
-    /**
-     * Анализирует позицию, используя свободный движок из пула
-     */
-    suspend fun evaluateFen(
-        fen: String,
-        depth: Int,
-        multiPv: Int
-    ): EngineClient.PositionDTO = coroutineScope {
-        semaphore.acquire()
-        activeAnalyses.incrementAndGet()
-
+    private suspend fun configureEngine(
+        ptr: Long,
+        workerId: Int,
+        threads: Int,
+        hashMB: Int
+    ) = withContext(Dispatchers.IO) {
         try {
-            val engine = engines.first { !it.isBusy }
-            engine.isBusy = true
+            StockfishBridge.sendToInstance(ptr, "uci")
+            delay(50)
 
-            Log.d(TAG, "🔧 Engine #${engine.id} analyzing (active: ${activeAnalyses.get()}/$poolSize)")
+            StockfishBridge.sendToInstance(ptr, "setoption name Threads value $threads")
+            StockfishBridge.sendToInstance(ptr, "setoption name Hash value $hashMB")
+            StockfishBridge.sendToInstance(ptr, "setoption name Ponder value false")
 
-            val result = analyzeWithEngine(engine, fen, depth, multiPv)
+            // КРИТИЧНО: для многопоточности
+            StockfishBridge.sendToInstance(ptr, "setoption name NumaPolicy value system")
 
-            engine.isBusy = false
-            result
-        } finally {
-            activeAnalyses.decrementAndGet()
-            semaphore.release()
+            // NNUE
+            val nnueDir = File(context.filesDir, "nnue")
+            val nnueFile = nnueDir.listFiles()?.firstOrNull { it.extension.equals("nnue", true) }
+            if (nnueFile != null && nnueFile.exists()) {
+                StockfishBridge.sendToInstance(ptr, "setoption name EvalFile value ${nnueFile.absolutePath}")
+                Log.d(TAG, "Worker #$workerId: NNUE loaded (${nnueFile.name})")
+            } else {
+                Log.w(TAG, "⚠️ Worker #$workerId: NO NNUE FILE!")
+            }
+
+            StockfishBridge.sendToInstance(ptr, "isready")
+            delay(100)
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to configure worker #$workerId", e)
+            throw e
         }
     }
 
-    private suspend fun analyzeWithEngine(
-        engine: EngineInstance,
+    private suspend fun processRequests(worker: EngineWorker) {
+        Log.d(TAG, "👷 Worker #${worker.id} started processing")
+
+        for (request in requestChannel) {
+            try {
+                semaphore.acquire()
+                worker.isBusy = true
+                activeAnalyses.incrementAndGet()
+
+                Log.d(TAG, "🔧 Worker #${worker.id} analyzing (active: ${activeAnalyses.get()}/$poolSize)")
+
+                val result = analyzePosition(worker, request.fen, request.depth, request.multiPv)
+                request.result.complete(result)
+
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Worker #${worker.id} error: ${e.message}", e)
+                request.result.completeExceptionally(e)
+            } finally {
+                worker.isBusy = false
+                activeAnalyses.decrementAndGet()
+                semaphore.release()
+            }
+        }
+    }
+
+    private suspend fun analyzePosition(
+        worker: EngineWorker,
         fen: String,
         depth: Int,
         multiPv: Int
     ): EngineClient.PositionDTO = withContext(Dispatchers.IO) {
-        val ptr = engine.bridgePtr
+        val ptr = worker.ptr
 
-        // Очищаем вывод
+        // Очищаем буфер вывода
         StockfishBridge.readOutputFromInstance(ptr)
 
         // Отправляем команды
@@ -138,18 +203,17 @@ class EnginePool(
         StockfishBridge.goAsyncInstance(ptr, depth)
 
         // Ждем результат
-        pumpUntilBestmove(ptr, depth)
+        pumpUntilBestmove(ptr, worker.id, depth)
     }
 
     private suspend fun pumpUntilBestmove(
         ptr: Long,
+        workerId: Int,
         wantedDepth: Int,
         timeoutMs: Long = 120_000
     ): EngineClient.PositionDTO {
         val start = System.currentTimeMillis()
-        val sb = StringBuilder()
-        var best: String? = null
-        var lastDepth = 0
+        val buffer = StringBuilder()
 
         val rxInfo = Regex("""^info\s+.*\bdepth\s+\d+.*""", RegexOption.MULTILINE)
         val rxDepth = Regex("""\bdepth\s+(\d+)""")
@@ -166,115 +230,216 @@ class EnginePool(
             var pv: List<String> = emptyList()
         )
 
+        val acc = mutableMapOf<Int, AccLine>()
+        var bestMove: String? = null
+        var lastDepth = 0
+        var emptyCount = 0
+
         while (System.currentTimeMillis() - start < timeoutMs) {
             val chunk = StockfishBridge.readOutputFromInstance(ptr)
 
             if (chunk.isNotEmpty()) {
-                sb.append(chunk)
+                emptyCount = 0
+                buffer.append(chunk)
 
-                // Парсим
-                val acc = mutableMapOf<Int, AccLine>()
-                sb.toString().lineSequence().forEach { line ->
+                // Парсим построчно
+                chunk.lineSequence().forEach { line ->
                     when {
                         rxInfo.matches(line) -> {
                             val mp = rxMultiPv.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
                             val slot = acc.getOrPut(mp) { AccLine() }
+
                             slot.depth = rxDepth.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: slot.depth
+
                             val mMate = rxScoreMate.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
                             val mCp = rxScoreCp.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                            if (mMate != null) { slot.mate = mMate; slot.cp = null }
-                            else if (mCp != null) { slot.cp = mCp; slot.mate = null }
+
+                            if (mMate != null) {
+                                slot.mate = mMate
+                                slot.cp = null
+                            } else if (mCp != null) {
+                                slot.cp = mCp
+                                slot.mate = null
+                            }
+
                             rxPv.find(line)?.groupValues?.getOrNull(1)?.let { pv ->
                                 slot.pv = pv.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
                             }
+
+                            lastDepth = slot.depth ?: lastDepth
                         }
+
                         line.startsWith("bestmove") -> {
-                            best = rxBestmove.find(line)?.groupValues?.getOrNull(1)?.let { bm ->
+                            bestMove = rxBestmove.find(line)?.groupValues?.getOrNull(1)?.let { bm ->
                                 if (bm != "(none)" && bm != "0000") bm else null
                             }
                         }
                     }
                 }
 
-                if (acc.isNotEmpty()) {
-                    lastDepth = acc.values.maxOfOrNull { it.depth ?: 0 } ?: 0
+                if (bestMove != null) {
+                    Log.d(TAG, "✅ Worker #$workerId: bestmove=$bestMove, depth=$lastDepth")
+                    break
                 }
 
-                if (best != null) break
+                // Проверка на терминальную позицию
+                if (buffer.contains("bestmove (none)")) {
+                    Log.d(TAG, "🏁 Worker #$workerId: terminal position")
+                    bestMove = null
+                    break
+                }
+
+                // Останавливаем при достижении глубины
                 if (wantedDepth > 0 && lastDepth >= wantedDepth) {
                     StockfishBridge.stopSearchInstance(ptr)
                 }
             } else {
-                delay(20)
+                emptyCount++
+                delay(if (emptyCount < 5) 20 else if (emptyCount < 20) 50 else 100)
             }
         }
 
         // Финальный парсинг
-        val acc = mutableMapOf<Int, AccLine>()
-        sb.toString().lineSequence().forEach { line ->
-            when {
-                rxInfo.matches(line) -> {
-                    val mp = rxMultiPv.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
-                    val slot = acc.getOrPut(mp) { AccLine() }
-                    slot.depth = rxDepth.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: slot.depth
-                    val mMate = rxScoreMate.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                    val mCp = rxScoreCp.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                    if (mMate != null) { slot.mate = mMate; slot.cp = null }
-                    else if (mCp != null) { slot.cp = mCp; slot.mate = null }
-                    rxPv.find(line)?.groupValues?.getOrNull(1)?.let { pv ->
-                        slot.pv = pv.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
-                    }
-                }
-            }
-        }
-
         val lines = acc.entries.sortedBy { it.key }.map { (mp, a) ->
             EngineClient.LineDTO(a.pv, a.cp, a.mate, a.depth, mp)
         }
 
+        val safeLines = if (lines.isEmpty()) {
+            listOf(EngineClient.LineDTO(pv = emptyList(), cp = null, mate = 0, depth = wantedDepth, multiPv = 1))
+        } else {
+            lines
+        }
+
         return EngineClient.PositionDTO(
-            lines.ifEmpty { listOf(EngineClient.LineDTO(pv = emptyList(), cp = 0)) },
-            best ?: lines.firstOrNull()?.pv?.firstOrNull()
+            lines = safeLines,
+            bestMove = bestMove ?: safeLines.firstOrNull()?.pv?.firstOrNull()
         )
     }
 
-    fun shutdown() {
-        Log.i(TAG, "🛑 Shutting down engine pool...")
-        engines.forEach { engine ->
-            try {
-                StockfishBridge.destroyEngineInstance(engine.bridgePtr)
-                Log.d(TAG, "Engine #${engine.id} destroyed")
-            } catch (e: Exception) {
-                Log.e(TAG, "Error destroying engine #${engine.id}", e)
-            }
+    /**
+     * ПУБЛИЧНЫЙ API: Анализировать позицию через пул
+     * Автоматически использует свободный worker
+     */
+    suspend fun analyzePosition(
+        fen: String,
+        depth: Int,
+        multiPv: Int = 3
+    ): EngineClient.PositionDTO {
+        // Ждем инициализации пула
+        var attempts = 0
+        while (!isInitialized && attempts < 100) {
+            delay(100)
+            attempts++
         }
-        engines.clear()
-        scope.cancel()
-        isInitialized = false
+
+        if (!isInitialized) {
+            throw IllegalStateException("Engine pool not initialized after ${attempts * 100}ms")
+        }
+
+        val result = CompletableDeferred<EngineClient.PositionDTO>()
+        val request = AnalysisRequest(fen, depth, multiPv, result)
+
+        requestChannel.send(request)
+
+        return result.await()
     }
 
-    private suspend fun copyNNUEFromAssets(ctx: Context) = withContext(Dispatchers.IO) {
-        try {
-            val nnueDir = java.io.File(ctx.filesDir, "nnue")
-            if (!nnueDir.exists()) nnueDir.mkdirs()
+    /**
+     * Пакетный анализ позиций параллельно
+     */
+    suspend fun analyzePositionsBatch(
+        positions: List<Triple<String, Int, Int>> // (fen, depth, multiPv)
+    ): List<EngineClient.PositionDTO> = coroutineScope {
+        Log.i(TAG, "📦 Batch analysis: ${positions.size} positions")
 
+        positions.map { (fen, depth, multiPv) ->
+            async {
+                analyzePosition(fen, depth, multiPv)
+            }
+        }.awaitAll()
+    }
+
+    /**
+     * Получить статистику пула
+     */
+    fun getPoolStats(): PoolStats {
+        val busyCount = workers.count { it.isBusy }
+        // isEmpty доступно для Channel; false означает, что в канале уже есть элементы (очередь)
+        val queued = !requestChannel.isEmpty
+        return PoolStats(
+            totalWorkers = workers.size,
+            busyWorkers = busyCount,
+            freeWorkers = workers.size - busyCount,
+            activeAnalyses = activeAnalyses.get(),
+            queuedRequests = queued
+        )
+    }
+
+    data class PoolStats(
+        val totalWorkers: Int,
+        val busyWorkers: Int,
+        val freeWorkers: Int,
+        val activeAnalyses: Int,
+        val queuedRequests: Boolean
+    )
+
+    fun shutdown() {
+        Log.i(TAG, "🛑 Shutting down engine pool...")
+
+        requestChannel.close()
+
+        workers.forEach { worker ->
+            try {
+                StockfishBridge.destroyEngineInstance(worker.ptr)
+                Log.d(TAG, "Worker #${worker.id} destroyed")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error destroying worker #${worker.id}", e)
+            }
+        }
+
+        workers.clear()
+        scope.cancel()
+        isInitialized = false
+
+        Log.i(TAG, "✅ Engine pool shut down")
+    }
+
+    private suspend fun copyNNUEFromAssets(ctx: android.content.Context) = withContext(Dispatchers.IO) {
+        try {
+            val nnueDir = File(ctx.filesDir, "nnue")
+            if (!nnueDir.exists()) {
+                nnueDir.mkdirs()
+                Log.d(TAG, "Created NNUE directory: ${nnueDir.absolutePath}")
+            }
+
+            // Проверяем, уже скопировано ли
             if (nnueDir.listFiles()?.any { it.extension == "nnue" } == true) {
+                Log.d(TAG, "✅ NNUE already copied to filesDir")
                 return@withContext
             }
 
+            // Копируем все .nnue файлы из assets/nnue/
             val assetManager = ctx.assets
             val nnueFiles = assetManager.list("nnue")?.filter { it.endsWith(".nnue") } ?: emptyList()
 
+            if (nnueFiles.isEmpty()) {
+                Log.w(TAG, "⚠️ No .nnue files found in assets/nnue/")
+                return@withContext
+            }
+
             nnueFiles.forEach { filename ->
-                val outputFile = java.io.File(nnueDir, filename)
+                val outputFile = File(nnueDir, filename)
                 assetManager.open("nnue/$filename").use { input ->
                     outputFile.outputStream().use { output ->
                         input.copyTo(output)
                     }
                 }
+                Log.i(TAG, "✅ Copied: $filename (${outputFile.length() / 1024}KB)")
             }
+
+            Log.i(TAG, "✅ Copied ${nnueFiles.size} NNUE file(s) to ${nnueDir.absolutePath}")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to copy NNUE", e)
+            Log.e(TAG, "❌ Failed to copy NNUE from assets", e)
         }
     }
 }

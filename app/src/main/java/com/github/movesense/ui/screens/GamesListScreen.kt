@@ -130,7 +130,7 @@ fun GamesListScreen(
     var pastedPgn by remember { mutableStateOf("") }
 
     var showReAnalyzeSheet by remember { mutableStateOf(false) }
-    var reAnalyzeDepth by remember { mutableStateOf(16) }
+    var reAnalyzeDepth by remember { mutableStateOf(12) }
     var reAnalyzeMultiPv by remember { mutableStateOf(3) }
     var reAnalyzeTargetPgn by remember { mutableStateOf<String?>(null) }
 
@@ -529,13 +529,13 @@ fun GamesListScreen(
                                                 }
                                                 val cached = repo.getCachedReport(fullPgn)
                                                 if (cached != null) onOpenReport(cached)
-                                                else startAnalysis(fullPgn, depth = 16, multiPv = 3)
+                                                else startAnalysis(fullPgn, depth = 12, multiPv = 3)
                                             }
                                         },
                                         onLongPress = {
                                             if (analyzedReport != null) {
                                                 reAnalyzeTargetPgn = game.pgn
-                                                reAnalyzeDepth = 16
+                                                reAnalyzeDepth = 12
                                                 reAnalyzeMultiPv = 3
                                                 showReAnalyzeSheet = true
                                             }

@@ -1,98 +1,160 @@
 package com.github.movesense.engine
 
+import android.util.Log
+
 object StockfishBridge {
 
-    init { System.loadLibrary("stockfish") }
+    private const val TAG = "StockfishBridge"
+
+    init {
+        try {
+            System.loadLibrary("stockfish")
+            Log.i(TAG, "✅ libstockfish.so loaded successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to load libstockfish.so", e)
+            throw e
+        }
+    }
+
+    // ==== JNI Native методы ====
+
+    @JvmStatic
+    private external fun initEngine(): Long
+
+    @JvmStatic
+    private external fun runCmd(ptr: Long, cmd: String): String
+
+    @JvmStatic
+    private external fun goAsync(ptr: Long, depth: Int)
+
+    @JvmStatic
+    private external fun stopSearch(ptr: Long)
+
+    @JvmStatic
+    private external fun destroyEngine(ptr: Long)
+
+    @JvmStatic
+    private external fun readOutputNative(ptr: Long): String
+
+    // ==== Главный единственный экземпляр (для обратной совместимости) ====
 
     @Volatile
-    private var enginePtr: Long = 0L
+    private var mainEnginePtr: Long = 0L
 
-    private val initLock = Any()
-
-    // ==== ОРИГИНАЛЬНЫЕ МЕТОДЫ (для обратной совместимости) ====
-
-    private external fun initEngine(): Long
-    private external fun runCmd(ptr: Long, cmd: String): String
-    private external fun goAsync(ptr: Long, depth: Int)
-    private external fun stopSearch(ptr: Long)
-    private external fun destroyEngine(ptr: Long)
-    private external fun readOutputNative(): String
+    private val mainEngineLock = Any()
 
     fun ensureStarted() {
-        if (enginePtr != 0L) return
-        synchronized(initLock) {
-            if (enginePtr != 0L) return
-            val p = initEngine()
-            require(p != 0L) { "Failed to init Stockfish" }
-            enginePtr = p
-            runCmd(p, "uci")
-            runCmd(p, "isready")
+        if (mainEnginePtr != 0L) return
+        synchronized(mainEngineLock) {
+            if (mainEnginePtr != 0L) return
+            val ptr = initEngine()
+            require(ptr != 0L) { "Failed to initialize main Stockfish engine" }
+            mainEnginePtr = ptr
+            Log.i(TAG, "✅ Main engine initialized: ptr=$ptr")
+
+            // Базовая инициализация
+            runCmd(ptr, "uci")
+            runCmd(ptr, "isready")
         }
     }
 
     fun send(cmd: String): String {
-        val p = enginePtr
-        require(p != 0L) { "Engine not initialized" }
-        return runCmd(p, cmd)
+        val ptr = mainEnginePtr
+        require(ptr != 0L) { "Main engine not initialized" }
+        return runCmd(ptr, cmd)
     }
 
     fun go(depth: Int) {
-        val p = enginePtr
-        require(p != 0L) { "Engine not initialized" }
-        goAsync(p, depth)
+        val ptr = mainEnginePtr
+        require(ptr != 0L) { "Main engine not initialized" }
+        goAsync(ptr, depth)
     }
 
     fun stop() {
-        val p = enginePtr
-        if (p != 0L) stopSearch(p)
+        val ptr = mainEnginePtr
+        if (ptr != 0L) {
+            stopSearch(ptr)
+        }
     }
 
     fun shutdown() {
-        synchronized(initLock) {
-            val p = enginePtr
-            if (p != 0L) {
-                runCatching { stopSearch(p); runCmd(p, "isready") }
-                runCatching { destroyEngine(p) }
-                enginePtr = 0L
+        synchronized(mainEngineLock) {
+            val ptr = mainEnginePtr
+            if (ptr != 0L) {
+                runCatching {
+                    stopSearch(ptr)
+                    runCmd(ptr, "isready")
+                }
+                runCatching { destroyEngine(ptr) }
+                mainEnginePtr = 0L
+                Log.i(TAG, "Main engine destroyed")
             }
         }
     }
 
-    fun readOutput(): String = readOutputNative()
+    fun readOutput(): String {
+        val ptr = mainEnginePtr
+        require(ptr != 0L) { "Main engine not initialized" }
+        return readOutputNative(ptr)
+    }
 
-    // ==== НОВЫЕ МЕТОДЫ ДЛЯ ПУЛА ====
+    // ==== API для пула движков ====
 
+    /**
+     * Создать новый независимый экземпляр движка
+     * @return ptr - указатель на экземпляр (handle)
+     */
     fun initEngineInstance(): Long {
         val ptr = initEngine()
-        require(ptr != 0L) { "Failed to init engine instance" }
+        require(ptr != 0L) { "Failed to initialize engine instance" }
+        Log.d(TAG, "✅ Engine instance created: ptr=$ptr")
         return ptr
     }
 
+    /**
+     * Отправить команду конкретному экземпляру
+     */
     fun sendToInstance(ptr: Long, cmd: String): String {
-        require(ptr != 0L) { "Invalid engine instance" }
+        require(ptr != 0L) { "Invalid engine instance ptr" }
         return runCmd(ptr, cmd)
     }
 
+    /**
+     * Запустить поиск для конкретного экземпляра
+     */
     fun goAsyncInstance(ptr: Long, depth: Int) {
-        require(ptr != 0L) { "Invalid engine instance" }
+        require(ptr != 0L) { "Invalid engine instance ptr" }
         goAsync(ptr, depth)
     }
 
+    /**
+     * Остановить поиск для конкретного экземпляра
+     */
     fun stopSearchInstance(ptr: Long) {
-        if (ptr != 0L) stopSearch(ptr)
-    }
-
-    fun destroyEngineInstance(ptr: Long) {
         if (ptr != 0L) {
-            runCatching { stopSearch(ptr); runCmd(ptr, "isready") }
-            runCatching { destroyEngine(ptr) }
+            stopSearch(ptr)
         }
     }
 
+    /**
+     * Уничтожить конкретный экземпляр
+     */
+    fun destroyEngineInstance(ptr: Long) {
+        if (ptr != 0L) {
+            runCatching {
+                stopSearch(ptr)
+                runCmd(ptr, "isready")
+            }
+            runCatching { destroyEngine(ptr) }
+            Log.d(TAG, "Engine instance destroyed: ptr=$ptr")
+        }
+    }
+
+    /**
+     * Прочитать вывод конкретного экземпляра
+     */
     fun readOutputFromInstance(ptr: Long): String {
-        // Каждый экземпляр имеет свой буфер вывода
-        // Но в текущей реализации uci_wrapper.cpp у нас один глобальный буфер
-        // Нужно переписать под множественные экземпляры
-        return readOutputNative()
+        require(ptr != 0L) { "Invalid engine instance ptr" }
+        return readOutputNative(ptr)
     }
 }
