@@ -1,11 +1,9 @@
 package com.github.movesense.analysis
 
-import android.content.Context
 import com.github.movesense.*
 import kotlinx.coroutines.*
 import java.util.UUID
 import android.util.Log
-import com.github.movesense.engine.EnginePool
 import kotlin.collections.get
 import kotlin.math.ceil
 import kotlin.math.max
@@ -29,20 +27,7 @@ class LocalGameAnalyzer(
         private val fenCache = ConcurrentHashMap<String, CachedPosition>()
         private const val MAX_CACHE_SIZE = 5000
 
-        // ПУЛ ДВИЖКОВ - КРИТИЧНО!
-        private var enginePool: EnginePool? = null
-
-        fun initializePool(context: Context, poolSize: Int = 3) {
-            if (enginePool == null) {
-                enginePool = EnginePool.getInstance(context, poolSize)
-                Log.i(TAG, "✅ Engine pool initialized with $poolSize workers")
-            }
-        }
-
-        fun shutdownPool() {
-            enginePool?.shutdown()
-            enginePool = null
-        }
+        // HTTP клиент для Lichess API
         private val lichessClient = OkHttpClient.Builder()
             .connectTimeout(3, TimeUnit.SECONDS)
             .readTimeout(5, TimeUnit.SECONDS)
@@ -54,7 +39,6 @@ class LocalGameAnalyzer(
             coerceInputValues = true
         }
     }
-
 
     private data class CachedPosition(
         val position: EngineClient.PositionDTO,
@@ -209,16 +193,16 @@ class LocalGameAnalyzer(
         skillLevel: Int?,
         lichessPreloaded: Map<String, EngineClient.PositionDTO> = emptyMap()
     ): EngineClient.PositionDTO {
-        // 0. Проверяем терминальную позицию
+        // 0. Проверяем, не является ли позиция терминальной
         if (isTerminalPosition(fen)) {
-            Log.i(TAG, "🏁 Terminal position detected")
+            Log.i(TAG, "🏁 Terminal position detected (mate/stalemate), skipping analysis")
             return createTerminalPositionEval(fen)
         }
 
         // 1. Проверяем кеш
         val cacheKey = getCacheKey(fen, depth)
         fenCache[cacheKey]?.let {
-            Log.d(TAG, "💾 Cache hit")
+            Log.d(TAG, "💾 Cache hit for position")
             return it.position
         }
 
@@ -238,16 +222,9 @@ class LocalGameAnalyzer(
             }
         }
 
-        // 4. КРИТИЧНО: Локальный анализ ЧЕРЕЗ ПУЛ!
-        Log.d(TAG, "🔧 Pool analysis: depth=$depth")
-
-        val pool = enginePool ?: run {
-            // Fallback на старый метод если пул не инициализирован
-            Log.w(TAG, "⚠️ Pool not initialized, using fallback")
-            return EngineClient.evaluateFenDetailed(fen, depth, multiPv, skillLevel)
-        }
-
-        val localResult = pool.analyzePosition(fen, depth, multiPv)
+        // 4. Локальный анализ
+        Log.d(TAG, "🔧 Local analysis: depth=$depth")
+        val localResult = EngineClient.evaluateFenDetailed(fen, depth, multiPv, skillLevel)
 
         // Кешируем результат
         fenCache[cacheKey] = CachedPosition(localResult)

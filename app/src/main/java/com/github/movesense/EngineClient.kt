@@ -302,7 +302,7 @@ object EngineClient {
 
     suspend fun analyzeGameByPgnWithProgress(
         pgn: String,
-        depth: Int = 12,
+        depth: Int = 16,
         multiPv: Int = 3,
         workersNb: Int = 2,
         header: GameHeader? = null,
@@ -358,7 +358,7 @@ object EngineClient {
 
     suspend fun analyzeGameByPgn(
         pgn: String,
-        depth: Int = 12,
+        depth: Int = 16,
         multiPv: Int = 3,
         workersNb: Int = 2,
         header: GameHeader? = null
@@ -708,60 +708,33 @@ object EngineClient {
             synchronized(listeners) { listeners.remove(l) }
         }
 
-        fun ensureStarted(ctx: android.content.Context) {
+        fun ensureStarted(ctx: Context) {
             if (started.getAndSet(true)) {
-                android.util.Log.d(LOCAL_TAG, "Native engine already started")
+                Log.d(LOCAL_TAG, "Engine already started")
                 return
             }
-
-            kotlinx.coroutines.runBlocking {
-                copyNNUEFromAssets(ctx)
+            web = EngineWebView.getInstance(ctx) { line ->
+                when {
+                    line == "ENGINE_READY" -> {
+                        engineReady.set(true)
+                        web?.markInitialized()
+                        Log.d(LOCAL_TAG, "✓ ENGINE_READY received")
+                    }
+                    else -> {
+                        synchronized(listeners) {
+                            listeners.forEach { l ->
+                                try { l(line) } catch (_: Exception) {}
+                            }
+                        }
+                    }
+                }
             }
-
-            StockfishBridge.ensureStarted()
-
-            val cores = Runtime.getRuntime().availableProcessors()
-
-            // КРИТИЧНО: используем ВСЕ ядра для максимальной скорости
-            val threads = cores.coerceIn(1, 8)
-
-            // КРИТИЧНО: Hash размер по формуле DroidFish
-            val hashMB = calculateOptimalHash()
-
-            android.util.Log.i(LOCAL_TAG, "🚀 Device: $cores cores, using $threads threads, ${hashMB}MB hash")
-
-            StockfishBridge.send("setoption name Threads value $threads")
-            StockfishBridge.send("setoption name Hash value $hashMB")
-            StockfishBridge.send("setoption name Ponder value false")
-
-            // КРИТИЧНО: для многопоточности
-            StockfishBridge.send("setoption name NumaPolicy value system")
-
-            val nnueDir = File(ctx.filesDir, "nnue")
-            val nnueFile = nnueDir.listFiles()?.firstOrNull { it.extension.equals("nnue", true) }
-
-            if (nnueFile != null && nnueFile.exists()) {
-                StockfishBridge.send("setoption name EvalFile value ${nnueFile.absolutePath}")
-                android.util.Log.i(LOCAL_TAG, "✅ NNUE: ${nnueFile.name} (${nnueFile.length() / 1024}KB)")
-            } else {
-                android.util.Log.e(LOCAL_TAG, "❌ NO NNUE - будет в 50x медленнее!")
+            web?.start()
+            engineScope.launch {
+                var attempts = 0
+                while (!engineReady.get() && attempts < 200) { delay(100); attempts++ }
+                if (!engineReady.get()) Log.e(LOCAL_TAG, "Init timeout")
             }
-
-            StockfishBridge.send("isready")
-        }
-
-        // КРИТИЧНО: оптимальный расчет Hash
-        private fun calculateOptimalHash(): Int {
-            val runtime = Runtime.getRuntime()
-            val maxMemory = runtime.maxMemory() / (1024 * 1024) // MB
-            val freeMemory = runtime.freeMemory() / (1024 * 1024)
-
-            // Используем до 30% доступной памяти для hash
-            val optimalHash = (maxMemory * 0.3).toInt().coerceIn(128, 2048)
-
-            android.util.Log.d(LOCAL_TAG, "💾 Memory: max=${maxMemory}MB, free=${freeMemory}MB, hash=$optimalHash MB")
-
-            return optimalHash
         }
 
         fun stop() {
@@ -933,20 +906,18 @@ object EngineClient {
     }
 
     // ===========================================================
-//                    НАТИВНЫЙ ДВИЖОК (JNI)
-//  Изолированный single-engine без конфликта с EnginePool
-// ===========================================================
+    //                     НАТИВНЫЙ ДВИЖОК (JNI)
+    // ===========================================================
+    // Переписан под минимальный StockfishBridge и чтение Debug Log File.
+
+    // ... остальной файл без изменений ...
     private object NativeUciEngine {
-        private const val TAG = "NativeUciEngine"
+        private const val NATIVE_TAG = "NativeUciEngine"
 
         private val started = java.util.concurrent.atomic.AtomicBoolean(false)
         private val engineMutex = kotlinx.coroutines.sync.Mutex()
         private var currentAnalysisJob: kotlinx.coroutines.Job? = null
 
-        // Собственный инстанс (НЕ глобальный)
-        @Volatile private var ptr: Long = 0L
-
-        // ------- Regex парсер UCI-вывода -------
         private val rxInfo = Regex("""^info\s+.*\bdepth\s+\d+.*""", RegexOption.MULTILINE)
         private val rxDepth = Regex("""\bdepth\s+(\d+)""")
         private val rxMultiPv = Regex("""\bmultipv\s+(\d+)""")
@@ -964,74 +935,50 @@ object EngineClient {
 
         fun ensureStarted(ctx: android.content.Context) {
             if (started.getAndSet(true)) {
-                android.util.Log.d(TAG, "Already started")
+                android.util.Log.d(NATIVE_TAG, "Native engine already started")
                 return
             }
 
-            // NNUE сначала
+            // КРИТИЧНО: Сначала копируем NNUE из assets!
             kotlinx.coroutines.runBlocking {
                 copyNNUEFromAssets(ctx)
             }
 
-            // Запускаем bridge (но не глобальный движок!)
             StockfishBridge.ensureStarted()
 
-            // Создаем СВОЙ инстанс
-            ptr = com.github.movesense.engine.StockfishBridge.initEngineInstance()
-            require(ptr != 0L) { "Failed to init native engine instance" }
-
-            // Настраиваем ТОЛЬКО этот инстанс
+            // КРИТИЧНО: ПРАВИЛЬНАЯ НАСТРОЙКА!
             val cores = Runtime.getRuntime().availableProcessors()
-            val threads = (cores - 1).coerceIn(1, 8) // оставим одно ядро системе
-            val hashMB = calculateOptimalHash()
+            val threads = (cores - 1).coerceIn(1, 8) // Оставляем 1 ядро системе
 
-            android.util.Log.i(TAG, "🚀 Single native instance: cores=$cores, threads=$threads, hash=${hashMB}MB (ptr=$ptr)")
+            android.util.Log.i(NATIVE_TAG, "🚀 Device has $cores cores, using $threads threads")
 
-            // Базовые UCI и опции
-            StockfishBridge.sendToInstance(ptr, "uci")
-            StockfishBridge.sendToInstance(ptr, "setoption name Threads value $threads")
-            StockfishBridge.sendToInstance(ptr, "setoption name Hash value $hashMB")
-            StockfishBridge.sendToInstance(ptr, "setoption name Ponder value false")
-            // Для стабильной многопоточности на Android
-            runCatching { StockfishBridge.sendToInstance(ptr, "setoption name NumaPolicy value system") }
+            StockfishBridge.send("setoption name Threads value $threads")
+            StockfishBridge.send("setoption name Hash value 1024") // 128MB хеш
+            StockfishBridge.send("setoption name Ponder value false")
 
-            // NNUE файла
-            val nnueDir = java.io.File(ctx.filesDir, "nnue")
+            // NNUE - КРИТИЧНО для скорости!
+            val nnueDir = File(ctx.filesDir, "nnue")
             val nnueFile = nnueDir.listFiles()?.firstOrNull { it.extension.equals("nnue", true) }
+
             if (nnueFile != null && nnueFile.exists()) {
-                StockfishBridge.sendToInstance(ptr, "setoption name EvalFile value ${nnueFile.absolutePath}")
-                android.util.Log.i(TAG, "✅ NNUE loaded: ${nnueFile.name} (${nnueFile.length() / 1024}KB)")
+                StockfishBridge.send("setoption name EvalFile value ${nnueFile.absolutePath}")
+                android.util.Log.i(NATIVE_TAG, "✅ NNUE loaded: ${nnueFile.name} (${nnueFile.length() / 1024}KB)")
             } else {
-                android.util.Log.w(TAG, "⚠️ NNUE file not found in ${nnueDir.absolutePath} — будет медленнее")
+                android.util.Log.e(NATIVE_TAG, "❌ NO NNUE FILE FOUND in ${nnueDir.absolutePath}")
+                android.util.Log.e(NATIVE_TAG, "⚠️ Performance will be 10-100x slower!")
             }
 
-            StockfishBridge.sendToInstance(ptr, "isready")
+            StockfishBridge.send("isready")
+            android.util.Log.d(NATIVE_TAG, "Native engine configured and ready")
         }
 
         fun stop() {
-            currentAnalysisJob?.cancel()
-            currentAnalysisJob = null
-            // Гасим ТОЛЬКО свой инстанс, не трогая пул и не делая shutdown bridge
-            if (ptr != 0L) {
-                runCatching { StockfishBridge.destroyEngineInstance(ptr) }
-                ptr = 0L
+            if (started.getAndSet(false)) {
+                currentAnalysisJob?.cancel()
+                runCatching { StockfishBridge.stop(); StockfishBridge.shutdown() }
             }
-            started.set(false)
-            android.util.Log.d(TAG, "Stopped")
         }
 
-        // Оптимальный Hash: ~30% доступной памяти процесса, с ограничениями
-        private fun calculateOptimalHash(): Int {
-            val rt = Runtime.getRuntime()
-            val maxMb = (rt.maxMemory() / (1024 * 1024)).toInt().coerceAtLeast(128)
-            val freeMb = ((rt.maxMemory() - (rt.totalMemory() - rt.freeMemory())) / (1024 * 1024)).toInt()
-            // Используем до 30% max, но не превышаем свободную / безопасные рамки
-            val candidate = (maxMb * 0.30).toInt()
-            val safe = candidate.coerceAtMost((freeMb * 0.8).coerceAtLeast(64.0).toInt())
-            return safe.coerceIn(128, 2048)
-        }
-
-        // ---------- Парсер накопленного вывода ----------
         private fun parseOutput(snapshot: String): Pair<List<EngineClient.LineDTO>, String?> {
             val acc = mutableMapOf<Int, AccLine>()
             var bestMove: String? = null
@@ -1063,7 +1010,6 @@ object EngineClient {
             return lines to bestMove
         }
 
-        // ---------- Чтение вывода до bestmove / глубины ----------
         private suspend fun pumpUntilBestmove(
             wantedDepth: Int,
             onPartial: ((List<EngineClient.LineDTO>) -> Unit)? = null,
@@ -1077,11 +1023,13 @@ object EngineClient {
             var totalReads = 0
 
             while (System.currentTimeMillis() - start < timeoutMs) {
-                val chunk = StockfishBridge.readOutputFromInstance(ptr)
+                val chunk = StockfishBridge.readOutput()
                 totalReads++
 
                 if (chunk.isNotEmpty()) {
                     emptyCount = 0
+                    android.util.Log.d(NATIVE_TAG, "📥 Read ${chunk.length} bytes at iter $totalReads")
+
                     sb.append(chunk)
                     val (lines, bestMove) = parseOutput(sb.toString())
 
@@ -1089,37 +1037,46 @@ object EngineClient {
                         val maxDepth = lines.maxOfOrNull { it.depth ?: 0 } ?: 0
                         if (maxDepth > lastDepth) {
                             lastDepth = maxDepth
+                            android.util.Log.i(NATIVE_TAG, "⬆️ Depth: $maxDepth")
                             onPartial?.invoke(lines)
                         }
                     }
 
                     if (bestMove != null) {
+                        android.util.Log.i(NATIVE_TAG, "✅ bestmove: $bestMove at depth $lastDepth")
                         best = bestMove
                         break
                     }
 
+                    // КРИТИЧНО: Обработка терминальных позиций
                     if (sb.contains("bestmove (none)")) {
+                        android.util.Log.i(NATIVE_TAG, "🏁 Terminal position: bestmove (none)")
                         best = null
                         break
                     }
 
                     if (wantedDepth > 0 && lastDepth >= wantedDepth) {
-                        StockfishBridge.stopSearchInstance(ptr)
+                        android.util.Log.i(NATIVE_TAG, "🛑 Reached depth $wantedDepth, stopping")
+                        StockfishBridge.stop()
                     }
                 } else {
                     emptyCount++
+                    if (emptyCount % 50 == 0) {
+                        android.util.Log.w(NATIVE_TAG, "⏳ $emptyCount empty reads, elapsed: ${System.currentTimeMillis() - start}ms")
+                    }
                     kotlinx.coroutines.delay(if (emptyCount < 5) 20 else if (emptyCount < 20) 50 else 100)
                 }
             }
 
-            val (lines, bm) = parseOutput(sb.toString())
-            val safe = if (lines.isEmpty())
-                listOf(EngineClient.LineDTO(pv = emptyList(), cp = null, mate = 0))
-            else lines
-            return safe to (best ?: bm)
+            android.util.Log.i(NATIVE_TAG, "📊 pump finished: totalReads=$totalReads, depth=$lastDepth, best=$best")
+
+            return parseOutput(sb.toString()).let { (lines, bm) ->
+                val finalBest = best ?: bm
+                val safe = if (lines.isEmpty()) listOf(EngineClient.LineDTO(pv = emptyList(), cp = null, mate = 0)) else lines
+                safe to finalBest
+            }
         }
 
-        // ---------- Публичные методы анализа ----------
         suspend fun evaluateFenDetailedLocal(
             fen: String,
             depth: Int,
@@ -1129,21 +1086,20 @@ object EngineClient {
             val ctx = appCtx ?: throw IllegalStateException("Context not set")
             ensureStarted(ctx)
             engineMutex.withLock {
-                // Очистка + настройки инстанса
-                StockfishBridge.readOutputFromInstance(ptr)
-                StockfishBridge.sendToInstance(ptr, "stop")
-                StockfishBridge.sendToInstance(ptr, "isready")
-                StockfishBridge.sendToInstance(ptr, "ucinewgame")
-                StockfishBridge.sendToInstance(ptr, "isready")
+                StockfishBridge.readOutput() // Очистка
+                StockfishBridge.send("stop")
+                StockfishBridge.send("isready")
+                StockfishBridge.send("ucinewgame")
+                StockfishBridge.send("isready")
 
                 if (skillLevel != null) {
-                    StockfishBridge.sendToInstance(ptr, "setoption name Skill Level value $skillLevel")
+                    StockfishBridge.send("setoption name Skill Level value $skillLevel")
                 }
-                StockfishBridge.sendToInstance(ptr, "setoption name MultiPV value ${multiPv.coerceAtLeast(1)}")
-                StockfishBridge.sendToInstance(ptr, "isready")
+                StockfishBridge.send("setoption name MultiPV value ${multiPv.coerceAtLeast(1)}")
+                StockfishBridge.send("isready")
 
-                StockfishBridge.sendToInstance(ptr, "position fen $fen")
-                StockfishBridge.goAsyncInstance(ptr, depth)
+                StockfishBridge.send("position fen $fen")
+                StockfishBridge.go(depth)
 
                 val (lines, best) = pumpUntilBestmove(depth, onPartial = null)
                 EngineClient.PositionDTO(lines, best ?: lines.firstOrNull()?.pv?.firstOrNull())
@@ -1156,28 +1112,28 @@ object EngineClient {
             multiPv: Int,
             skillLevel: Int?,
             onUpdate: (List<EngineClient.LineDTO>) -> Unit
-        ): EngineClient.PositionDTO = kotlinx.coroutines.coroutineScope {
+        ): EngineClient.PositionDTO = coroutineScope {
             val ctx = appCtx ?: throw IllegalStateException("Context not set")
             ensureStarted(ctx)
 
-            val res = kotlinx.coroutines.CompletableDeferred<EngineClient.PositionDTO>()
+            val res = CompletableDeferred<EngineClient.PositionDTO>()
             currentAnalysisJob?.cancel()
-            currentAnalysisJob = launch(kotlinx.coroutines.Dispatchers.IO) {
+            currentAnalysisJob = launch(Dispatchers.IO) {
                 engineMutex.withLock {
-                    StockfishBridge.readOutputFromInstance(ptr)
-                    StockfishBridge.sendToInstance(ptr, "stop")
-                    StockfishBridge.sendToInstance(ptr, "isready")
-                    StockfishBridge.sendToInstance(ptr, "ucinewgame")
-                    StockfishBridge.sendToInstance(ptr, "isready")
+                    StockfishBridge.readOutput()
+                    StockfishBridge.send("stop")
+                    StockfishBridge.send("isready")
+                    StockfishBridge.send("ucinewgame")
+                    StockfishBridge.send("isready")
 
                     if (skillLevel != null) {
-                        StockfishBridge.sendToInstance(ptr, "setoption name Skill Level value $skillLevel")
+                        StockfishBridge.send("setoption name Skill Level value $skillLevel")
                     }
-                    StockfishBridge.sendToInstance(ptr, "setoption name MultiPV value ${multiPv.coerceAtLeast(1)}")
-                    StockfishBridge.sendToInstance(ptr, "isready")
+                    StockfishBridge.send("setoption name MultiPV value ${multiPv.coerceAtLeast(1)}")
+                    StockfishBridge.send("isready")
 
-                    StockfishBridge.sendToInstance(ptr, "position fen $fen")
-                    StockfishBridge.goAsyncInstance(ptr, depth)
+                    StockfishBridge.send("position fen $fen")
+                    StockfishBridge.go(depth)
 
                     val (lines, best) = pumpUntilBestmove(depth, onPartial = { snap ->
                         if (snap.isNotEmpty()) onUpdate(snap)
