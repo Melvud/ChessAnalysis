@@ -109,22 +109,22 @@ fun calculateSmartDepth(
     pieceCount: Int
 ): Int {
     // Дебют с возможными облачными оценками
-    if (moveNumber < 12 || isOpening) return 12
+    if (moveNumber < 12 || isOpening) return 10
 
     // Явно выигранная/проигранная позиция
     if (lastEval != null && abs(lastEval) > 5.0f) return 10
 
     // Эндшпиль - увеличиваем глубину
-    if (pieceCount <= 10) return 20
+    if (pieceCount <= 10) return 15
 
     // Тактическая позиция - глубокий анализ
-    if (isTactical) return 18
+    if (isTactical) return 15
 
     // Спокойная миттельшпильная позиция
-    if (lastEval != null && abs(lastEval) < 1.5f) return 14
+    if (lastEval != null && abs(lastEval) < 1.5f) return 12
 
     // Стандартная глубина
-    return 15
+    return 14
 }
 
 // Копирование NNUE из assets
@@ -1036,14 +1036,14 @@ object EngineClient {
                 }
                 addListener(listener)
                 try {
-                    send("stop"); delay(150)
+                    send("stop"); delay(50)
                     sendAndWaitReady("isready")
-                    send("ucinewgame"); delay(100)
+                    send("ucinewgame");
                     sendAndWaitReady("isready")
                     if (skillLevel != null) { send("setoption name Skill Level value $skillLevel"); delay(50) }
                     if (multiPv > 1) { send("setoption name MultiPV value $multiPv"); delay(50) }
                     sendAndWaitReady("isready")
-                    send("position fen $fen"); delay(100)
+                    send("position fen $fen");
                     send("go depth $depth")
                     withTimeout(110_000) { done.await() }
                 } finally { removeListener(listener) }
@@ -1096,14 +1096,14 @@ object EngineClient {
                     }
                     addListener(listener)
                     try {
-                        send("stop"); delay(150)
+                        send("stop"); delay(50)
                         sendAndWaitReady("isready")
-                        send("ucinewgame"); delay(100)
+                        send("ucinewgame");
                         sendAndWaitReady("isready")
                         if (skillLevel != null) { send("setoption name Skill Level value $skillLevel"); delay(50) }
                         send("setoption name MultiPV value ${multiPv.coerceAtLeast(1)}"); delay(50)
                         sendAndWaitReady("isready")
-                        send("position fen $fen"); delay(100)
+                        send("position fen $fen");
                         send("go depth $depth")
                         withTimeout(170_000) { done.await() }
                         val lines = acc.entries.sortedBy { it.key }.map { (mp, a) ->

@@ -91,20 +91,44 @@ class LocalGameAnalyzer(
         multiPv: Int,
         skillLevel: Int?
     ): EngineClient.PositionDTO {
-        // 0. Проверяем, не является ли позиция терминальной
-        if (isTerminalPosition(fen)) {
-            Log.i(TAG, "🏁 Terminal position detected (mate/stalemate), skipping analysis")
+        // ОПТИМИЗАЦИЯ 1: Параллельная проверка терминальности и облачной оценки
+        val (isTerminal, cloudEval) = coroutineScope {
+            val terminalJob = async(Dispatchers.Default) {
+                isTerminalPosition(fen)
+            }
+            val cloudJob = async(Dispatchers.IO) {
+                CloudEvalCache.getEval(fen)
+            }
+
+            // Ждем только 500мс для облака
+            val cloud = withTimeoutOrNull(500) { cloudJob.await() }
+
+            terminalJob.await() to cloud
+        }
+
+        // 0. Терминальная позиция
+        if (isTerminal) {
+            Log.i(TAG, "🏁 Terminal position")
             return createTerminalPositionEval(fen)
         }
 
-        // 1. Проверяем кеш
+        // 1. Облачная оценка (если есть и глубина достаточна)
+        if (cloudEval != null) {
+            val cloudDepth = cloudEval.lines.firstOrNull()?.depth ?: 0
+            if (cloudDepth >= depth - 2) { // Допустимо на 2 меньше
+                Log.d(TAG, "☁️ Using cloud eval (depth=$cloudDepth)")
+                return cloudEval
+            }
+        }
+
+        // 2. Проверяем локальный кеш
         val cacheKey = getCacheKey(fen, depth)
         fenCache[cacheKey]?.let {
-            Log.d(TAG, "💾 Cache hit for position")
+            Log.d(TAG, "💾 Local cache hit")
             return it.position
         }
 
-        // 2. Локальный анализ
+        // 3. Локальный анализ (УБИРАЕМ delay!)
         Log.d(TAG, "🔧 Local analysis: depth=$depth")
         val localResult = EngineClient.evaluateFenDetailed(fen, depth, multiPv, skillLevel)
 
