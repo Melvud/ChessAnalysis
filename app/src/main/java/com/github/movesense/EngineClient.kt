@@ -1124,7 +1124,7 @@ object EngineClient {
     }
 
     // ОПТИМИЗАЦИЯ: Native Engine с оптимальными настройками Hash и Threads
-    private object NativeUciEngine {
+    internal object NativeUciEngine {
         private const val NATIVE_TAG = "NativeUciEngine"
 
         private val started = AtomicBoolean(false)
@@ -1159,32 +1159,76 @@ object EngineClient {
             StockfishBridge.ensureStarted()
 
             val cores = Runtime.getRuntime().availableProcessors()
-            // ОПТИМИЗАЦИЯ: Используем cores или cores-1 вместо cores-2
-            val threads = max(1, cores - 1)
+            val threads = max(1, cores - 1) // Используем cores-1 для стабильности
+            val optimalHash = min(1024, 128 * threads)
 
-            // ОПТИМИЗАЦИЯ: Hash 64MB на поток, максимум 512MB
-            val optimalHash = min(512, 64 * threads)
+            android.util.Log.i(NATIVE_TAG, "🚀 Device: $cores cores, configuring...")
 
-            android.util.Log.i(NATIVE_TAG, "🚀 Device: $cores cores, using $threads threads, Hash ${optimalHash}MB")
+            kotlinx.coroutines.runBlocking {
+                // 1. UCI инициализация
+                StockfishBridge.send("uci")
+                delay(300)
 
-            // КРИТИЧНО: Оптимальные настройки!
-            StockfishBridge.send("setoption name Threads value $threads")
-            StockfishBridge.send("setoption name Hash value $optimalHash")  // Оптимизированный размер!
-            StockfishBridge.send("setoption name Ponder value false")
+                // 2. Настройка потоков
+                StockfishBridge.send("setoption name Threads value $threads")
+                android.util.Log.i(NATIVE_TAG, "📤 Set Threads = $threads")
+                delay(150)
 
-            val nnueDir = File(ctx.filesDir, "nnue")
-            val nnueFile = nnueDir.listFiles()?.firstOrNull { it.extension.equals("nnue", true) }
+                // 3. Настройка Hash
+                StockfishBridge.send("setoption name Hash value $optimalHash")
+                android.util.Log.i(NATIVE_TAG, "📤 Set Hash = ${optimalHash}MB")
+                delay(150)
 
-            if (nnueFile != null && nnueFile.exists()) {
-                StockfishBridge.send("setoption name EvalFile value ${nnueFile.absolutePath}")
-                android.util.Log.i(NATIVE_TAG, "✅ NNUE loaded: ${nnueFile.name} (${nnueFile.length() / 1024}KB)")
-            } else {
-                android.util.Log.e(NATIVE_TAG, "❌ NO NNUE FILE FOUND in ${nnueDir.absolutePath}")
-                android.util.Log.e(NATIVE_TAG, "⚠️ Performance will be 10-100x slower!")
+                // 4. Отключаем Ponder (размышление в чужой ход)
+                StockfishBridge.send("setoption name Ponder value false")
+                delay(100)
+
+                // 5. NNUE
+                val nnueDir = File(ctx.filesDir, "nnue")
+                val nnueFile = nnueDir.listFiles()?.firstOrNull { it.extension.equals("nnue", true) }
+
+                if (nnueFile != null && nnueFile.exists()) {
+                    StockfishBridge.send("setoption name EvalFile value ${nnueFile.absolutePath}")
+                    android.util.Log.i(NATIVE_TAG, "📤 Set NNUE: ${nnueFile.name}")
+                    delay(200)
+                } else {
+                    android.util.Log.e(NATIVE_TAG, "❌ NO NNUE FILE!")
+                }
+
+                // 6. Подтверждение готовности
+                StockfishBridge.send("isready")
+                var confirmed = false
+                var attempts = 0
+
+                while (!confirmed && attempts < 50) {
+                    val output = StockfishBridge.readOutput()
+                    if (output.contains("readyok")) {
+                        confirmed = true
+                        android.util.Log.i(NATIVE_TAG, "✅ Engine ready: Threads=$threads, Hash=${optimalHash}MB")
+                    } else if (output.isNotEmpty()) {
+                        android.util.Log.d(NATIVE_TAG, "Engine output: ${output.take(200)}")
+                    }
+                    delay(100)
+                    attempts++
+                }
+
+                if (!confirmed) {
+                    android.util.Log.e(NATIVE_TAG, "⚠️ readyok не получен за ${attempts * 100}ms")
+                }
+
+                // 7. Финальная проверка: запускаем тестовый анализ
+                StockfishBridge.send("position startpos")
+                delay(50)
+                StockfishBridge.send("go depth 1")
+                delay(500)
+                val testOutput = StockfishBridge.readOutput()
+
+                if (testOutput.contains("bestmove")) {
+                    android.util.Log.i(NATIVE_TAG, "✅ Test analysis passed")
+                } else {
+                    android.util.Log.w(NATIVE_TAG, "⚠️ Test analysis failed")
+                }
             }
-
-            StockfishBridge.send("isready")
-            android.util.Log.d(NATIVE_TAG, "Native engine configured and ready")
         }
 
         suspend fun forceStop() {

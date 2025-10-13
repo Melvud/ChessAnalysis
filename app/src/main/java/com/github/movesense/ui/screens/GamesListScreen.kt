@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
@@ -48,6 +49,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.github.movesense.EngineClient
 import com.github.movesense.EngineClient.analyzeGameByPgnWithProgress
 import com.github.movesense.FullReport
 import com.github.movesense.GameHeader
@@ -57,12 +59,17 @@ import com.github.movesense.PgnChess
 import com.github.movesense.PositionEval
 import com.github.movesense.Provider
 import com.github.movesense.data.local.gameRepository
+import com.github.movesense.engine.StockfishBridge
 import com.github.movesense.ui.UserProfile
 import com.github.movesense.ui.components.BoardCanvas
+import com.github.movesense.utils.CpuMonitor
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlin.text.iterator
 import com.github.movesense.R
+import kotlin.math.max
 
 private const val TAG = "GamesListScreen"
 private const val PREFS_NAME = "games_list_prefs"
@@ -133,6 +140,17 @@ fun GamesListScreen(
     var reAnalyzeDepth by remember { mutableStateOf(12) }
     var reAnalyzeMultiPv by remember { mutableStateOf(3) }
     var reAnalyzeTargetPgn by remember { mutableStateOf<String?>(null) }
+
+    // ✅ НОВОЕ: Мониторинг CPU
+    LaunchedEffect(Unit) {
+        CpuMonitor.startMonitoring(scope)
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            CpuMonitor.stopMonitoring()
+        }
+    }
 
     fun playMoveSound(cls: MoveClass?, isCapture: Boolean) {
         val resId = when {
@@ -304,6 +322,10 @@ fun GamesListScreen(
                 livePositions = emptyList()
                 currentPlyForEval = 0
 
+                // ✅ НОВОЕ: Запускаем мониторинг CPU
+                Log.i(TAG, "🚀 Starting analysis with CPU monitoring...")
+                CpuMonitor.startMonitoring(scope)
+
                 val header = runCatching { PgnChess.headerFromPgn(fullPgn) }.getOrNull()
 
                 val accumulatedPositions = mutableMapOf<Int, PositionEval>()
@@ -365,12 +387,16 @@ fun GamesListScreen(
                 livePositions = report.positions
                 Log.d(TAG, "✅ Analysis complete, final positions count: ${livePositions.size}")
 
+                // ✅ НОВОЕ: Останавливаем мониторинг
+                CpuMonitor.stopMonitoring()
+
                 repo.saveReport(fullPgn, report)
                 showAnalysis = false
                 loadFromLocal()
                 onOpenReport(report)
             } catch (t: Throwable) {
                 showAnalysis = false
+                CpuMonitor.stopMonitoring()
                 Log.e(TAG, "Analysis error: ${t.message}", t)
                 Toast.makeText(
                     context,
@@ -395,6 +421,18 @@ fun GamesListScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.games_list)) },
                 actions = {
+                    // ✅ НОВОЕ: Кнопка теста многопоточности
+                    IconButton(onClick = {
+                        scope.launch {
+                            testMultithreading(context, scope)
+                        }
+                    }) {
+                        Icon(
+                            Icons.Default.BugReport,
+                            contentDescription = "Test Threads"
+                        )
+                    }
+
                     IconButton(onClick = { showSettingsDialog = true }) {
                         Icon(
                             Icons.Default.Settings,
@@ -824,6 +862,82 @@ fun GamesListScreen(
                 Spacer(Modifier.height(24.dp))
             }
         }
+    }
+}
+
+// ✅ НОВАЯ ФУНКЦИЯ: Тест многопоточности
+private suspend fun testMultithreading(
+    context: Context,
+    scope: kotlinx.coroutines.CoroutineScope
+) = withContext(Dispatchers.IO) {
+    withContext(Dispatchers.Main) {
+        Toast.makeText(context, "🧪 Тестирую потоки...", Toast.LENGTH_SHORT).show()
+    }
+
+    val testFen = "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3"
+
+    // Тест с 1 потоком
+    Log.i(TAG, "🔬 Test 1: Single thread")
+    EngineClient.NativeUciEngine.forceStop()
+    kotlinx.coroutines.delay(500)
+
+    StockfishBridge.ensureStarted()
+    StockfishBridge.send("setoption name Threads value 1")
+    kotlinx.coroutines.delay(100)
+    StockfishBridge.send("isready")
+    kotlinx.coroutines.delay(200)
+
+    val start1 = System.currentTimeMillis()
+    CpuMonitor.startMonitoring(scope)
+
+    EngineClient.evaluateFenDetailed(testFen, depth = 18, multiPv = 1, null)
+    val time1 = System.currentTimeMillis() - start1
+
+    CpuMonitor.stopMonitoring()
+    kotlinx.coroutines.delay(1000)
+
+    // Тест со всеми потоками
+    val cores = Runtime.getRuntime().availableProcessors()
+    Log.i(TAG, "🔬 Test 2: $cores threads")
+
+    EngineClient.NativeUciEngine.forceStop()
+    kotlinx.coroutines.delay(500)
+
+    StockfishBridge.ensureStarted()
+    StockfishBridge.send("setoption name Threads value $cores")
+    kotlinx.coroutines.delay(100)
+    StockfishBridge.send("isready")
+    kotlinx.coroutines.delay(200)
+
+    val startN = System.currentTimeMillis()
+    CpuMonitor.startMonitoring(scope)
+
+    EngineClient.evaluateFenDetailed(testFen, depth = 18, multiPv = 1, null)
+    val timeN = System.currentTimeMillis() - startN
+
+    CpuMonitor.stopMonitoring()
+
+    val speedup = time1.toFloat() / timeN
+    val expectedSpeedup = cores * 0.7f
+
+    val message = """
+        ⚙️ Ядер: $cores
+        
+        📊 РЕЗУЛЬТАТЫ:
+        1 поток: ${time1}ms
+        $cores потоков: ${timeN}ms
+        
+        🚀 Ускорение: ${String.format("%.2f", speedup)}x
+        📈 Ожидаемо: ${String.format("%.1f", expectedSpeedup)}x
+        
+        ${if (speedup < cores * 0.5f)
+        "❌ Потоки НЕ работают!\nПроверьте логи Logcat."
+    else
+        "✅ Потоки работают корректно!"}
+    """.trimIndent()
+
+    withContext(Dispatchers.Main) {
+        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
     }
 }
 
