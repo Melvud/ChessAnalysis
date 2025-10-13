@@ -1,6 +1,7 @@
 package com.github.movesense.analysis
 
 import com.github.movesense.*
+import com.github.movesense.api.LichessApiClient
 import kotlinx.coroutines.*
 import java.util.UUID
 import android.util.Log
@@ -16,6 +17,18 @@ class LocalGameAnalyzer(
 
     companion object {
         private const val TAG = "LocalGameAnalyzer"
+
+        // Минимальная глубина cloud eval для использования
+        private const val MIN_CLOUD_DEPTH = 18
+
+        // КРИТИЧНО: Короткий таймаут - если API не ответил быстро, используем локальный движок
+        private const val QUICK_API_TIMEOUT_MS = 3000L  // Максимум 3 секунды на ВСЕ API запросы
+
+        // Таймаут на один запрос
+        private const val SINGLE_REQUEST_TIMEOUT_MS = 1500L  // 1.5 секунды на запрос
+
+        // Максимум параллельных запросов
+        private const val MAX_PARALLEL_REQUESTS = 5  // Больше параллелизма для скорости
     }
 
     suspend fun evaluateGameByPgn(
@@ -49,14 +62,99 @@ class LocalGameAnalyzer(
 
         notify(progressId, 0, total, "preparing", startedAt, onProgress, null, null, null, null, null, null, null)
 
-        // 1) Evaluate all positions (including start)
+        // Собираем все уникальные FEN'ы
+        val allFens = mutableSetOf<String>()
+        allFens.add(startFen)
+        parsed.forEach { allFens.add(it.afterFen) }
+
+        Log.d(TAG, "🚀 Quick API check for ${allFens.size} positions...")
+
+        // КРИТИЧНО: Запускаем API загрузку в фоне НЕ БЛОКИРУЯ основной поток
+        // Если API быстрый (< 3 сек) - отлично, используем
+        // Если медленный - просто продолжаем с локальным движком
+        val apiJob = async(Dispatchers.IO) {
+            try {
+                withTimeout(QUICK_API_TIMEOUT_MS) {
+                    val cloudMap = fetchCloudEvalsQuick(allFens.toList(), multiPv)
+                    val openingMap = checkOpeningsQuick(allFens.toList())
+                    Pair(cloudMap, openingMap)
+                }
+            } catch (e: TimeoutCancellationException) {
+                Log.w(TAG, "⚠ API timeout, using local engine")
+                Pair(emptyMap(), emptyMap())
+            } catch (e: Exception) {
+                Log.w(TAG, "⚠ API error: ${e.message}, using local engine")
+                Pair(emptyMap(), emptyMap())
+            }
+        }
+
+        // НЕ ЖДЕМ API! Продолжаем с тем что есть в кеше
+        val (cloudEvalMap, openingMap) = try {
+            // Пытаемся получить результат, но БЕЗ БЛОКИРОВКИ
+            if (apiJob.isCompleted) {
+                apiJob.await()
+            } else {
+                // API еще не готов - используем только кеш
+                Log.d(TAG, "✓ API not ready, using cache only")
+                Pair(
+                    allFens.mapNotNull { fen ->
+                        LichessApiClient.getCachedCloudEval(fen, multiPv)?.let { fen to it }
+                    }.toMap(),
+                    allFens.mapNotNull { fen ->
+                        LichessApiClient.getCachedOpeningStatus(fen)?.let { fen to it }
+                    }.toMap()
+                )
+            }
+        } catch (e: Exception) {
+            Pair(emptyMap(), emptyMap())
+        }
+
+        Log.d(TAG, "✓ Starting analysis: cloud=${cloudEvalMap.size}, openings=${openingMap.count { it.value }}")
+
+        notify(progressId, 0, total, "evaluating", startedAt, onProgress, null, null, null, null, null, null, null)
+
+        // 1) Evaluate all positions
         val positions = mutableListOf<EngineClient.PositionDTO>()
 
         // Start position
-        val pos0 = EngineClient.evaluateFenDetailed(startFen, depth, multiPv, null)
+        val pos0 = evaluatePositionFromCache(
+            fen = startFen,
+            depth = depth,
+            multiPv = multiPv,
+            skillLevel = null,
+            cloudEvalMap = cloudEvalMap,
+            openingMap = openingMap
+        )
         positions.add(pos0)
 
-        notify(progressId, 0, total, "evaluating", startedAt, onProgress, null, null, null, null, null, null, null)
+        // МГНОВЕННОЕ отображение стартовой позиции
+        val whiteToPlayStart = sideToMoveIsWhite(startFen)
+        val topLineStart = pos0.lines.firstOrNull()
+        val evalCpStart = topLineStart?.cp?.let { if (!whiteToPlayStart) -it else it }
+        val evalMateStart = topLineStart?.mate?.let { m ->
+            when {
+                m == 0 && !whiteToPlayStart -> 1
+                m == 0 && whiteToPlayStart -> -1
+                !whiteToPlayStart -> -m
+                else -> m
+            }
+        }
+
+        notify(
+            id = progressId,
+            done = 0,
+            total = total,
+            stage = "evaluating",
+            startedAt = startedAt,
+            onProgress = onProgress,
+            etaMs = null,
+            fen = startFen,
+            san = null,
+            cls = null,
+            uci = null,
+            evalCp = evalCpStart,
+            evalMate = evalMateStart
+        )
 
         // Evaluate each move's resulting position
         for (i in 0 until total) {
@@ -66,26 +164,29 @@ class LocalGameAnalyzer(
             val uci = parsed[i].uci
 
             val posBefore = positions.last()
-            val posAfter = EngineClient.evaluateFenDetailed(afterFen, depth, multiPv, null)
+
+            val posAfter = evaluatePositionFromCache(
+                fen = afterFen,
+                depth = depth,
+                multiPv = multiPv,
+                skillLevel = null,
+                cloudEvalMap = cloudEvalMap,
+                openingMap = openingMap
+            )
             positions.add(posAfter)
 
-            // Нормализуем топ-линию для ПОСЛЕ-хода по её FEN
             val whiteToPlayAfter = sideToMoveIsWhite(afterFen)
             val topLine = posAfter.lines.firstOrNull()
 
-            // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: правильная обработка мата
             val evalCp = topLine?.cp?.let { if (!whiteToPlayAfter) -it else it }
             val evalMate = topLine?.mate?.let { m ->
                 when {
-                    // mate: 0 означает, что сторона ХОД КОТОРОЙ уже заматована
-                    m == 0 && !whiteToPlayAfter -> 1  // Чёрные заматованы → белые выиграли (+M1)
-                    m == 0 && whiteToPlayAfter -> -1  // Белые заматованы → чёрные выиграли (-M1)
-                    !whiteToPlayAfter -> -m  // Обычная инверсия для перспективы чёрных
-                    else -> m  // Перспектива белых без изменений
+                    m == 0 && !whiteToPlayAfter -> 1
+                    m == 0 && whiteToPlayAfter -> -1
+                    !whiteToPlayAfter -> -m
+                    else -> m
                 }
             }
-
-            Log.d(TAG, "Position after move $i: whiteToPlay=$whiteToPlayAfter, raw(cp=${topLine?.cp}, mate=${topLine?.mate}) -> norm(cp=$evalCp, mate=$evalMate)")
 
             val cls = classifyMoveUsingMoveClassifier(
                 beforeFen = beforeFen,
@@ -119,9 +220,12 @@ class LocalGameAnalyzer(
             )
         }
 
+        // Отменяем API job если он еще выполняется
+        apiJob.cancel()
+
         notify(progressId, total, total, "postprocess", startedAt, onProgress, 0L, null, null, null, null, null, null)
 
-        // 2) Build PositionEval list с ПРАВИЛЬНОЙ инверсией (индекс позиции = номер полухода)
+        // 2) Build PositionEval list
         val fens = listOf(startFen) + parsed.map { it.afterFen }
         val uciMoves = parsed.map { it.uci }
 
@@ -135,10 +239,10 @@ class LocalGameAnalyzer(
             )
         }
 
-        // 3) ACPL calculation — ИСПОЛЬЗУЕМ НОРМАЛИЗОВАННЫЕ PositionEval
+        // 3) ACPL calculation
         val acpl = ACPL.calculateACPLFromPositionEvals(positionEvals)
 
-        // 4) Win percentages — приоритет mate над cp внутри WinPercentage
+        // 4) Win percentages
         val winPercents = positionEvals.map { pos ->
             val first = pos.lines.firstOrNull()
             if (first != null && (first.cp != null || first.mate != null)) {
@@ -148,7 +252,7 @@ class LocalGameAnalyzer(
             }
         }
 
-        // 5) Per-move accuracy from win percentages
+        // 5) Per-move accuracy
         val movesAccuracy = Accuracy.perMoveAccFromWin(winPercents)
 
         // 6) Accuracy weights
@@ -158,7 +262,7 @@ class LocalGameAnalyzer(
         val whiteAcc = computePlayerAccuracy(movesAccuracy, weightsAcc, "white")
         val blackAcc = computePlayerAccuracy(movesAccuracy, weightsAcc, "black")
 
-        // 8) Move classification (по нормализованным позициям)
+        // 8) Move classification
         val classifiedPositions = MoveClassification.getMovesClassification(
             positionEvals,
             uciMoves,
@@ -196,6 +300,165 @@ class LocalGameAnalyzer(
         )
     }
 
+    /**
+     * БЫСТРАЯ загрузка cloud eval - возвращает только то, что успело загрузиться
+     */
+    private suspend fun fetchCloudEvalsQuick(
+        fens: List<String>,
+        multiPv: Int
+    ): Map<String, LichessApiClient.CloudEvalResponse> = coroutineScope {
+        val result = mutableMapOf<String, LichessApiClient.CloudEvalResponse>()
+
+        // Сначала берем все из кеша
+        val fensToFetch = mutableListOf<String>()
+        for (fen in fens) {
+            val cached = LichessApiClient.getCachedCloudEval(fen, multiPv)
+            if (cached != null && cached.depth >= MIN_CLOUD_DEPTH) {
+                result[fen] = cached
+            } else {
+                fensToFetch.add(fen)
+            }
+        }
+
+        if (fensToFetch.isEmpty()) {
+            Log.d(TAG, "✓ All ${result.size} from cache")
+            return@coroutineScope result
+        }
+
+        // Запускаем параллельные запросы БЕЗ ОЖИДАНИЯ ВСЕХ
+        // Используем только то, что успело загрузиться
+        val jobs = fensToFetch.chunked(MAX_PARALLEL_REQUESTS).flatMap { chunk ->
+            chunk.map { fen ->
+                async(Dispatchers.IO) {
+                    try {
+                        withTimeout(SINGLE_REQUEST_TIMEOUT_MS) {
+                            val cloudEval = LichessApiClient.getCloudEval(fen, multiPv)
+                            if (cloudEval != null && cloudEval.depth >= MIN_CLOUD_DEPTH) {
+                                fen to cloudEval
+                            } else {
+                                null
+                            }
+                        }
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
+            }
+        }
+
+        // Собираем ВСЕ результаты за раз (быстро)
+        jobs.mapNotNull { it.await() }.forEach { (fen, cloudEval) ->
+            result[fen] = cloudEval
+        }
+
+        Log.d(TAG, "✓ API: ${result.size}/${fens.size} (${fensToFetch.size - result.size + fens.size - fensToFetch.size} from cache)")
+        result
+    }
+
+    /**
+     * БЫСТРАЯ проверка дебютов
+     */
+    private suspend fun checkOpeningsQuick(
+        fens: List<String>
+    ): Map<String, Boolean> = coroutineScope {
+        val result = mutableMapOf<String, Boolean>()
+
+        val fensToCheck = mutableListOf<String>()
+        for (fen in fens) {
+            val cached = LichessApiClient.getCachedOpeningStatus(fen)
+            if (cached != null) {
+                result[fen] = cached
+            } else {
+                fensToCheck.add(fen)
+            }
+        }
+
+        if (fensToCheck.isEmpty()) {
+            return@coroutineScope result
+        }
+
+        val jobs = fensToCheck.chunked(MAX_PARALLEL_REQUESTS).flatMap { chunk ->
+            chunk.map { fen ->
+                async(Dispatchers.IO) {
+                    try {
+                        withTimeout(SINGLE_REQUEST_TIMEOUT_MS) {
+                            fen to LichessApiClient.isOpeningPosition(fen)
+                        }
+                    } catch (e: Exception) {
+                        fen to false
+                    }
+                }
+            }
+        }
+
+        jobs.forEach { job ->
+            val (fen, isOpening) = job.await()
+            result[fen] = isOpening
+        }
+
+        result
+    }
+
+    /**
+     * Оценивает позицию используя предзагруженный кеш
+     */
+    private suspend fun evaluatePositionFromCache(
+        fen: String,
+        depth: Int,
+        multiPv: Int,
+        skillLevel: Int?,
+        cloudEvalMap: Map<String, LichessApiClient.CloudEvalResponse>,
+        openingMap: Map<String, Boolean>
+    ): EngineClient.PositionDTO {
+        // Проверяем cloud eval в кеше
+        val cloudResult = cloudEvalMap[fen]
+
+        // Если есть качественный cloud eval - используем НЕМЕДЛЕННО
+        if (cloudResult != null && cloudResult.depth >= MIN_CLOUD_DEPTH && cloudResult.pvs.isNotEmpty()) {
+            Log.d(TAG, "✓ Cloud eval: depth=${cloudResult.depth}")
+            return cloudEvalToPositionDTO(cloudResult, multiPv)
+        }
+
+        // Проверяем дебютность из кеша
+        val isOpening = openingMap[fen] ?: false
+
+        // Определяем оптимальную глубину
+        val adjustedDepth = when {
+            isOpening -> min(depth, 8)  // Дебют - малая глубина
+            cloudResult != null && cloudResult.depth >= 12 -> min(depth, 10)  // Есть частичный cloud eval
+            else -> depth  // Обычная позиция
+        }
+
+        // Запускаем локальный движок
+        return EngineClient.evaluateFenDetailed(fen, adjustedDepth, multiPv, skillLevel)
+    }
+
+    /**
+     * Конвертирует CloudEvalResponse в PositionDTO
+     */
+    private fun cloudEvalToPositionDTO(
+        cloud: LichessApiClient.CloudEvalResponse,
+        multiPv: Int
+    ): EngineClient.PositionDTO {
+        val lines = cloud.pvs.take(multiPv).mapIndexed { index, pv ->
+            val moves = pv.moves?.split(" ")?.filter { it.isNotBlank() } ?: emptyList()
+            EngineClient.LineDTO(
+                pv = moves,
+                cp = pv.cp,
+                mate = pv.mate,
+                depth = cloud.depth,
+                multiPv = index + 1
+            )
+        }
+
+        val bestMove = lines.firstOrNull()?.pv?.firstOrNull()
+
+        return EngineClient.PositionDTO(
+            lines = lines.ifEmpty { listOf(EngineClient.LineDTO(pv = emptyList(), cp = 0)) },
+            bestMove = bestMove
+        )
+    }
+
     suspend fun analyzeMoveRealtimeDetailed(
         beforeFen: String,
         afterFen: String,
@@ -204,22 +467,44 @@ class LocalGameAnalyzer(
         multiPv: Int,
         skillLevel: Int?
     ): EngineClient.MoveRealtimeResult = withContext(Dispatchers.IO) {
-        val posBefore = EngineClient.evaluateFenDetailed(beforeFen, depth, multiPv, skillLevel)
-        val posAfter = EngineClient.evaluateFenDetailed(afterFen, depth, multiPv, skillLevel)
+        // Для реалтайм используем ТОЛЬКО кеш - никаких сетевых запросов
+        val cloudEvalMapBefore = mutableMapOf<String, LichessApiClient.CloudEvalResponse>()
+        val cloudEvalMapAfter = mutableMapOf<String, LichessApiClient.CloudEvalResponse>()
+        val openingMapBefore = mutableMapOf<String, Boolean>()
+        val openingMapAfter = mutableMapOf<String, Boolean>()
 
-        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Stockfish дает оценку со стороны того, кто ходит
+        // Проверяем только кеш
+        LichessApiClient.getCachedCloudEval(beforeFen, multiPv)?.let {
+            if (it.depth >= MIN_CLOUD_DEPTH) cloudEvalMapBefore[beforeFen] = it
+        }
+        LichessApiClient.getCachedCloudEval(afterFen, multiPv)?.let {
+            if (it.depth >= MIN_CLOUD_DEPTH) cloudEvalMapAfter[afterFen] = it
+        }
+        LichessApiClient.getCachedOpeningStatus(beforeFen)?.let {
+            openingMapBefore[beforeFen] = it
+        }
+        LichessApiClient.getCachedOpeningStatus(afterFen)?.let {
+            openingMapAfter[afterFen] = it
+        }
+
+        val posBefore = evaluatePositionFromCache(
+            beforeFen, depth, multiPv, skillLevel, cloudEvalMapBefore, openingMapBefore
+        )
+        val posAfter = evaluatePositionFromCache(
+            afterFen, depth, multiPv, skillLevel, cloudEvalMapAfter, openingMapAfter
+        )
+
         val whiteToPlayAfter = afterFen.split(" ").getOrNull(1) == "w"
 
         val topLine = posAfter.lines.firstOrNull()
 
-        // Нормализуем к перспективе белых (+ = белые выигрывают, - = чёрные выигрывают)
         val cpAfter = if (whiteToPlayAfter) topLine?.cp else topLine?.cp?.let { -it }
         val mateAfter = topLine?.mate?.let { m ->
             when {
-                m == 0 && whiteToPlayAfter -> -1  // Белые заматованы
-                m == 0 && !whiteToPlayAfter -> 1  // Чёрные заматованы
-                whiteToPlayAfter -> m  // Ход белых: без инверсии
-                else -> -m  // Ход чёрных: инвертируем
+                m == 0 && whiteToPlayAfter -> -1
+                m == 0 && !whiteToPlayAfter -> 1
+                whiteToPlayAfter -> m
+                else -> -m
             }
         }
 
@@ -229,7 +514,6 @@ class LocalGameAnalyzer(
             else -> 0f
         }
 
-        // Нормализуем все линии к перспективе белых
         val linesAfter = posAfter.lines.map { line ->
             val normalizedCp = if (whiteToPlayAfter) line.cp else line.cp?.let { -it }
             val normalizedMate = line.mate?.let { m ->
@@ -249,7 +533,6 @@ class LocalGameAnalyzer(
             )
         }
 
-        // Нормализуем позицию ПЕРЕД ходом для классификации
         val whiteToPlayBefore = beforeFen.split(" ").getOrNull(1) == "w"
 
         val posEvalBefore = PositionEval(
@@ -487,16 +770,9 @@ class LocalGameAnalyzer(
         }
     }
 
-    // ====== ДОПОЛНИТЕЛЬНЫЕ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======
-
     private fun sideToMoveIsWhite(fen: String): Boolean =
         fen.split(" ").getOrNull(1) == "w"
 
-    /**
-     * Нормализует весь PositionDTO в белую перспективу по КОНКРЕТНОМУ FEN позиции:
-     * если ход чёрных — инвертируем знаки у cp и mate для всех линий.
-     * КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: правильная обработка mate: 0
-     */
     private fun normalizeToWhitePOV(
         fen: String,
         pos: EngineClient.PositionDTO,
@@ -509,11 +785,10 @@ class LocalGameAnalyzer(
             val cp = line.cp?.let { if (!whiteToPlay) -it else it }
             val mate = line.mate?.let { m ->
                 when {
-                    // mate: 0 означает, что сторона ХОД КОТОРОЙ уже заматована
-                    m == 0 && !whiteToPlay -> 1  // Чёрные заматованы → белые выиграли (+M1)
-                    m == 0 && whiteToPlay -> -1  // Белые заматованы → чёрные выиграли (-M1)
-                    !whiteToPlay -> -m  // Обычная инверсия для перспективы чёрных
-                    else -> m  // Перспектива белых без изменений
+                    m == 0 && !whiteToPlay -> 1
+                    m == 0 && whiteToPlay -> -1
+                    !whiteToPlay -> -m
+                    else -> m
                 }
             }
             LineEval(
