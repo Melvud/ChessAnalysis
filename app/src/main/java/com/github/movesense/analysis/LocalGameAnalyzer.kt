@@ -145,48 +145,68 @@ class LocalGameAnalyzer(
             ?: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
         notify(progressId, 0, total, "preparing", startedAt, onProgress, null, null, null, null, null, null, null)
-
         notify(progressId, 0, total, "evaluating", startedAt, onProgress, null, null, null, null, null, null, null)
 
-        // 1) Evaluate all positions sequentially with adaptive depth
         val positions = mutableListOf<EngineClient.PositionDTO>()
+        var lastEval: Float? = null
 
-        // Start position
-        val startDepth = adaptiveDepth(0, total, depth)
+        // ОПТИМИЗАЦИЯ: Анализируем стартовую позицию с пониженной глубиной для дебюта
+        val isStartOpening = Openings.findOpening(startFen.split(" ")[0]) != null
+        val startDepth = if (isStartOpening) 10 else calculateSmartDepth(0, total, isStartOpening, null, false, 32)
+
         Log.i(TAG, "🎯 Analyzing start position with depth=$startDepth")
         val pos0 = evaluatePositionSmart(startFen, startDepth, multiPv, null)
         positions.add(pos0)
 
-        // Evaluate each move's resulting position sequentially with adaptive depth
+        // Evaluate each move's resulting position with smart adaptive depth
         for (i in 0 until total) {
             val beforeFen = if (i == 0) startFen else parsed[i - 1].afterFen
             val afterFen = parsed[i].afterFen
             val san = parsed[i].san
             val uci = parsed[i].uci
 
-            val currentDepth = adaptiveDepth(i + 1, total, depth)
+            // ОПТИМИЗАЦИЯ: Умная адаптивная глубина
+            val currentFenBoard = afterFen.split(" ")[0]
+            val isOpening = Openings.findOpening(currentFenBoard) != null
+            val pieceCount = currentFenBoard.count { it.isLetter() }
+            val isTactical = san.contains("x") || san.contains("+") || san.contains("#")
 
-            Log.d(TAG, "📍 Move ${i + 1}/$total: depth=$currentDepth")
+            val currentDepth = calculateSmartDepth(
+                moveNumber = i + 1,
+                totalMoves = total,
+                isOpening = isOpening,
+                lastEval = lastEval,
+                isTactical = isTactical,
+                pieceCount = pieceCount
+            )
+
+            Log.d(TAG, "📍 Move ${i + 1}/$total: depth=$currentDepth (opening=$isOpening, tactical=$isTactical, pieces=$pieceCount)")
 
             val posBefore = positions.last()
             val posAfter = evaluatePositionSmart(afterFen, currentDepth, multiPv, null)
             positions.add(posAfter)
 
-            // Normalize evaluation
+            // Update last eval for next iteration
             val whiteToPlayAfter = sideToMoveIsWhite(afterFen)
             val topLine = posAfter.lines.firstOrNull()
+
+            lastEval = when {
+                topLine?.mate != null -> if (topLine.mate!! > 0) 30f else -30f
+                topLine?.cp != null -> (if (whiteToPlayAfter) topLine.cp!! else -topLine.cp!!).toFloat() / 100f
+                else -> 0f
+            }
 
             val evalCp = topLine?.cp?.let { if (!whiteToPlayAfter) -it else it }
             val evalMate = topLine?.mate?.let { m ->
                 when {
-                    m == 0 && !whiteToPlayAfter -> 1  // Чёрные заматованы
-                    m == 0 && whiteToPlayAfter -> -1  // Белые заматованы
+                    m == 0 && !whiteToPlayAfter -> 1
+                    m == 0 && whiteToPlayAfter -> -1
                     !whiteToPlayAfter -> -m
                     else -> m
                 }
             }
 
-            Log.d(TAG, "Position after move $i: whiteToPlay=$whiteToPlayAfter, raw(cp=${topLine?.cp}, mate=${topLine?.mate}) -> norm(cp=$evalCp, mate=$evalMate)")
+            Log.d(TAG, "Position after move $i: whiteToPlay=$whiteToPlayAfter, eval=${lastEval}, depth=$currentDepth")
 
             val cls = classifyMoveUsingMoveClassifier(
                 beforeFen = beforeFen,
@@ -222,24 +242,23 @@ class LocalGameAnalyzer(
 
         notify(progressId, total, total, "postprocess", startedAt, onProgress, 0L, null, null, null, null, null, null)
 
-        // 2) Build PositionEval list with proper inversion
+        // Build PositionEval list with proper inversion
         val fens = listOf(startFen) + parsed.map { it.afterFen }
         val uciMoves = parsed.map { it.uci }
 
         val positionEvals: List<PositionEval> = positions.mapIndexed { idx, pos ->
-            val currentFen = fens[idx]
             normalizeToWhitePOV(
-                fen = currentFen,
+                fen = fens[idx],
                 pos = pos,
                 idx = idx,
                 isLast = idx == positions.lastIndex
             )
         }
 
-        // 3) ACPL calculation
+        // ACPL calculation
         val acpl = ACPL.calculateACPLFromPositionEvals(positionEvals)
 
-        // 4) Win percentages
+        // Win percentages
         val winPercents = positionEvals.map { pos ->
             val first = pos.lines.firstOrNull()
             if (first != null && (first.cp != null || first.mate != null)) {
@@ -249,24 +268,24 @@ class LocalGameAnalyzer(
             }
         }
 
-        // 5) Per-move accuracy from win percentages
+        // Per-move accuracy from win percentages
         val movesAccuracy = Accuracy.perMoveAccFromWin(winPercents)
 
-        // 6) Accuracy weights
+        // Accuracy weights
         val weightsAcc = getAccuracyWeights(winPercents)
 
-        // 7) Player accuracy
+        // Player accuracy
         val whiteAcc = computePlayerAccuracy(movesAccuracy, weightsAcc, "white")
         val blackAcc = computePlayerAccuracy(movesAccuracy, weightsAcc, "black")
 
-        // 8) Move classification
+        // Move classification
         val classifiedPositions = MoveClassification.getMovesClassification(
             positionEvals,
             uciMoves,
             fens
         )
 
-        // 9) Build move reports
+        // Build move reports
         val moves = buildMoveReports(
             classifiedPositions,
             fens,
@@ -276,7 +295,7 @@ class LocalGameAnalyzer(
             parsed.map { it.san }
         )
 
-        // 10) Estimated Elo
+        // Estimated Elo
         val tagsHeader = PgnChess.headerFromPgn(pgn)
         val hdr = header ?: tagsHeader
         val est = EstimateElo.computeEstimatedElo(positionEvals, hdr.whiteElo?.plus(200), hdr.blackElo?.plus(200))
@@ -284,7 +303,7 @@ class LocalGameAnalyzer(
         notify(progressId, total, total, "done", startedAt, onProgress, 0L, null, null, null, null, null, null)
 
         val totalTime = System.currentTimeMillis() - startedAt
-        Log.i(TAG, "✅ Analysis complete! Time: ${totalTime}ms, Positions: ${positionEvals.size}, Cache size: ${fenCache.size}")
+        Log.i(TAG, "✅ Analysis complete! Time: ${totalTime}ms, Positions: ${positionEvals.size}")
 
         FullReport(
             header = hdr,

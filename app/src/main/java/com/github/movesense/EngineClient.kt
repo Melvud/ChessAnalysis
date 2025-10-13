@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.PowerManager
 import android.util.Log
+import androidx.collection.LruCache
 import com.github.movesense.engine.EngineWebView
 import com.github.movesense.engine.StockfishBridge
 import com.github.movesense.analysis.LocalGameAnalyzer
@@ -30,7 +31,101 @@ import java.util.regex.Pattern
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
+
+// ОПТИМИЗАЦИЯ: Кэш для оценок позиций
+private val POSITION_CACHE = LruCache<String, EngineClient.PositionDTO>(15000)
+private val EVALUATION_CACHE = LruCache<String, EngineClient.StockfishResponse>(5000)
+
+// ОПТИМИЗАЦИЯ: Lichess Cloud Eval API
+private suspend fun getLichessCloudEval(fen: String): EngineClient.PositionDTO? = withContext(Dispatchers.IO) {
+    try {
+        val client = OkHttpClient.Builder()
+            .connectTimeout(1, TimeUnit.SECONDS)
+            .readTimeout(1, TimeUnit.SECONDS)
+            .build()
+
+        val fenEncoded = java.net.URLEncoder.encode(fen, "UTF-8")
+        val url = "https://lichess.org/api/cloud-eval?fen=$fenEncoded&multiPv=3"
+
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", "application/json")
+            .get()
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return@withContext null
+
+            val body = response.body?.string() ?: return@withContext null
+            val json = Json { ignoreUnknownKeys = true }
+
+            // Парсим ответ Lichess
+            val cloudData = json.decodeFromString<LichessCloudResponse>(body)
+
+            // Конвертируем в наш формат
+            val lines = cloudData.pvs.mapIndexed { index, pv ->
+                EngineClient.LineDTO(
+                    pv = pv.moves.split(" "),
+                    cp = pv.cp,
+                    mate = pv.mate,
+                    depth = cloudData.depth ?: 40,
+                    multiPv = index + 1
+                )
+            }
+
+            EngineClient.PositionDTO(lines, lines.firstOrNull()?.pv?.firstOrNull())
+        }
+    } catch (e: Exception) {
+        Log.d("CloudEval", "Failed to get cloud eval: ${e.message}")
+        null
+    }
+}
+
+@Serializable
+private data class LichessCloudResponse(
+    val fen: String,
+    val knodes: Int,
+    val depth: Int?,
+    val pvs: List<PvData>
+)
+
+@Serializable
+private data class PvData(
+    val moves: String,
+    val cp: Int? = null,
+    val mate: Int? = null
+)
+
+// ОПТИМИЗАЦИЯ: Умная адаптивная глубина
+fun calculateSmartDepth(
+    moveNumber: Int,
+    totalMoves: Int,
+    isOpening: Boolean,
+    lastEval: Float?,
+    isTactical: Boolean,
+    pieceCount: Int
+): Int {
+    // Дебют с возможными облачными оценками
+    if (moveNumber < 12 || isOpening) return 12
+
+    // Явно выигранная/проигранная позиция
+    if (lastEval != null && abs(lastEval) > 5.0f) return 10
+
+    // Эндшпиль - увеличиваем глубину
+    if (pieceCount <= 10) return 20
+
+    // Тактическая позиция - глубокий анализ
+    if (isTactical) return 18
+
+    // Спокойная миттельшпильная позиция
+    if (lastEval != null && abs(lastEval) < 1.5f) return 14
+
+    // Стандартная глубина
+    return 15
+}
 
 // Копирование NNUE из assets
 private suspend fun copyNNUEFromAssets(ctx: Context) = withContext(Dispatchers.IO) {
@@ -92,7 +187,6 @@ object EngineClient {
 
         Openings.init(appCtx!!)
 
-        // КРИТИЧНО: Wake Lock для производительности
         val powerManager = appCtx!!.getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
@@ -124,17 +218,16 @@ object EngineClient {
     suspend fun setEngineMode(mode: EngineMode) = withContext(Dispatchers.Main) {
         Log.d(TAG, "Setting engine mode to: $mode")
 
-        // КРИТИЧНО: Останавливаем текущий движок ПЕРЕД переключением
         when (_engineMode.value) {
             EngineMode.LOCAL -> {
                 WebLocalEngine.forceStop()
-                delay(500) // Даем время на остановку WebView
+                delay(500)
             }
             EngineMode.NATIVE -> {
                 NativeUciEngine.forceStop()
                 delay(300)
             }
-            EngineMode.SERVER -> { /* no-op */ }
+            EngineMode.SERVER -> { }
         }
 
         _engineMode.value = mode
@@ -201,8 +294,6 @@ object EngineClient {
         _percent.value = null
         _stage.value = null
     }
-
-    // ==== DTO ====
 
     @Serializable
     data class LineDTO(
@@ -297,16 +388,19 @@ object EngineClient {
         val skillLevel: Int? = null
     )
 
-    // ==== ПУБЛИЧНЫЕ API ====
-
+    // ОПТИМИЗАЦИЯ: С кэшем и облачными оценками
     suspend fun analyzeFen(
         fen: String,
-        depth: Int = 14,
+        depth: Int = 15,  // СНИЖЕНО с 14
         skillLevel: Int? = null
     ): StockfishResponse = withContext(Dispatchers.IO) {
         acquireWakeLock()
         try {
-            when (engineMode.value) {
+            // Проверяем кэш
+            val cacheKey = "$fen:$depth:${skillLevel ?: 0}"
+            EVALUATION_CACHE[cacheKey]?.let { return@withContext it }
+
+            val result = when (engineMode.value) {
                 EngineMode.LOCAL -> {
                     val pos = WebLocalEngine.evaluateFenDetailedLocal(fen, depth, 3, skillLevel)
                     val top = pos.lines.firstOrNull()
@@ -321,6 +415,10 @@ object EngineClient {
                 }
                 EngineMode.SERVER -> requestEvaluatePosition(fen, depth, 3, skillLevel)
             }
+
+            // Кэшируем результат
+            EVALUATION_CACHE.put(cacheKey, result)
+            result
         } finally {
             releaseWakeLock()
         }
@@ -328,7 +426,7 @@ object EngineClient {
 
     suspend fun analyzeGameByPgnWithProgress(
         pgn: String,
-        depth: Int = 16,
+        depth: Int = 15,  // СНИЖЕНО с 16
         multiPv: Int = 3,
         workersNb: Int = 2,
         header: GameHeader? = null,
@@ -379,7 +477,7 @@ object EngineClient {
 
     suspend fun analyzeGameByPgn(
         pgn: String,
-        depth: Int = 16,
+        depth: Int = 15,  // СНИЖЕНО
         multiPv: Int = 3,
         workersNb: Int = 2,
         header: GameHeader? = null
@@ -415,7 +513,7 @@ object EngineClient {
         beforeFen: String,
         afterFen: String,
         uciMove: String,
-        depth: Int = 18,
+        depth: Int = 15,  // СНИЖЕНО с 18
         multiPv: Int = 3,
         skillLevel: Int? = null
     ): MoveRealtimeResult = withContext(Dispatchers.IO) {
@@ -479,7 +577,7 @@ object EngineClient {
         beforeFen: String,
         afterFen: String,
         uciMove: String,
-        depth: Int = 14,
+        depth: Int = 15,  // СНИЖЕНО
         multiPv: Int = 3,
         skillLevel: Int? = null
     ): Triple<Float, MoveClass, String?> = withContext(Dispatchers.IO) {
@@ -533,7 +631,7 @@ object EngineClient {
         beforeFen: String,
         afterFen: String,
         uciMove: String,
-        depth: Int = 14,
+        depth: Int = 15,  // СНИЖЕНО
         multiPv: Int = 3
     ): Triple<Float, MoveClass, String?> = withContext(Dispatchers.IO) {
         acquireWakeLock()
@@ -569,16 +667,34 @@ object EngineClient {
         }
     }
 
+    // ОПТИМИЗАЦИЯ: С кэшем и облачной оценкой
     suspend fun evaluateFenDetailedStreaming(
         fen: String,
-        depth: Int = 14,
+        depth: Int = 15,  // СНИЖЕНО
         multiPv: Int = 3,
         skillLevel: Int? = null,
         onUpdate: (List<LineDTO>) -> Unit
     ): PositionDTO = withContext(Dispatchers.IO) {
         acquireWakeLock()
         try {
-            when (engineMode.value) {
+            // Проверяем кэш
+            val cacheKey = "$fen:$depth:$multiPv:${skillLevel ?: 0}"
+            POSITION_CACHE[cacheKey]?.let {
+                onUpdate(it.lines)
+                return@withContext it
+            }
+
+            // Пытаемся получить из Lichess Cloud
+            if (engineMode.value != EngineMode.SERVER && skillLevel == null) {
+                getLichessCloudEval(fen)?.let { cloudResult ->
+                    Log.d(TAG, "✅ Cloud eval hit for FEN")
+                    POSITION_CACHE.put(cacheKey, cloudResult)
+                    onUpdate(cloudResult.lines)
+                    return@withContext cloudResult
+                }
+            }
+
+            val result = when (engineMode.value) {
                 EngineMode.LOCAL -> WebLocalEngine.evaluateFenDetailedStreamingLocal(
                     fen, depth, multiPv, skillLevel, onUpdate
                 )
@@ -591,20 +707,38 @@ object EngineClient {
                     pos
                 }
             }
+
+            // Кэшируем результат
+            POSITION_CACHE.put(cacheKey, result)
+            result
         } finally {
             releaseWakeLock()
         }
     }
 
+    // ОПТИМИЗАЦИЯ: С кэшем и облачной оценкой
     suspend fun evaluateFenDetailed(
         fen: String,
-        depth: Int = 14,
+        depth: Int = 15,  // СНИЖЕНО
         multiPv: Int = 3,
         skillLevel: Int? = null
     ): PositionDTO = withContext(Dispatchers.IO) {
         acquireWakeLock()
         try {
-            when (engineMode.value) {
+            // Проверяем кэш
+            val cacheKey = "$fen:$depth:$multiPv:${skillLevel ?: 0}"
+            POSITION_CACHE[cacheKey]?.let { return@withContext it }
+
+            // Пытаемся получить из Lichess Cloud
+            if (engineMode.value != EngineMode.SERVER && skillLevel == null) {
+                getLichessCloudEval(fen)?.let { cloudResult ->
+                    Log.d(TAG, "✅ Cloud eval hit for FEN")
+                    POSITION_CACHE.put(cacheKey, cloudResult)
+                    return@withContext cloudResult
+                }
+            }
+
+            val result = when (engineMode.value) {
                 EngineMode.LOCAL -> WebLocalEngine.evaluateFenDetailedLocal(fen, depth, multiPv, skillLevel)
                 EngineMode.NATIVE -> NativeUciEngine.evaluateFenDetailedLocal(fen, depth, multiPv, skillLevel)
                 EngineMode.SERVER -> {
@@ -619,17 +753,20 @@ object EngineClient {
                     }
                 }
             }
+
+            // Кэшируем результат
+            POSITION_CACHE.put(cacheKey, result)
+            result
         } finally {
             releaseWakeLock()
         }
     }
 
-    // ==== Wake Lock Management ====
-
+    // Wake Lock Management
     private fun acquireWakeLock() {
         try {
             if (wakeLock?.isHeld == false) {
-                wakeLock?.acquire(10 * 60 * 1000L) // 10 minutes
+                wakeLock?.acquire(10 * 60 * 1000L)
                 Log.d(TAG, "✅ WakeLock acquired")
             }
         } catch (e: Exception) {
@@ -647,8 +784,6 @@ object EngineClient {
             Log.w(TAG, "Failed to release WakeLock", e)
         }
     }
-
-    // ==== ВСПОМОГАТЕЛЬНОЕ ====
 
     private fun parseMoveClass(classification: String?): MoveClass {
         return when (classification?.uppercase()) {
@@ -755,9 +890,7 @@ object EngineClient {
         }
     }
 
-    // ===========================================================
-    //               ЛОКАЛЬНЫЙ WEBVIEW-ДВИЖОК
-    // ===========================================================
+    // Web Local Engine (без изменений кроме depth)
     private object WebLocalEngine {
         private const val LOCAL_TAG = "WebLocalEngine"
 
@@ -990,9 +1123,7 @@ object EngineClient {
         }
     }
 
-    // ===========================================================
-    //                     НАТИВНЫЙ ДВИЖОК (JNI)
-    // ===========================================================
+    // ОПТИМИЗАЦИЯ: Native Engine с оптимальными настройками Hash и Threads
     private object NativeUciEngine {
         private const val NATIVE_TAG = "NativeUciEngine"
 
@@ -1028,13 +1159,17 @@ object EngineClient {
             StockfishBridge.ensureStarted()
 
             val cores = Runtime.getRuntime().availableProcessors()
-            val threads = cores.coerceIn(1, 8) - 2// ИСПОЛЬЗУЕМ ВСЕ ДОСТУПНЫЕ ЯДРА!
+            // ОПТИМИЗАЦИЯ: Используем cores или cores-1 вместо cores-2
+            val threads = max(1, cores - 1)
 
-            android.util.Log.i(NATIVE_TAG, "🚀 Device has $cores cores, using $threads threads")
+            // ОПТИМИЗАЦИЯ: Hash 64MB на поток, максимум 512MB
+            val optimalHash = min(512, 64 * threads)
 
-            // КРИТИЧНО: Оптимальные настройки для максимальной производительности!
+            android.util.Log.i(NATIVE_TAG, "🚀 Device: $cores cores, using $threads threads, Hash ${optimalHash}MB")
+
+            // КРИТИЧНО: Оптимальные настройки!
             StockfishBridge.send("setoption name Threads value $threads")
-            StockfishBridge.send("setoption name Hash value 2048") // 256MB - оптимально для мобильных
+            StockfishBridge.send("setoption name Hash value $optimalHash")  // Оптимизированный размер!
             StockfishBridge.send("setoption name Ponder value false")
 
             val nnueDir = File(ctx.filesDir, "nnue")
@@ -1061,7 +1196,7 @@ object EngineClient {
             runCatching {
                 StockfishBridge.stop()
                 kotlinx.coroutines.delay(100)
-                StockfishBridge.readOutput() // Очистка буфера
+                StockfishBridge.readOutput()
             }
 
             android.util.Log.d(NATIVE_TAG, "✓ Native engine stopped")
