@@ -5,6 +5,7 @@ package com.github.movesense
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.PowerManager
 import android.util.Log
 import com.github.movesense.engine.EngineWebView
 import com.github.movesense.engine.StockfishBridge
@@ -30,21 +31,18 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
 import kotlin.math.max
-import kotlinx.coroutines.isActive // <— добавлено для использования isActive в стриминговом режиме
 
-// В начало файла, после imports:
+// Копирование NNUE из assets
 private suspend fun copyNNUEFromAssets(ctx: Context) = withContext(Dispatchers.IO) {
     try {
         val nnueDir = File(ctx.filesDir, "nnue")
         if (!nnueDir.exists()) nnueDir.mkdirs()
 
-        // Проверяем, уже скопировано ли
         if (nnueDir.listFiles()?.any { it.extension == "nnue" } == true) {
             Log.d("NNUE", "✅ Already copied to filesDir")
             return@withContext
         }
 
-        // Копируем все .nnue файлы из assets/nnue/
         val assetManager = ctx.assets
         val nnueFiles = assetManager.list("nnue")?.filter { it.endsWith(".nnue") } ?: emptyList()
 
@@ -74,7 +72,6 @@ object EngineClient {
 
     private const val TAG = "EngineClient"
 
-    /** ТРИ режима: сервер, локальный WebView и нативный (JNI) UCI. */
     enum class EngineMode { SERVER, LOCAL, NATIVE }
 
     private val _engineMode = MutableStateFlow(EngineMode.SERVER)
@@ -87,15 +84,24 @@ object EngineClient {
     @SuppressLint("StaticFieldLeak")
     private var appCtx: Context? = null
 
-    fun setAndroidContext(ctx: Context) {
+    private var wakeLock: PowerManager.WakeLock? = null
+
+    suspend fun setAndroidContext(ctx: Context) {
         Log.d(TAG, "Setting Android context")
         appCtx = ctx.applicationContext
 
         Openings.init(appCtx!!)
 
+        // КРИТИЧНО: Wake Lock для производительности
+        val powerManager = appCtx!!.getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "ChessAnalysis::EngineWakeLock"
+        )
+
         if (prefs == null) {
             prefs = appCtx!!.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val saved = when (prefs?.getString(KEY_ENGINE_MODE, EngineMode.LOCAL.name)) {
+            val saved = when (prefs?.getString(KEY_ENGINE_MODE, EngineMode.SERVER.name)) {
                 EngineMode.SERVER.name -> EngineMode.SERVER
                 EngineMode.NATIVE.name -> EngineMode.NATIVE
                 else -> EngineMode.LOCAL
@@ -108,16 +114,29 @@ object EngineClient {
                 EngineMode.NATIVE -> runCatching { NativeUciEngine.ensureStarted(appCtx!!) }
                     .onFailure { e -> Log.e(TAG, "Failed to start NATIVE engine on restore", e) }
                 EngineMode.SERVER -> {
-                    WebLocalEngine.stop()
-                    NativeUciEngine.stop()
+                    WebLocalEngine.forceStop()
+                    NativeUciEngine.forceStop()
                 }
             }
         }
     }
 
-    /** Переключение режима в рантайме. */
     suspend fun setEngineMode(mode: EngineMode) = withContext(Dispatchers.Main) {
         Log.d(TAG, "Setting engine mode to: $mode")
+
+        // КРИТИЧНО: Останавливаем текущий движок ПЕРЕД переключением
+        when (_engineMode.value) {
+            EngineMode.LOCAL -> {
+                WebLocalEngine.forceStop()
+                delay(500) // Даем время на остановку WebView
+            }
+            EngineMode.NATIVE -> {
+                NativeUciEngine.forceStop()
+                delay(300)
+            }
+            EngineMode.SERVER -> { /* no-op */ }
+        }
+
         _engineMode.value = mode
         prefs?.edit()?.putString(KEY_ENGINE_MODE, mode.name)?.apply()
 
@@ -125,7 +144,8 @@ object EngineClient {
 
         when (mode) {
             EngineMode.LOCAL -> {
-                NativeUciEngine.stop()
+                NativeUciEngine.forceStop()
+                delay(100)
                 runCatching { WebLocalEngine.ensureStarted(ctx) }
                     .onFailure { e ->
                         Log.e(TAG, "Failed to start LOCAL Web engine", e)
@@ -133,7 +153,8 @@ object EngineClient {
                     }
             }
             EngineMode.NATIVE -> {
-                WebLocalEngine.stop()
+                WebLocalEngine.forceStop()
+                delay(100)
                 runCatching { NativeUciEngine.ensureStarted(ctx) }
                     .onFailure { e ->
                         Log.e(TAG, "Failed to start NATIVE engine", e)
@@ -141,8 +162,8 @@ object EngineClient {
                     }
             }
             EngineMode.SERVER -> {
-                WebLocalEngine.stop()
-                NativeUciEngine.stop()
+                WebLocalEngine.forceStop()
+                NativeUciEngine.forceStop()
             }
         }
     }
@@ -283,20 +304,25 @@ object EngineClient {
         depth: Int = 14,
         skillLevel: Int? = null
     ): StockfishResponse = withContext(Dispatchers.IO) {
-        when (engineMode.value) {
-            EngineMode.LOCAL -> {
-                val pos = WebLocalEngine.evaluateFenDetailedLocal(fen, depth, 3, skillLevel)
-                val top = pos.lines.firstOrNull()
-                val eval = top?.cp?.let { it / 100.0 }
-                StockfishResponse(true, eval, top?.mate, pos.bestMove, top?.pv?.joinToString(" "))
+        acquireWakeLock()
+        try {
+            when (engineMode.value) {
+                EngineMode.LOCAL -> {
+                    val pos = WebLocalEngine.evaluateFenDetailedLocal(fen, depth, 3, skillLevel)
+                    val top = pos.lines.firstOrNull()
+                    val eval = top?.cp?.let { it / 100.0 }
+                    StockfishResponse(true, eval, top?.mate, pos.bestMove, top?.pv?.joinToString(" "))
+                }
+                EngineMode.NATIVE -> {
+                    val pos = NativeUciEngine.evaluateFenDetailedLocal(fen, depth, 3, skillLevel)
+                    val top = pos.lines.firstOrNull()
+                    val eval = top?.cp?.let { it / 100.0 }
+                    StockfishResponse(true, eval, top?.mate, pos.bestMove, top?.pv?.joinToString(" "))
+                }
+                EngineMode.SERVER -> requestEvaluatePosition(fen, depth, 3, skillLevel)
             }
-            EngineMode.NATIVE -> {
-                val pos = NativeUciEngine.evaluateFenDetailedLocal(fen, depth, 3, skillLevel)
-                val top = pos.lines.firstOrNull()
-                val eval = top?.cp?.let { it / 100.0 }
-                StockfishResponse(true, eval, top?.mate, pos.bestMove, top?.pv?.joinToString(" "))
-            }
-            EngineMode.SERVER -> requestEvaluatePosition(fen, depth, 3, skillLevel)
+        } finally {
+            releaseWakeLock()
         }
     }
 
@@ -308,51 +334,46 @@ object EngineClient {
         header: GameHeader? = null,
         onProgress: (ProgressSnapshot) -> Unit = {}
     ): FullReport = coroutineScope {
-        when (engineMode.value) {
-            EngineMode.LOCAL -> {
-                val analyzer = LocalGameAnalyzer { _, percent, stage ->
-                    _percent.value = percent; _stage.value = stage
-                }
-                val clockData = parseClockDataFromPgn(pgn)
-                val report = analyzer.evaluateGameByPgnWithProgress(
-                    pgn, depth, multiPv, workersNb, header, onProgress
-                )
-                report.copy(clockData = clockData)
-            }
-            EngineMode.NATIVE -> {
-                val analyzer = LocalGameAnalyzer { _, percent, stage ->
-                    _percent.value = percent; _stage.value = stage
-                }
-                val clockData = parseClockDataFromPgn(pgn)
-                val report = analyzer.evaluateGameByPgnWithProgress(
-                    pgn, depth, multiPv, workersNb, header, onProgress
-                )
-                report.copy(clockData = clockData)
-            }
-            EngineMode.SERVER -> {
-                val progressId = UUID.randomUUID().toString()
-                resetProgress()
-                val poller = launch(Dispatchers.IO) { pollProgress(progressId, onProgress) }
-                try {
-                    withContext(Dispatchers.IO) {
-                        pingOrThrow()
-                        val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game?progressId=$progressId"
-                        val clockData = parseClockDataFromPgn(pgn)
-                        val normalized = normalizePgn(pgn)
-                        val payload = json.encodeToString(GamePgnRequest(normalized, depth, multiPv, workersNb, header))
-                        val req = Request.Builder().url(url).header("Accept", "application/json").header("User-Agent", UA)
-                            .post(payload.toRequestBody(JSON_MEDIA)).build()
-                        client.newCall(req).execute().use { resp ->
-                            val body = resp.body?.string().orEmpty()
-                            if (!resp.isSuccessful) error("HTTP ${resp.code}: ${body.take(300)}")
-                            val report = json.decodeFromString<FullReport>(body)
-                            report.copy(clockData = clockData)
-                        }
+        acquireWakeLock()
+        try {
+            when (engineMode.value) {
+                EngineMode.LOCAL, EngineMode.NATIVE -> {
+                    val analyzer = LocalGameAnalyzer { _, percent, stage ->
+                        _percent.value = percent; _stage.value = stage
                     }
-                } finally {
-                    poller.cancel(); poller.join()
+                    val clockData = parseClockDataFromPgn(pgn)
+                    val report = analyzer.evaluateGameByPgnWithProgress(
+                        pgn, depth, multiPv, workersNb, header, onProgress
+                    )
+                    report.copy(clockData = clockData)
+                }
+                EngineMode.SERVER -> {
+                    val progressId = UUID.randomUUID().toString()
+                    resetProgress()
+                    val poller = launch(Dispatchers.IO) { pollProgress(progressId, onProgress) }
+                    try {
+                        withContext(Dispatchers.IO) {
+                            pingOrThrow()
+                            val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game?progressId=$progressId"
+                            val clockData = parseClockDataFromPgn(pgn)
+                            val normalized = normalizePgn(pgn)
+                            val payload = json.encodeToString(GamePgnRequest(normalized, depth, multiPv, workersNb, header))
+                            val req = Request.Builder().url(url).header("Accept", "application/json").header("User-Agent", UA)
+                                .post(payload.toRequestBody(JSON_MEDIA)).build()
+                            client.newCall(req).execute().use { resp ->
+                                val body = resp.body?.string().orEmpty()
+                                if (!resp.isSuccessful) error("HTTP ${resp.code}: ${body.take(300)}")
+                                val report = json.decodeFromString<FullReport>(body)
+                                report.copy(clockData = clockData)
+                            }
+                        }
+                    } finally {
+                        poller.cancel(); poller.join()
+                    }
                 }
             }
+        } finally {
+            releaseWakeLock()
         }
     }
 
@@ -363,25 +384,30 @@ object EngineClient {
         workersNb: Int = 2,
         header: GameHeader? = null
     ): FullReport = withContext(Dispatchers.IO) {
-        when (engineMode.value) {
-            EngineMode.LOCAL, EngineMode.NATIVE -> {
-                val analyzer = LocalGameAnalyzer { _, percent, stage ->
-                    _percent.value = percent; _stage.value = stage
+        acquireWakeLock()
+        try {
+            when (engineMode.value) {
+                EngineMode.LOCAL, EngineMode.NATIVE -> {
+                    val analyzer = LocalGameAnalyzer { _, percent, stage ->
+                        _percent.value = percent; _stage.value = stage
+                    }
+                    analyzer.evaluateGameByPgn(pgn, depth, multiPv, workersNb, header)
                 }
-                analyzer.evaluateGameByPgn(pgn, depth, multiPv, workersNb, header)
-            }
-            EngineMode.SERVER -> {
-                pingOrThrow()
-                val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game"
-                val payload = json.encodeToString(GamePgnRequest(normalizePgn(pgn), depth, multiPv, workersNb, header))
-                val req = Request.Builder().url(url).header("Accept", "application/json").header("User-Agent", UA)
-                    .post(payload.toRequestBody(JSON_MEDIA)).build()
-                client.newCall(req).execute().use { resp ->
-                    val body = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) error("http_${resp.code}: ${body.take(300)}")
-                    json.decodeFromString(body)
+                EngineMode.SERVER -> {
+                    pingOrThrow()
+                    val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game"
+                    val payload = json.encodeToString(GamePgnRequest(normalizePgn(pgn), depth, multiPv, workersNb, header))
+                    val req = Request.Builder().url(url).header("Accept", "application/json").header("User-Agent", UA)
+                        .post(payload.toRequestBody(JSON_MEDIA)).build()
+                    client.newCall(req).execute().use { resp ->
+                        val body = resp.body?.string().orEmpty()
+                        if (!resp.isSuccessful) error("http_${resp.code}: ${body.take(300)}")
+                        json.decodeFromString(body)
+                    }
                 }
             }
+        } finally {
+            releaseWakeLock()
         }
     }
 
@@ -393,58 +419,59 @@ object EngineClient {
         multiPv: Int = 3,
         skillLevel: Int? = null
     ): MoveRealtimeResult = withContext(Dispatchers.IO) {
-        when (engineMode.value) {
-            EngineMode.LOCAL -> {
-                val analyzer = LocalGameAnalyzer()
-                analyzer.analyzeMoveRealtimeDetailed(beforeFen, afterFen, uciMove, depth, multiPv, skillLevel)
-            }
-            EngineMode.NATIVE -> {
-                val analyzer = LocalGameAnalyzer()
-                analyzer.analyzeMoveRealtimeDetailed(beforeFen, afterFen, uciMove, depth, multiPv, skillLevel)
-            }
-            EngineMode.SERVER -> {
-                val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
-                val payload = json.encodeToString(
-                    EvaluateMoveRealtimeRequest(beforeFen, afterFen, uciMove, depth, multiPv, skillLevel)
-                )
-                val req = Request.Builder().url(url).header("Accept", "application/json").header("User-Agent", UA)
-                    .post(payload.toRequestBody(JSON_MEDIA)).build()
+        acquireWakeLock()
+        try {
+            when (engineMode.value) {
+                EngineMode.LOCAL, EngineMode.NATIVE -> {
+                    val analyzer = LocalGameAnalyzer()
+                    analyzer.analyzeMoveRealtimeDetailed(beforeFen, afterFen, uciMove, depth, multiPv, skillLevel)
+                }
+                EngineMode.SERVER -> {
+                    val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
+                    val payload = json.encodeToString(
+                        EvaluateMoveRealtimeRequest(beforeFen, afterFen, uciMove, depth, multiPv, skillLevel)
+                    )
+                    val req = Request.Builder().url(url).header("Accept", "application/json").header("User-Agent", UA)
+                        .post(payload.toRequestBody(JSON_MEDIA)).build()
 
-                client.newCall(req).execute().use { resp ->
-                    val text = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) error("http_${resp.code}: ${text.take(300)}")
+                    client.newCall(req).execute().use { resp ->
+                        val text = resp.body?.string().orEmpty()
+                        if (!resp.isSuccessful) error("http_${resp.code}: ${text.take(300)}")
 
-                    val parsed = runCatching { json.decodeFromString<MoveEvalDTO>(text) }.getOrNull()
-                        ?: run {
-                            val pos = json.decodeFromString<PositionDTO>(text)
-                            MoveEvalDTO(lines = pos.lines, bestMove = pos.bestMove, moveClassification = null)
+                        val parsed = runCatching { json.decodeFromString<MoveEvalDTO>(text) }.getOrNull()
+                            ?: run {
+                                val pos = json.decodeFromString<PositionDTO>(text)
+                                MoveEvalDTO(lines = pos.lines, bestMove = pos.bestMove, moveClassification = null)
+                            }
+
+                        val whiteToPlayAfter = afterFen.split(" ").getOrNull(1) == "w"
+                        val topLine = parsed.lines.firstOrNull()
+
+                        val evalAfter: Float = when {
+                            topLine?.mate != null -> if (whiteToPlayAfter) (if (topLine.mate!! > 0) 30f else -30f) else (if (topLine.mate!! > 0) -30f else 30f)
+                            topLine?.cp != null -> (if (whiteToPlayAfter) topLine.cp!! else -topLine.cp!!).toFloat() / 100f
+                            else -> 0f
                         }
 
-                    val whiteToPlayAfter = afterFen.split(" ").getOrNull(1) == "w"
-                    val top = parsed.lines.firstOrNull()
+                        val linesAfter = parsed.lines.map { line ->
+                            val normalizedCp = if (whiteToPlayAfter) line.cp else line.cp?.let { -it }
+                            val normalizedMate = line.mate?.let { m -> if (whiteToPlayAfter) m else -m }
+                            LineDTO(
+                                pv = line.pv,
+                                cp = normalizedCp,
+                                mate = normalizedMate,
+                                depth = line.depth,
+                                multiPv = line.multiPv
+                            )
+                        }
 
-                    val evalAfter: Float = when {
-                        top?.mate != null -> if (whiteToPlayAfter) (if (top.mate!! > 0) 30f else -30f) else (if (top.mate!! > 0) -30f else 30f)
-                        top?.cp != null -> (if (whiteToPlayAfter) top.cp!! else -top.cp!!).toFloat() / 100f
-                        else -> 0f
+                        val cls = parseMoveClass(parsed.moveClassification)
+                        MoveRealtimeResult(evalAfter, cls, parsed.bestMove, linesAfter.take(3))
                     }
-
-                    val linesAfter = parsed.lines.map { line ->
-                        val normalizedCp = if (whiteToPlayAfter) line.cp else line.cp?.let { -it }
-                        val normalizedMate = line.mate?.let { m -> if (whiteToPlayAfter) m else -m }
-                        LineDTO(
-                            pv = line.pv,
-                            cp = normalizedCp,
-                            mate = normalizedMate,
-                            depth = line.depth,
-                            multiPv = line.multiPv
-                        )
-                    }
-
-                    val cls = parseMoveClass(parsed.moveClassification)
-                    MoveRealtimeResult(evalAfter, cls, parsed.bestMove, linesAfter.take(3))
                 }
             }
+        } finally {
+            releaseWakeLock()
         }
     }
 
@@ -456,44 +483,49 @@ object EngineClient {
         multiPv: Int = 3,
         skillLevel: Int? = null
     ): Triple<Float, MoveClass, String?> = withContext(Dispatchers.IO) {
-        when (engineMode.value) {
-            EngineMode.LOCAL, EngineMode.NATIVE -> {
-                val detailed = analyzeMoveRealtimeDetailed(beforeFen, afterFen, uciMove, depth, multiPv, skillLevel)
-                Triple(detailed.evalAfter, detailed.moveClass, detailed.bestMove)
-            }
-            EngineMode.SERVER -> {
-                val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
-                val payload = json.encodeToString(
-                    EvaluateMoveRealtimeRequest(beforeFen, afterFen, uciMove, depth, multiPv, skillLevel)
-                )
-                val req = Request.Builder()
-                    .url(url)
-                    .header("Accept", "application/json")
-                    .header("User-Agent", UA)
-                    .post(payload.toRequestBody(JSON_MEDIA))
-                    .build()
+        acquireWakeLock()
+        try {
+            when (engineMode.value) {
+                EngineMode.LOCAL, EngineMode.NATIVE -> {
+                    val detailed = analyzeMoveRealtimeDetailed(beforeFen, afterFen, uciMove, depth, multiPv, skillLevel)
+                    Triple(detailed.evalAfter, detailed.moveClass, detailed.bestMove)
+                }
+                EngineMode.SERVER -> {
+                    val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
+                    val payload = json.encodeToString(
+                        EvaluateMoveRealtimeRequest(beforeFen, afterFen, uciMove, depth, multiPv, skillLevel)
+                    )
+                    val req = Request.Builder()
+                        .url(url)
+                        .header("Accept", "application/json")
+                        .header("User-Agent", UA)
+                        .post(payload.toRequestBody(JSON_MEDIA))
+                        .build()
 
-                client.newCall(req).execute().use { resp ->
-                    val text = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) error("http_${resp.code}: ${text.take(300)}")
+                    client.newCall(req).execute().use { resp ->
+                        val text = resp.body?.string().orEmpty()
+                        if (!resp.isSuccessful) error("http_${resp.code}: ${text.take(300)}")
 
-                    val parsed = runCatching { json.decodeFromString<MoveEvalDTO>(text) }.getOrNull()
-                        ?: run {
-                            val pos = json.decodeFromString<PositionDTO>(text)
-                            MoveEvalDTO(lines = pos.lines, bestMove = pos.bestMove, moveClassification = null)
+                        val parsed = runCatching { json.decodeFromString<MoveEvalDTO>(text) }.getOrNull()
+                            ?: run {
+                                val pos = json.decodeFromString<PositionDTO>(text)
+                                MoveEvalDTO(lines = pos.lines, bestMove = pos.bestMove, moveClassification = null)
+                            }
+
+                        val top = parsed.lines.firstOrNull()
+                        val evalAfter: Float = when {
+                            top?.mate != null -> if (top.mate!! > 0) 30f else -30f
+                            top?.cp != null -> top.cp!!.toFloat() / 100f
+                            else -> 0f
                         }
 
-                    val top = parsed.lines.firstOrNull()
-                    val evalAfter: Float = when {
-                        top?.mate != null -> if (top.mate!! > 0) 30f else -30f
-                        top?.cp != null -> top.cp!!.toFloat() / 100f
-                        else -> 0f
+                        val cls = parseMoveClass(parsed.moveClassification)
+                        Triple(evalAfter, cls, parsed.bestMove)
                     }
-
-                    val cls = parseMoveClass(parsed.moveClassification)
-                    Triple(evalAfter, cls, parsed.bestMove)
                 }
             }
+        } finally {
+            releaseWakeLock()
         }
     }
 
@@ -504,31 +536,36 @@ object EngineClient {
         depth: Int = 14,
         multiPv: Int = 3
     ): Triple<Float, MoveClass, String?> = withContext(Dispatchers.IO) {
-        when (engineMode.value) {
-            EngineMode.LOCAL, EngineMode.NATIVE -> {
-                val result = analyzeMoveRealtimeDetailed(beforeFen, afterFen, uciMove, depth, multiPv, null)
-                Triple(result.evalAfter, result.moveClass, result.bestMove)
-            }
-            EngineMode.SERVER -> {
-                pingOrThrow()
-                val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game/by-fens"
-                val payload = json.encodeToString(
-                    FensUciRequest(listOf(beforeFen, afterFen), listOf(uciMove), depth, multiPv)
-                )
-                val req = Request.Builder().url(url).header("Accept", "application/json").header("User-Agent", UA)
-                    .post(payload.toRequestBody(JSON_MEDIA)).build()
-                client.newCall(req).execute().use { resp ->
-                    val text = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) error("http_${resp.code}: ${text.take(300)}")
-                    val report = json.decodeFromString<FullReport>(text)
-                    val evalAfter = report.positions.getOrNull(1)?.lines?.firstOrNull()?.let { line ->
-                        line.mate?.let { if (it > 0) 30f else -30f } ?: (line.cp?.toFloat()?.div(100f))
-                    } ?: 0f
-                    val cls = report.moves.firstOrNull()?.classification ?: MoveClass.OKAY
-                    val best = report.positions.getOrNull(0)?.lines?.firstOrNull()?.pv?.firstOrNull()
-                    Triple(evalAfter, cls, best)
+        acquireWakeLock()
+        try {
+            when (engineMode.value) {
+                EngineMode.LOCAL, EngineMode.NATIVE -> {
+                    val result = analyzeMoveRealtimeDetailed(beforeFen, afterFen, uciMove, depth, multiPv, null)
+                    Triple(result.evalAfter, result.moveClass, result.bestMove)
+                }
+                EngineMode.SERVER -> {
+                    pingOrThrow()
+                    val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game/by-fens"
+                    val payload = json.encodeToString(
+                        FensUciRequest(listOf(beforeFen, afterFen), listOf(uciMove), depth, multiPv)
+                    )
+                    val req = Request.Builder().url(url).header("Accept", "application/json").header("User-Agent", UA)
+                        .post(payload.toRequestBody(JSON_MEDIA)).build()
+                    client.newCall(req).execute().use { resp ->
+                        val text = resp.body?.string().orEmpty()
+                        if (!resp.isSuccessful) error("http_${resp.code}: ${text.take(300)}")
+                        val report = json.decodeFromString<FullReport>(text)
+                        val evalAfter = report.positions.getOrNull(1)?.lines?.firstOrNull()?.let { line ->
+                            line.mate?.let { if (it > 0) 30f else -30f } ?: (line.cp?.toFloat()?.div(100f))
+                        } ?: 0f
+                        val cls = report.moves.firstOrNull()?.classification ?: MoveClass.OKAY
+                        val best = report.positions.getOrNull(0)?.lines?.firstOrNull()?.pv?.firstOrNull()
+                        Triple(evalAfter, cls, best)
+                    }
                 }
             }
+        } finally {
+            releaseWakeLock()
         }
     }
 
@@ -539,18 +576,23 @@ object EngineClient {
         skillLevel: Int? = null,
         onUpdate: (List<LineDTO>) -> Unit
     ): PositionDTO = withContext(Dispatchers.IO) {
-        when (engineMode.value) {
-            EngineMode.LOCAL -> WebLocalEngine.evaluateFenDetailedStreamingLocal(
-                fen, depth, multiPv, skillLevel, onUpdate
-            )
-            EngineMode.NATIVE -> NativeUciEngine.evaluateFenDetailedStreamingLocal(
-                fen, depth, multiPv, skillLevel, onUpdate
-            )
-            EngineMode.SERVER -> {
-                val pos = evaluateFenDetailed(fen, depth, multiPv, skillLevel)
-                onUpdate(pos.lines)
-                pos
+        acquireWakeLock()
+        try {
+            when (engineMode.value) {
+                EngineMode.LOCAL -> WebLocalEngine.evaluateFenDetailedStreamingLocal(
+                    fen, depth, multiPv, skillLevel, onUpdate
+                )
+                EngineMode.NATIVE -> NativeUciEngine.evaluateFenDetailedStreamingLocal(
+                    fen, depth, multiPv, skillLevel, onUpdate
+                )
+                EngineMode.SERVER -> {
+                    val pos = evaluateFenDetailed(fen, depth, multiPv, skillLevel)
+                    onUpdate(pos.lines)
+                    pos
+                }
             }
+        } finally {
+            releaseWakeLock()
         }
     }
 
@@ -560,20 +602,49 @@ object EngineClient {
         multiPv: Int = 3,
         skillLevel: Int? = null
     ): PositionDTO = withContext(Dispatchers.IO) {
-        when (engineMode.value) {
-            EngineMode.LOCAL -> WebLocalEngine.evaluateFenDetailedLocal(fen, depth, multiPv, skillLevel)
-            EngineMode.NATIVE -> NativeUciEngine.evaluateFenDetailedLocal(fen, depth, multiPv, skillLevel)
-            EngineMode.SERVER -> {
-                val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
-                val body = json.encodeToString(EvaluatePositionRequest(fen, depth, multiPv, skillLevel))
-                val req = Request.Builder().url(url).header("Accept", "application/json").header("User-Agent", UA)
-                    .post(body.toRequestBody(JSON_MEDIA)).build()
-                client.newCall(req).execute().use { resp ->
-                    val text = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) error("http_${resp.code}: ${text.take(300)}")
-                    json.decodeFromString(text)
+        acquireWakeLock()
+        try {
+            when (engineMode.value) {
+                EngineMode.LOCAL -> WebLocalEngine.evaluateFenDetailedLocal(fen, depth, multiPv, skillLevel)
+                EngineMode.NATIVE -> NativeUciEngine.evaluateFenDetailedLocal(fen, depth, multiPv, skillLevel)
+                EngineMode.SERVER -> {
+                    val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/position"
+                    val body = json.encodeToString(EvaluatePositionRequest(fen, depth, multiPv, skillLevel))
+                    val req = Request.Builder().url(url).header("Accept", "application/json").header("User-Agent", UA)
+                        .post(body.toRequestBody(JSON_MEDIA)).build()
+                    client.newCall(req).execute().use { resp ->
+                        val text = resp.body?.string().orEmpty()
+                        if (!resp.isSuccessful) error("http_${resp.code}: ${text.take(300)}")
+                        json.decodeFromString(text)
+                    }
                 }
             }
+        } finally {
+            releaseWakeLock()
+        }
+    }
+
+    // ==== Wake Lock Management ====
+
+    private fun acquireWakeLock() {
+        try {
+            if (wakeLock?.isHeld == false) {
+                wakeLock?.acquire(10 * 60 * 1000L) // 10 minutes
+                Log.d(TAG, "✅ WakeLock acquired")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to acquire WakeLock", e)
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                Log.d(TAG, "✅ WakeLock released")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to release WakeLock", e)
         }
     }
 
@@ -685,7 +756,7 @@ object EngineClient {
     }
 
     // ===========================================================
-    //               ЛОКАЛЬНЫЙ WEBVIEW-ДВИЖОК (как было)
+    //               ЛОКАЛЬНЫЙ WEBVIEW-ДВИЖОК
     // ===========================================================
     private object WebLocalEngine {
         private const val LOCAL_TAG = "WebLocalEngine"
@@ -713,6 +784,7 @@ object EngineClient {
                 Log.d(LOCAL_TAG, "Engine already started")
                 return
             }
+            engineReady.set(false)
             web = EngineWebView.getInstance(ctx) { line ->
                 when {
                     line == "ENGINE_READY" -> {
@@ -737,8 +809,21 @@ object EngineClient {
             }
         }
 
-        fun stop() {
-            Log.d(LOCAL_TAG, "stop(): WebView stays alive (no-op)")
+        suspend fun forceStop() {
+            if (!started.get()) return
+            Log.d(LOCAL_TAG, "forceStop(): Stopping WebView engine")
+
+            currentAnalysisJob?.cancel()
+            engineReady.set(false)
+
+            runCatching {
+                web?.send("quit")
+                delay(100)
+                web?.send("stop")
+            }
+
+            started.set(false)
+            Log.d(LOCAL_TAG, "✓ WebView engine stopped")
         }
 
         private suspend fun send(cmd: String) = withContext(Dispatchers.Main) {
@@ -908,15 +993,12 @@ object EngineClient {
     // ===========================================================
     //                     НАТИВНЫЙ ДВИЖОК (JNI)
     // ===========================================================
-    // Переписан под минимальный StockfishBridge и чтение Debug Log File.
-
-    // ... остальной файл без изменений ...
     private object NativeUciEngine {
         private const val NATIVE_TAG = "NativeUciEngine"
 
-        private val started = java.util.concurrent.atomic.AtomicBoolean(false)
-        private val engineMutex = kotlinx.coroutines.sync.Mutex()
-        private var currentAnalysisJob: kotlinx.coroutines.Job? = null
+        private val started = AtomicBoolean(false)
+        private val engineMutex = Mutex()
+        private var currentAnalysisJob: Job? = null
 
         private val rxInfo = Regex("""^info\s+.*\bdepth\s+\d+.*""", RegexOption.MULTILINE)
         private val rxDepth = Regex("""\bdepth\s+(\d+)""")
@@ -939,24 +1021,22 @@ object EngineClient {
                 return
             }
 
-            // КРИТИЧНО: Сначала копируем NNUE из assets!
             kotlinx.coroutines.runBlocking {
                 copyNNUEFromAssets(ctx)
             }
 
             StockfishBridge.ensureStarted()
 
-            // КРИТИЧНО: ПРАВИЛЬНАЯ НАСТРОЙКА!
             val cores = Runtime.getRuntime().availableProcessors()
-            val threads = (cores - 1).coerceIn(1, 8) // Оставляем 1 ядро системе
+            val threads = cores.coerceIn(1, 8) - 2// ИСПОЛЬЗУЕМ ВСЕ ДОСТУПНЫЕ ЯДРА!
 
             android.util.Log.i(NATIVE_TAG, "🚀 Device has $cores cores, using $threads threads")
 
+            // КРИТИЧНО: Оптимальные настройки для максимальной производительности!
             StockfishBridge.send("setoption name Threads value $threads")
-            StockfishBridge.send("setoption name Hash value 1024") // 128MB хеш
+            StockfishBridge.send("setoption name Hash value 2048") // 256MB - оптимально для мобильных
             StockfishBridge.send("setoption name Ponder value false")
 
-            // NNUE - КРИТИЧНО для скорости!
             val nnueDir = File(ctx.filesDir, "nnue")
             val nnueFile = nnueDir.listFiles()?.firstOrNull { it.extension.equals("nnue", true) }
 
@@ -972,14 +1052,22 @@ object EngineClient {
             android.util.Log.d(NATIVE_TAG, "Native engine configured and ready")
         }
 
-        fun stop() {
-            if (started.getAndSet(false)) {
-                currentAnalysisJob?.cancel()
-                runCatching { StockfishBridge.stop(); StockfishBridge.shutdown() }
+        suspend fun forceStop() {
+            if (!started.getAndSet(false)) return
+            android.util.Log.d(NATIVE_TAG, "forceStop(): Stopping native engine")
+
+            currentAnalysisJob?.cancel()
+
+            runCatching {
+                StockfishBridge.stop()
+                kotlinx.coroutines.delay(100)
+                StockfishBridge.readOutput() // Очистка буфера
             }
+
+            android.util.Log.d(NATIVE_TAG, "✓ Native engine stopped")
         }
 
-        private fun parseOutput(snapshot: String): Pair<List<EngineClient.LineDTO>, String?> {
+        private fun parseOutput(snapshot: String): Pair<List<LineDTO>, String?> {
             val acc = mutableMapOf<Int, AccLine>()
             var bestMove: String? = null
             snapshot.lineSequence().forEach { line ->
@@ -1005,16 +1093,16 @@ object EngineClient {
                 }
             }
             val lines = acc.entries.sortedBy { it.key }.map { (mp, a) ->
-                EngineClient.LineDTO(a.pv, a.cp, a.mate, a.depth, mp)
+                LineDTO(a.pv, a.cp, a.mate, a.depth, mp)
             }
             return lines to bestMove
         }
 
         private suspend fun pumpUntilBestmove(
             wantedDepth: Int,
-            onPartial: ((List<EngineClient.LineDTO>) -> Unit)? = null,
+            onPartial: ((List<LineDTO>) -> Unit)? = null,
             timeoutMs: Long = 120_000
-        ): Pair<List<EngineClient.LineDTO>, String?> {
+        ): Pair<List<LineDTO>, String?> {
             val start = System.currentTimeMillis()
             val sb = StringBuilder()
             var best: String? = null
@@ -1028,7 +1116,6 @@ object EngineClient {
 
                 if (chunk.isNotEmpty()) {
                     emptyCount = 0
-                    android.util.Log.d(NATIVE_TAG, "📥 Read ${chunk.length} bytes at iter $totalReads")
 
                     sb.append(chunk)
                     val (lines, bestMove) = parseOutput(sb.toString())
@@ -1048,7 +1135,6 @@ object EngineClient {
                         break
                     }
 
-                    // КРИТИЧНО: Обработка терминальных позиций
                     if (sb.contains("bestmove (none)")) {
                         android.util.Log.i(NATIVE_TAG, "🏁 Terminal position: bestmove (none)")
                         best = null
@@ -1061,9 +1147,6 @@ object EngineClient {
                     }
                 } else {
                     emptyCount++
-                    if (emptyCount % 50 == 0) {
-                        android.util.Log.w(NATIVE_TAG, "⏳ $emptyCount empty reads, elapsed: ${System.currentTimeMillis() - start}ms")
-                    }
                     kotlinx.coroutines.delay(if (emptyCount < 5) 20 else if (emptyCount < 20) 50 else 100)
                 }
             }
@@ -1072,7 +1155,7 @@ object EngineClient {
 
             return parseOutput(sb.toString()).let { (lines, bm) ->
                 val finalBest = best ?: bm
-                val safe = if (lines.isEmpty()) listOf(EngineClient.LineDTO(pv = emptyList(), cp = null, mate = 0)) else lines
+                val safe = if (lines.isEmpty()) listOf(LineDTO(pv = emptyList(), cp = null, mate = 0)) else lines
                 safe to finalBest
             }
         }
@@ -1082,11 +1165,11 @@ object EngineClient {
             depth: Int,
             multiPv: Int,
             skillLevel: Int?
-        ): EngineClient.PositionDTO = withTimeout(120_000) {
+        ): PositionDTO = withTimeout(120_000) {
             val ctx = appCtx ?: throw IllegalStateException("Context not set")
             ensureStarted(ctx)
             engineMutex.withLock {
-                StockfishBridge.readOutput() // Очистка
+                StockfishBridge.readOutput()
                 StockfishBridge.send("stop")
                 StockfishBridge.send("isready")
                 StockfishBridge.send("ucinewgame")
@@ -1102,7 +1185,7 @@ object EngineClient {
                 StockfishBridge.go(depth)
 
                 val (lines, best) = pumpUntilBestmove(depth, onPartial = null)
-                EngineClient.PositionDTO(lines, best ?: lines.firstOrNull()?.pv?.firstOrNull())
+                PositionDTO(lines, best ?: lines.firstOrNull()?.pv?.firstOrNull())
             }
         }
 
@@ -1111,12 +1194,12 @@ object EngineClient {
             depth: Int,
             multiPv: Int,
             skillLevel: Int?,
-            onUpdate: (List<EngineClient.LineDTO>) -> Unit
-        ): EngineClient.PositionDTO = coroutineScope {
+            onUpdate: (List<LineDTO>) -> Unit
+        ): PositionDTO = coroutineScope {
             val ctx = appCtx ?: throw IllegalStateException("Context not set")
             ensureStarted(ctx)
 
-            val res = CompletableDeferred<EngineClient.PositionDTO>()
+            val res = CompletableDeferred<PositionDTO>()
             currentAnalysisJob?.cancel()
             currentAnalysisJob = launch(Dispatchers.IO) {
                 engineMutex.withLock {
@@ -1138,7 +1221,7 @@ object EngineClient {
                     val (lines, best) = pumpUntilBestmove(depth, onPartial = { snap ->
                         if (snap.isNotEmpty()) onUpdate(snap)
                     })
-                    val pos = EngineClient.PositionDTO(lines, best ?: lines.firstOrNull()?.pv?.firstOrNull())
+                    val pos = PositionDTO(lines, best ?: lines.firstOrNull()?.pv?.firstOrNull())
                     onUpdate(pos.lines)
                     res.complete(pos)
                 }
@@ -1146,8 +1229,6 @@ object EngineClient {
             res.await()
         }
     }
-
-    // ==== Вспомогательные вещи общего уровня ====
 
     private fun parseClockDataFromPgn(pgn: String): ClockData {
         val clockPattern = Regex("""\[%clk\s+(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:\.(\d+))?\]""", RegexOption.IGNORE_CASE)

@@ -10,6 +10,7 @@ import com.github.bhlangonijr.chesslib.move.Move
 import android.content.Context
 import com.github.bhlangonijr.chesslib.PieceType
 import com.github.bhlangonijr.chesslib.Side
+import com.github.movesense.PgnChess
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlin.math.abs
@@ -62,7 +63,14 @@ object MoveClassification {
 
             val prevPosition = rawPositions[index - 1]
 
-            if (prevPosition.lines.size == 1) {
+            // ИСПРАВЛЕНИЕ FORCED: проверяем количество легальных ходов в позиции ДО хода
+            val legalMovesCount = try {
+                PgnChess.getLegalMoves(fens[index - 1]).size
+            } catch (e: Exception) {
+                prevPosition.lines.size // fallback на старое поведение
+            }
+
+            if (legalMovesCount == 1) {
                 return@mapIndexed ClassifiedPosition(
                     fen = rawPosition.fen,
                     idx = rawPosition.idx,

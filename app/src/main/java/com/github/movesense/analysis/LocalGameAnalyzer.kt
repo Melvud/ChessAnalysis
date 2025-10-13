@@ -26,38 +26,11 @@ class LocalGameAnalyzer(
         // Кеш для FEN оценок
         private val fenCache = ConcurrentHashMap<String, CachedPosition>()
         private const val MAX_CACHE_SIZE = 5000
-
-        // HTTP клиент для Lichess API
-        private val lichessClient = OkHttpClient.Builder()
-            .connectTimeout(3, TimeUnit.SECONDS)
-            .readTimeout(5, TimeUnit.SECONDS)
-            .build()
-
-        private val json = Json {
-            ignoreUnknownKeys = true
-            explicitNulls = false
-            coerceInputValues = true
-        }
     }
 
     private data class CachedPosition(
         val position: EngineClient.PositionDTO,
         val timestamp: Long = System.currentTimeMillis()
-    )
-
-    @Serializable
-    data class LichessCloudEval(
-        val fen: String? = null,
-        val knodes: Int? = null,
-        val depth: Int? = null,
-        val pvs: List<LichessPv>? = null
-    )
-
-    @Serializable
-    data class LichessPv(
-        val moves: String? = null,
-        val cp: Int? = null,
-        val mate: Int? = null
     )
 
     // Проверка, является ли позиция терминальной (мат/пат)
@@ -111,87 +84,12 @@ class LocalGameAnalyzer(
         }
     }
 
-    // Попытка получить оценку из Lichess Cloud
-    private suspend fun tryLichessCloudEval(fen: String, multiPv: Int): EngineClient.PositionDTO? = withContext(Dispatchers.IO) {
-        return@withContext try {
-            val encodedFen = java.net.URLEncoder.encode(fen, "UTF-8")
-            val url = "https://lichess.org/api/cloud-eval?fen=$encodedFen&multiPv=$multiPv"
-
-            val request = Request.Builder()
-                .url(url)
-                .header("Accept", "application/json")
-                .get()
-                .build()
-
-            val response = lichessClient.newCall(request).execute()
-
-            if (!response.isSuccessful) {
-                Log.d(TAG, "Lichess API returned ${response.code}")
-                return@withContext null
-            }
-
-            val body = response.body?.string() ?: return@withContext null
-
-            val cloudEval = json.decodeFromString<LichessCloudEval>(body)
-
-            if (cloudEval.pvs.isNullOrEmpty()) {
-                Log.d(TAG, "Lichess: no cloud eval for this position")
-                return@withContext null
-            }
-
-            // Конвертируем Lichess формат в наш PositionDTO
-            val lines = cloudEval.pvs.mapIndexed { idx, pv ->
-                val moves = pv.moves?.trim()?.split(" ") ?: emptyList()
-                EngineClient.LineDTO(
-                    pv = moves,
-                    cp = pv.cp,
-                    mate = pv.mate,
-                    depth = cloudEval.depth,
-                    multiPv = idx + 1
-                )
-            }
-
-            val bestMove = lines.firstOrNull()?.pv?.firstOrNull()
-
-            Log.i(TAG, "✅ Lichess cloud eval: depth=${cloudEval.depth}, knodes=${cloudEval.knodes}")
-
-            EngineClient.PositionDTO(lines, bestMove)
-
-        } catch (e: Exception) {
-            Log.d(TAG, "Lichess API error: ${e.message}")
-            null
-        }
-    }
-
-    // ПАКЕТНАЯ загрузка из Lichess Cloud - параллельно!
-    private suspend fun batchLoadLichessEvals(
-        fens: List<String>,
-        multiPv: Int
-    ): Map<String, EngineClient.PositionDTO> = coroutineScope {
-        Log.i(TAG, "🌐 Batch loading ${fens.size} positions from Lichess Cloud...")
-
-        val results = fens.map { fen ->
-            async(Dispatchers.IO) {
-                delay((0..100).random().toLong()) // Небольшая рандомизация для rate limit
-                fen to tryLichessCloudEval(fen, multiPv)
-            }
-        }.awaitAll()
-
-        val successCount = results.count { it.second != null }
-        Log.i(TAG, "✅ Lichess: loaded $successCount/${fens.size} positions from cloud")
-
-        results.mapNotNull { (fen, result) ->
-            result?.let { fen to it }
-        }.toMap()
-    }
-
-    // Умная оценка позиции: сначала кеш, потом Lichess, потом локально
+    // Умная оценка позиции: только кеш и локальный анализ
     private suspend fun evaluatePositionSmart(
         fen: String,
         depth: Int,
         multiPv: Int,
-        skillLevel: Int?,
-        lichessPreloaded: Map<String, EngineClient.PositionDTO> = emptyMap()
+        skillLevel: Int?
     ): EngineClient.PositionDTO {
         // 0. Проверяем, не является ли позиция терминальной
         if (isTerminalPosition(fen)) {
@@ -206,23 +104,7 @@ class LocalGameAnalyzer(
             return it.position
         }
 
-        // 2. Проверяем предзагруженные Lichess данные
-        lichessPreloaded[fen]?.let { cloudResult ->
-            fenCache[cacheKey] = CachedPosition(cloudResult)
-            cleanupCache()
-            return cloudResult
-        }
-
-        // 3. Пробуем Lichess Cloud (если не было предзагрузки)
-        if (skillLevel == null && lichessPreloaded.isEmpty()) {
-            tryLichessCloudEval(fen, multiPv)?.let { cloudResult ->
-                fenCache[cacheKey] = CachedPosition(cloudResult)
-                cleanupCache()
-                return cloudResult
-            }
-        }
-
-        // 4. Локальный анализ
+        // 2. Локальный анализ
         Log.d(TAG, "🔧 Local analysis: depth=$depth")
         val localResult = EngineClient.evaluateFenDetailed(fen, depth, multiPv, skillLevel)
 
@@ -264,25 +146,18 @@ class LocalGameAnalyzer(
 
         notify(progressId, 0, total, "preparing", startedAt, onProgress, null, null, null, null, null, null, null)
 
-        // БАТЧИНГ: Предзагрузка всех позиций из Lichess параллельно
-        val allFens = listOf(startFen) + parsed.map { it.afterFen }
-
-        Log.i(TAG, "🚀 Starting batch preload from Lichess for ${allFens.size} positions...")
-        val lichessPreloaded = batchLoadLichessEvals(allFens, multiPv)
-        Log.i(TAG, "✅ Preload complete: ${lichessPreloaded.size} positions cached")
-
         notify(progressId, 0, total, "evaluating", startedAt, onProgress, null, null, null, null, null, null, null)
 
-        // 1) Evaluate all positions with adaptive depth and smart caching
+        // 1) Evaluate all positions sequentially with adaptive depth
         val positions = mutableListOf<EngineClient.PositionDTO>()
 
-        // Start position with adaptive depth
+        // Start position
         val startDepth = adaptiveDepth(0, total, depth)
         Log.i(TAG, "🎯 Analyzing start position with depth=$startDepth")
-        val pos0 = evaluatePositionSmart(startFen, startDepth, multiPv, null, lichessPreloaded)
+        val pos0 = evaluatePositionSmart(startFen, startDepth, multiPv, null)
         positions.add(pos0)
 
-        // Evaluate each move's resulting position with adaptive depth
+        // Evaluate each move's resulting position sequentially with adaptive depth
         for (i in 0 until total) {
             val beforeFen = if (i == 0) startFen else parsed[i - 1].afterFen
             val afterFen = parsed[i].afterFen
@@ -294,7 +169,7 @@ class LocalGameAnalyzer(
             Log.d(TAG, "📍 Move ${i + 1}/$total: depth=$currentDepth")
 
             val posBefore = positions.last()
-            val posAfter = evaluatePositionSmart(afterFen, currentDepth, multiPv, null, lichessPreloaded)
+            val posAfter = evaluatePositionSmart(afterFen, currentDepth, multiPv, null)
             positions.add(posAfter)
 
             // Normalize evaluation
@@ -404,12 +279,12 @@ class LocalGameAnalyzer(
         // 10) Estimated Elo
         val tagsHeader = PgnChess.headerFromPgn(pgn)
         val hdr = header ?: tagsHeader
-        val est = EstimateElo.computeEstimatedElo(positionEvals, hdr.whiteElo, hdr.blackElo)
+        val est = EstimateElo.computeEstimatedElo(positionEvals, hdr.whiteElo?.plus(200), hdr.blackElo?.plus(200))
 
         notify(progressId, total, total, "done", startedAt, onProgress, 0L, null, null, null, null, null, null)
 
         val totalTime = System.currentTimeMillis() - startedAt
-        Log.i(TAG, "✅ Analysis complete! Time: ${totalTime}ms, Positions: ${positionEvals.size}, Cache size: ${fenCache.size}, Lichess hits: ${lichessPreloaded.size}")
+        Log.i(TAG, "✅ Analysis complete! Time: ${totalTime}ms, Positions: ${positionEvals.size}, Cache size: ${fenCache.size}")
 
         FullReport(
             header = hdr,
@@ -433,15 +308,8 @@ class LocalGameAnalyzer(
         multiPv: Int,
         skillLevel: Int?
     ): EngineClient.MoveRealtimeResult = withContext(Dispatchers.IO) {
-        // Для real-time анализа пробуем параллельно загрузить обе позиции из Lichess
-        val lichessData = if (skillLevel == null) {
-            batchLoadLichessEvals(listOf(beforeFen, afterFen), multiPv)
-        } else {
-            emptyMap()
-        }
-
-        val posBefore = evaluatePositionSmart(beforeFen, depth, multiPv, skillLevel, lichessData)
-        val posAfter = evaluatePositionSmart(afterFen, depth, multiPv, skillLevel, lichessData)
+        val posBefore = evaluatePositionSmart(beforeFen, depth, multiPv, skillLevel)
+        val posAfter = evaluatePositionSmart(afterFen, depth, multiPv, skillLevel)
 
         val whiteToPlayAfter = afterFen.split(" ").getOrNull(1) == "w"
 
