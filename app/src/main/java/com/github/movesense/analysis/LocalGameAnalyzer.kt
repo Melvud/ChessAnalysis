@@ -4,17 +4,13 @@ import com.github.movesense.*
 import kotlinx.coroutines.*
 import java.util.UUID
 import android.util.Log
-import kotlin.collections.get
+import com.github.movesense.engine.StockfishBridge
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 class LocalGameAnalyzer(
     private val progressHook: (id: String, percent: Double?, stage: String?) -> Unit = { _, _, _ -> }
@@ -22,8 +18,6 @@ class LocalGameAnalyzer(
 
     companion object {
         private const val TAG = "LocalGameAnalyzer"
-
-        // Кеш для FEN оценок
         private val fenCache = ConcurrentHashMap<String, CachedPosition>()
         private const val MAX_CACHE_SIZE = 5000
     }
@@ -33,10 +27,8 @@ class LocalGameAnalyzer(
         val timestamp: Long = System.currentTimeMillis()
     )
 
-    // Проверка, является ли позиция терминальной (мат/пат)
     private fun isTerminalPosition(fen: String): Boolean {
         return try {
-            // Используем PgnChess для проверки
             val legalMoves = PgnChess.getLegalMoves(fen)
             legalMoves.isEmpty()
         } catch (e: Exception) {
@@ -44,9 +36,7 @@ class LocalGameAnalyzer(
         }
     }
 
-    // Создать пустую оценку для терминальной позиции
     private fun createTerminalPositionEval(fen: String): EngineClient.PositionDTO {
-        // Для мата/пата возвращаем mate 0
         val lines = listOf(
             EngineClient.LineDTO(
                 pv = emptyList(),
@@ -59,24 +49,13 @@ class LocalGameAnalyzer(
         return EngineClient.PositionDTO(lines, null)
     }
 
-    // Адаптивная глубина в зависимости от стадии партии
-    private fun adaptiveDepth(moveNumber: Int, totalMoves: Int, baseDepth: Int): Int {
-        return when {
-            moveNumber < 10 -> (baseDepth - 4).coerceAtLeast(10)  // Дебют: быстрее
-            moveNumber > totalMoves - 10 -> (baseDepth - 2).coerceAtLeast(12)  // Эндшпиль: средне
-            else -> baseDepth  // Миттельшпиль: полная глубина
-        }
-    }
-
-    // Получить кеш-ключ
     private fun getCacheKey(fen: String, depth: Int): String = "$fen|$depth"
 
-    // Очистка старого кеша
     private fun cleanupCache() {
         if (fenCache.size > MAX_CACHE_SIZE) {
             val now = System.currentTimeMillis()
             val toRemove = fenCache.entries
-                .filter { now - it.value.timestamp > 3600_000 } // Старше 1 часа
+                .filter { now - it.value.timestamp > 3600_000 }
                 .take(MAX_CACHE_SIZE / 2)
                 .map { it.key }
             toRemove.forEach { fenCache.remove(it) }
@@ -84,14 +63,12 @@ class LocalGameAnalyzer(
         }
     }
 
-    // Умная оценка позиции: только кеш и локальный анализ
     private suspend fun evaluatePositionSmart(
         fen: String,
         depth: Int,
         multiPv: Int,
         skillLevel: Int?
     ): EngineClient.PositionDTO {
-        // ОПТИМИЗАЦИЯ 1: Параллельная проверка терминальности и облачной оценки
         val (isTerminal, cloudEval) = coroutineScope {
             val terminalJob = async(Dispatchers.Default) {
                 isTerminalPosition(fen)
@@ -100,43 +77,59 @@ class LocalGameAnalyzer(
                 CloudEvalCache.getEval(fen)
             }
 
-            // Ждем только 500мс для облака
             val cloud = withTimeoutOrNull(500) { cloudJob.await() }
-
             terminalJob.await() to cloud
         }
 
-        // 0. Терминальная позиция
         if (isTerminal) {
             Log.i(TAG, "🏁 Terminal position")
             return createTerminalPositionEval(fen)
         }
 
-        // 1. Облачная оценка (если есть и глубина достаточна)
         if (cloudEval != null) {
             val cloudDepth = cloudEval.lines.firstOrNull()?.depth ?: 0
-            if (cloudDepth >= depth - 2) { // Допустимо на 2 меньше
+            if (cloudDepth >= depth - 2) {
                 Log.d(TAG, "☁️ Using cloud eval (depth=$cloudDepth)")
                 return cloudEval
             }
         }
 
-        // 2. Проверяем локальный кеш
         val cacheKey = getCacheKey(fen, depth)
         fenCache[cacheKey]?.let {
             Log.d(TAG, "💾 Local cache hit")
             return it.position
         }
 
-        // 3. Локальный анализ (УБИРАЕМ delay!)
         Log.d(TAG, "🔧 Local analysis: depth=$depth")
         val localResult = EngineClient.evaluateFenDetailed(fen, depth, multiPv, skillLevel)
 
-        // Кешируем результат
         fenCache[cacheKey] = CachedPosition(localResult)
         cleanupCache()
 
         return localResult
+    }
+
+    fun calculateSmartDepth(
+        moveNumber: Int,
+        totalMoves: Int,
+        isOpening: Boolean,
+        lastEval: EngineClient.PositionDTO?,
+        isTactical: Boolean,
+        pieceCount: Int
+    ): Int {
+        var baseDepth = when {
+            isOpening -> 12
+            pieceCount <= 10 -> 16
+            pieceCount <= 20 -> 14
+            else -> 12
+        }
+
+        if (isTactical) baseDepth += 2
+
+        val progress = moveNumber.toDouble() / totalMoves
+        if (progress > 0.7) baseDepth += 1
+
+        return baseDepth.coerceIn(10, 20)
     }
 
     suspend fun evaluateGameByPgn(
@@ -155,6 +148,19 @@ class LocalGameAnalyzer(
         header: GameHeader?,
         onProgress: (EngineClient.ProgressSnapshot) -> Unit
     ): FullReport = withContext(Dispatchers.IO) {
+
+        val cores = Runtime.getRuntime().availableProcessors()
+        val optimalWorkers = workersNb.coerceIn(1, cores)
+        val threadsPerWorker = max(1, cores / optimalWorkers)
+
+        Log.i(TAG, "🚀 Analysis config: $optimalWorkers workers × $threadsPerWorker threads/worker (total: ${optimalWorkers * threadsPerWorker} threads)")
+
+        if (EngineClient.engineMode.value == EngineClient.EngineMode.NATIVE) {
+            StockfishBridge.reconfigurePool(optimalWorkers, threadsPerWorker)
+            delay(200) // Даём время на реконфигурацию
+            Log.i(TAG, "♻️ ${StockfishBridge.getPoolStats()}")
+        }
+
         val parsed = PgnChess.movesWithFens(pgn)
         val total = parsed.size
 
@@ -169,120 +175,142 @@ class LocalGameAnalyzer(
             ?: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
         notify(progressId, 0, total, "preparing", startedAt, onProgress, null, null, null, null, null, null, null)
+
+        val isStartOpening = Openings.findOpening(startFen.split(" ")[0]) != null
+        val startDepth = if (isStartOpening) 10 else 14
+
+        val pos0 = evaluatePositionSmart(startFen, startDepth, multiPv, null)
+
+        val allFens = parsed.map { it.afterFen }
+
+        // 🔥 КРИТИЧНО: Потокобезопасный массив результатов
+        val positions = Array<EngineClient.PositionDTO?>(total + 1) { null }
+        positions[0] = pos0
+
+        val processedCount = AtomicInteger(0)
+
         notify(progressId, 0, total, "evaluating", startedAt, onProgress, null, null, null, null, null, null, null)
 
-        val positions = mutableListOf<EngineClient.PositionDTO>()
-        var lastEval: Float? = null
+        // 🔥 КРИТИЧНО: Разбиваем на chunks строго по количеству воркеров
+        val chunkSize = (total.toDouble() / optimalWorkers).toInt().coerceAtLeast(1)
 
-        // ОПТИМИЗАЦИЯ: Анализируем стартовую позицию с пониженной глубиной для дебюта
-        val isStartOpening = Openings.findOpening(startFen.split(" ")[0]) != null
-        val startDepth = if (isStartOpening) 10 else calculateSmartDepth(0, total, isStartOpening, null, false, 32)
+        Log.i(TAG, "📦 Splitting $total positions into ${allFens.chunked(chunkSize).size} chunks of ~$chunkSize each")
 
-        Log.i(TAG, "🎯 Analyzing start position with depth=$startDepth")
-        val pos0 = evaluatePositionSmart(startFen, startDepth, multiPv, null)
-        positions.add(pos0)
+        // 🔥 ПАРАЛЛЕЛЬНАЯ ОБРАБОТКА
+        allFens.chunked(chunkSize).mapIndexed { workerIndex, chunk ->
+            async(Dispatchers.IO) {
+                val workerId = workerIndex + 1
+                Log.i(TAG, "⚙️ Worker $workerId started: ${chunk.size} positions")
 
-        // Evaluate each move's resulting position with smart adaptive depth
-        for (i in 0 until total) {
-            val beforeFen = if (i == 0) startFen else parsed[i - 1].afterFen
-            val afterFen = parsed[i].afterFen
-            val san = parsed[i].san
-            val uci = parsed[i].uci
+                chunk.forEachIndexed { localIndex, fen ->
+                    val globalIndex = workerIndex * chunkSize + localIndex
 
-            // ОПТИМИЗАЦИЯ: Умная адаптивная глубина
-            val currentFenBoard = afterFen.split(" ")[0]
-            val isOpening = Openings.findOpening(currentFenBoard) != null
-            val pieceCount = currentFenBoard.count { it.isLetter() }
-            val isTactical = san.contains("x") || san.contains("+") || san.contains("#")
+                    try {
+                        val currentFenBoard = fen.split(" ")[0]
+                        val isOpening = Openings.findOpening(currentFenBoard) != null
+                        val pieceCount = currentFenBoard.count { it.isLetter() }
 
-            val currentDepth = calculateSmartDepth(
-                moveNumber = i + 1,
-                totalMoves = total,
-                isOpening = isOpening,
-                lastEval = lastEval,
-                isTactical = isTactical,
-                pieceCount = pieceCount
-            )
+                        val san = parsed[globalIndex].san
+                        val isTactical = san.contains("x") || san.contains("+") || san.contains("#")
 
-            Log.d(TAG, "📍 Move ${i + 1}/$total: depth=$currentDepth (opening=$isOpening, tactical=$isTactical, pieces=$pieceCount)")
+                        val currentDepth = calculateSmartDepth(
+                            moveNumber = globalIndex + 1,
+                            totalMoves = total,
+                            isOpening = isOpening,
+                            lastEval = null,
+                            isTactical = isTactical,
+                            pieceCount = pieceCount
+                        )
 
-            val posBefore = positions.last()
-            val posAfter = evaluatePositionSmart(afterFen, currentDepth, multiPv, null)
-            positions.add(posAfter)
+                        val posAfter = evaluatePositionSmart(fen, currentDepth, multiPv, null)
 
-            // Update last eval for next iteration
-            val whiteToPlayAfter = sideToMoveIsWhite(afterFen)
-            val topLine = posAfter.lines.firstOrNull()
+                        positions[globalIndex + 1] = posAfter
 
-            lastEval = when {
-                topLine?.mate != null -> if (topLine.mate!! > 0) 30f else -30f
-                topLine?.cp != null -> (if (whiteToPlayAfter) topLine.cp!! else -topLine.cp!!).toFloat() / 100f
-                else -> 0f
-            }
+                        val doneNow = processedCount.incrementAndGet()
+                        val elapsed = System.currentTimeMillis() - startedAt
+                        val eta = if (doneNow > 0) {
+                            val perMove = elapsed / doneNow.toDouble()
+                            ((total - doneNow) * perMove).toLong()
+                        } else null
 
-            val evalCp = topLine?.cp?.let { if (!whiteToPlayAfter) -it else it }
-            val evalMate = topLine?.mate?.let { m ->
-                when {
-                    m == 0 && !whiteToPlayAfter -> 1
-                    m == 0 && whiteToPlayAfter -> -1
-                    !whiteToPlayAfter -> -m
-                    else -> m
+                        // 🆕 Для многопоточного режима НЕ отправляем FEN/UCI
+                        if (optimalWorkers == 1) {
+                            val whiteToPlayAfter = fen.split(" ").getOrNull(1) == "w"
+                            val topLine = posAfter.lines.firstOrNull()
+
+                            val evalCp = topLine?.cp?.let { if (!whiteToPlayAfter) -it else it }
+                            val evalMate = topLine?.mate?.let { m ->
+                                when {
+                                    m == 0 && !whiteToPlayAfter -> 1
+                                    m == 0 && whiteToPlayAfter -> -1
+                                    !whiteToPlayAfter -> -m
+                                    else -> m
+                                }
+                            }
+
+                            notify(
+                                id = progressId,
+                                done = doneNow,
+                                total = total,
+                                stage = "evaluating",
+                                startedAt = startedAt,
+                                onProgress = onProgress,
+                                etaMs = eta,
+                                fen = fen,
+                                san = san,
+                                cls = null,
+                                uci = parsed[globalIndex].uci,
+                                evalCp = evalCp,
+                                evalMate = evalMate
+                            )
+                        } else {
+                            notify(
+                                id = progressId,
+                                done = doneNow,
+                                total = total,
+                                stage = "evaluating",
+                                startedAt = startedAt,
+                                onProgress = onProgress,
+                                etaMs = eta,
+                                fen = null,
+                                san = null,
+                                cls = null,
+                                uci = null,
+                                evalCp = null,
+                                evalMate = null
+                            )
+                        }
+
+                        if (doneNow % 10 == 0 || doneNow == total) {
+                            Log.d(TAG, "✅ Worker $workerId: ${doneNow}/$total (${(doneNow * 100.0 / total).toInt()}%)")
+                        }
+
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Worker $workerId failed at position $globalIndex", e)
+                    }
                 }
+
+                Log.i(TAG, "🏁 Worker $workerId finished: ${chunk.size} positions")
             }
-
-            Log.d(TAG, "Position after move $i: whiteToPlay=$whiteToPlayAfter, eval=${lastEval}, depth=$currentDepth")
-
-            val cls = classifyMoveUsingMoveClassifier(
-                beforeFen = beforeFen,
-                afterFen = afterFen,
-                posBefore = posBefore,
-                posAfter = posAfter,
-                uciMove = uci
-            )
-
-            val doneNow = i + 1
-            val elapsed = System.currentTimeMillis() - startedAt
-            val eta = if (doneNow > 0) {
-                val perMove = elapsed / doneNow.toDouble()
-                ((total - doneNow) * perMove).toLong()
-            } else null
-
-            notify(
-                id = progressId,
-                done = doneNow,
-                total = total,
-                stage = "evaluating",
-                startedAt = startedAt,
-                onProgress = onProgress,
-                etaMs = eta,
-                fen = afterFen,
-                san = san,
-                cls = cls.name,
-                uci = uci,
-                evalCp = evalCp,
-                evalMate = evalMate
-            )
-        }
+        }.awaitAll()
 
         notify(progressId, total, total, "postprocess", startedAt, onProgress, 0L, null, null, null, null, null, null)
 
-        // Build PositionEval list with proper inversion
+        val positionsList = positions.filterNotNull().toList()
+
         val fens = listOf(startFen) + parsed.map { it.afterFen }
         val uciMoves = parsed.map { it.uci }
 
-        val positionEvals: List<PositionEval> = positions.mapIndexed { idx, pos ->
+        val positionEvals: List<PositionEval> = positionsList.mapIndexed { idx, pos ->
             normalizeToWhitePOV(
                 fen = fens[idx],
                 pos = pos,
                 idx = idx,
-                isLast = idx == positions.lastIndex
+                isLast = idx == positionsList.lastIndex
             )
         }
 
-        // ACPL calculation
         val acpl = ACPL.calculateACPLFromPositionEvals(positionEvals)
-
-        // Win percentages
         val winPercents = positionEvals.map { pos ->
             val first = pos.lines.firstOrNull()
             if (first != null && (first.cp != null || first.mate != null)) {
@@ -292,24 +320,17 @@ class LocalGameAnalyzer(
             }
         }
 
-        // Per-move accuracy from win percentages
         val movesAccuracy = Accuracy.perMoveAccFromWin(winPercents)
-
-        // Accuracy weights
         val weightsAcc = getAccuracyWeights(winPercents)
-
-        // Player accuracy
         val whiteAcc = computePlayerAccuracy(movesAccuracy, weightsAcc, "white")
         val blackAcc = computePlayerAccuracy(movesAccuracy, weightsAcc, "black")
 
-        // Move classification
         val classifiedPositions = MoveClassification.getMovesClassification(
             positionEvals,
             uciMoves,
             fens
         )
 
-        // Build move reports
         val moves = buildMoveReports(
             classifiedPositions,
             fens,
@@ -319,7 +340,6 @@ class LocalGameAnalyzer(
             parsed.map { it.san }
         )
 
-        // Estimated Elo
         val tagsHeader = PgnChess.headerFromPgn(pgn)
         val hdr = header ?: tagsHeader
         val est = EstimateElo.computeEstimatedElo(positionEvals, hdr.whiteElo?.plus(200), hdr.blackElo?.plus(200))
@@ -327,11 +347,18 @@ class LocalGameAnalyzer(
         notify(progressId, total, total, "done", startedAt, onProgress, 0L, null, null, null, null, null, null)
 
         val totalTime = System.currentTimeMillis() - startedAt
-        Log.i(TAG, "✅ Analysis complete! Time: ${totalTime}ms, Positions: ${positionEvals.size}")
+        Log.i(TAG, "🎉 Parallel analysis complete! Time: ${totalTime}ms, Workers: $optimalWorkers, Speed: ${(total * 1000.0 / totalTime).toInt()} pos/sec")
 
         FullReport(
             header = hdr,
-            positions1 = positions,
+            positions1 = positionsList.map { pos ->
+                EngineClient.PositionDTO(
+                    lines = pos.lines.map { line ->
+                        EngineClient.LineDTO(line.pv, line.cp, line.mate, line.depth, line.multiPv)
+                    },
+                    bestMove = pos.bestMove
+                )
+            },
             positions = positionEvals,
             moves = moves,
             accuracy = AccuracySummary(
@@ -355,7 +382,6 @@ class LocalGameAnalyzer(
         val posAfter = evaluatePositionSmart(afterFen, depth, multiPv, skillLevel)
 
         val whiteToPlayAfter = afterFen.split(" ").getOrNull(1) == "w"
-
         val topLine = posAfter.lines.firstOrNull()
 
         val cpAfter = if (whiteToPlayAfter) topLine?.cp else topLine?.cp?.let { -it }
@@ -445,78 +471,6 @@ class LocalGameAnalyzer(
             bestMove = posBefore.bestMove,
             lines = linesAfter.take(3)
         )
-    }
-
-    private fun classifyMoveUsingMoveClassifier(
-        beforeFen: String,
-        afterFen: String,
-        posBefore: EngineClient.PositionDTO,
-        posAfter: EngineClient.PositionDTO,
-        uciMove: String
-    ): MoveClass {
-        return try {
-            val whiteToPlayBefore = beforeFen.split(" ").getOrNull(1) == "w"
-            val whiteToPlayAfter = afterFen.split(" ").getOrNull(1) == "w"
-
-            val posEvalBefore = PositionEval(
-                fen = beforeFen,
-                idx = 0,
-                lines = posBefore.lines.map { line ->
-                    val cp = if (!whiteToPlayBefore && line.cp != null) -line.cp else line.cp
-                    val mate = line.mate?.let { m ->
-                        when {
-                            m == 0 && !whiteToPlayBefore -> 1
-                            m == 0 && whiteToPlayBefore -> -1
-                            !whiteToPlayBefore -> -m
-                            else -> m
-                        }
-                    }
-                    LineEval(
-                        pv = line.pv,
-                        cp = cp,
-                        mate = mate,
-                        depth = line.depth,
-                        best = line.pv.firstOrNull()
-                    )
-                },
-                bestMove = posBefore.bestMove
-            )
-
-            val posEvalAfter = PositionEval(
-                fen = afterFen,
-                idx = 1,
-                lines = posAfter.lines.map { line ->
-                    val cp = if (!whiteToPlayAfter && line.cp != null) -line.cp else line.cp
-                    val mate = line.mate?.let { m ->
-                        when {
-                            m == 0 && !whiteToPlayAfter -> 1
-                            m == 0 && whiteToPlayAfter -> -1
-                            !whiteToPlayAfter -> -m
-                            else -> m
-                        }
-                    }
-                    LineEval(
-                        pv = line.pv,
-                        cp = cp,
-                        mate = mate,
-                        depth = line.depth,
-                        best = null
-                    )
-                },
-                bestMove = null
-            )
-
-            val classified = MoveClassification.getMovesClassification(
-                listOf(posEvalBefore, posEvalAfter),
-                listOf(uciMove),
-                listOf(beforeFen, afterFen)
-            )
-
-            classified.getOrNull(1)?.moveClassification ?: MoveClass.OKAY
-        } catch (e: Exception) {
-            Log.e(TAG, "Error classifying move: ${e.message}", e)
-            MoveClass.OKAY
-        }
     }
 
     private suspend fun notify(
@@ -645,8 +599,8 @@ class LocalGameAnalyzer(
             val cp = line.cp?.let { if (!whiteToPlay) -it else it }
             val mate = line.mate?.let { m ->
                 when {
-                    m == 0 && !whiteToPlay -> 1  // Чёрные заматованы
-                    m == 0 && whiteToPlay -> -1  // Белые заматованы
+                    m == 0 && !whiteToPlay -> 1
+                    m == 0 && whiteToPlay -> -1
                     !whiteToPlay -> -m
                     else -> m
                 }

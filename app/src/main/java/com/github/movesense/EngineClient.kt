@@ -1124,31 +1124,17 @@ object EngineClient {
     }
 
     // ОПТИМИЗАЦИЯ: Native Engine с оптимальными настройками Hash и Threads
+    // В файле EngineClient.kt замените NativeUciEngine на:
+
     internal object NativeUciEngine {
         private const val NATIVE_TAG = "NativeUciEngine"
 
         private val started = AtomicBoolean(false)
-        private val engineMutex = Mutex()
-        private var currentAnalysisJob: Job? = null
+        private val analysisJobs = mutableMapOf<String, Job>()
 
-        private val rxInfo = Regex("""^info\s+.*\bdepth\s+\d+.*""", RegexOption.MULTILINE)
-        private val rxDepth = Regex("""\bdepth\s+(\d+)""")
-        private val rxMultiPv = Regex("""\bmultipv\s+(\d+)""")
-        private val rxScoreCp = Regex("""\bscore\s+cp\s+(-?\d+)""")
-        private val rxScoreMate = Regex("""\bscore\s+mate\s+(-?\d+)""")
-        private val rxPv = Regex("""\bpv\s+(.+)$""")
-        private val rxBestmove = Regex("""^bestmove\s+(\S+)""", RegexOption.MULTILINE)
-
-        private data class AccLine(
-            var depth: Int? = null,
-            var cp: Int? = null,
-            var mate: Int? = null,
-            var pv: List<String> = emptyList()
-        )
-
-        fun ensureStarted(ctx: android.content.Context) {
+        fun ensureStarted(ctx: Context) {
             if (started.getAndSet(true)) {
-                android.util.Log.d(NATIVE_TAG, "Native engine already started")
+                Log.d(NATIVE_TAG, "Engine pool already started")
                 return
             }
 
@@ -1156,187 +1142,23 @@ object EngineClient {
                 copyNNUEFromAssets(ctx)
             }
 
-            StockfishBridge.ensureStarted()
+            StockfishBridge.initializePool()
 
-            val cores = Runtime.getRuntime().availableProcessors()
-            val threads = max(1, cores - 1) // Используем cores-1 для стабильности
-            val optimalHash = min(1024, 128 * threads)
-
-            android.util.Log.i(NATIVE_TAG, "🚀 Device: $cores cores, configuring...")
-
-            kotlinx.coroutines.runBlocking {
-                // 1. UCI инициализация
-                StockfishBridge.send("uci")
-                delay(300)
-
-                // 2. Настройка потоков
-                StockfishBridge.send("setoption name Threads value $threads")
-                android.util.Log.i(NATIVE_TAG, "📤 Set Threads = $threads")
-                delay(150)
-
-                // 3. Настройка Hash
-                StockfishBridge.send("setoption name Hash value $optimalHash")
-                android.util.Log.i(NATIVE_TAG, "📤 Set Hash = ${optimalHash}MB")
-                delay(150)
-
-                // 4. Отключаем Ponder (размышление в чужой ход)
-                StockfishBridge.send("setoption name Ponder value false")
-                delay(100)
-
-                // 5. NNUE
-                val nnueDir = File(ctx.filesDir, "nnue")
-                val nnueFile = nnueDir.listFiles()?.firstOrNull { it.extension.equals("nnue", true) }
-
-                if (nnueFile != null && nnueFile.exists()) {
-                    StockfishBridge.send("setoption name EvalFile value ${nnueFile.absolutePath}")
-                    android.util.Log.i(NATIVE_TAG, "📤 Set NNUE: ${nnueFile.name}")
-                    delay(200)
-                } else {
-                    android.util.Log.e(NATIVE_TAG, "❌ NO NNUE FILE!")
-                }
-
-                // 6. Подтверждение готовности
-                StockfishBridge.send("isready")
-                var confirmed = false
-                var attempts = 0
-
-                while (!confirmed && attempts < 50) {
-                    val output = StockfishBridge.readOutput()
-                    if (output.contains("readyok")) {
-                        confirmed = true
-                        android.util.Log.i(NATIVE_TAG, "✅ Engine ready: Threads=$threads, Hash=${optimalHash}MB")
-                    } else if (output.isNotEmpty()) {
-                        android.util.Log.d(NATIVE_TAG, "Engine output: ${output.take(200)}")
-                    }
-                    delay(100)
-                    attempts++
-                }
-
-                if (!confirmed) {
-                    android.util.Log.e(NATIVE_TAG, "⚠️ readyok не получен за ${attempts * 100}ms")
-                }
-
-                // 7. Финальная проверка: запускаем тестовый анализ
-                StockfishBridge.send("position startpos")
-                delay(50)
-                StockfishBridge.send("go depth 1")
-                delay(500)
-                val testOutput = StockfishBridge.readOutput()
-
-                if (testOutput.contains("bestmove")) {
-                    android.util.Log.i(NATIVE_TAG, "✅ Test analysis passed")
-                } else {
-                    android.util.Log.w(NATIVE_TAG, "⚠️ Test analysis failed")
-                }
-            }
+            Log.i(NATIVE_TAG, "✅ ${StockfishBridge.getPoolStats()}")
         }
 
         suspend fun forceStop() {
             if (!started.getAndSet(false)) return
-            android.util.Log.d(NATIVE_TAG, "forceStop(): Stopping native engine")
 
-            currentAnalysisJob?.cancel()
+            Log.d(NATIVE_TAG, "Stopping engine pool...")
 
-            runCatching {
-                StockfishBridge.stop()
-                kotlinx.coroutines.delay(100)
-                StockfishBridge.readOutput()
-            }
+            // Отменяем все активные анализы
+            analysisJobs.values.forEach { it.cancel() }
+            analysisJobs.clear()
 
-            android.util.Log.d(NATIVE_TAG, "✓ Native engine stopped")
-        }
+            StockfishBridge.shutdownPool()
 
-        private fun parseOutput(snapshot: String): Pair<List<LineDTO>, String?> {
-            val acc = mutableMapOf<Int, AccLine>()
-            var bestMove: String? = null
-            snapshot.lineSequence().forEach { line ->
-                when {
-                    rxInfo.matches(line) -> {
-                        val mp = rxMultiPv.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
-                        val slot = acc.getOrPut(mp) { AccLine() }
-                        slot.depth = rxDepth.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: slot.depth
-                        val mMate = rxScoreMate.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                        val mCp = rxScoreCp.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                        if (mMate != null) { slot.mate = mMate; slot.cp = null }
-                        else if (mCp != null) { slot.cp = mCp; slot.mate = null }
-                        rxPv.find(line)?.groupValues?.getOrNull(1)?.let { pv ->
-                            slot.pv = pv.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
-                        }
-                    }
-                    line.startsWith("bestmove") -> {
-                        val m = rxBestmove.find(line)
-                        bestMove = m?.groupValues?.getOrNull(1)?.let { bm ->
-                            if (bm != "(none)" && bm != "0000") bm else null
-                        }
-                    }
-                }
-            }
-            val lines = acc.entries.sortedBy { it.key }.map { (mp, a) ->
-                LineDTO(a.pv, a.cp, a.mate, a.depth, mp)
-            }
-            return lines to bestMove
-        }
-
-        private suspend fun pumpUntilBestmove(
-            wantedDepth: Int,
-            onPartial: ((List<LineDTO>) -> Unit)? = null,
-            timeoutMs: Long = 120_000
-        ): Pair<List<LineDTO>, String?> {
-            val start = System.currentTimeMillis()
-            val sb = StringBuilder()
-            var best: String? = null
-            var lastDepth = 0
-            var emptyCount = 0
-            var totalReads = 0
-
-            while (System.currentTimeMillis() - start < timeoutMs) {
-                val chunk = StockfishBridge.readOutput()
-                totalReads++
-
-                if (chunk.isNotEmpty()) {
-                    emptyCount = 0
-
-                    sb.append(chunk)
-                    val (lines, bestMove) = parseOutput(sb.toString())
-
-                    if (lines.isNotEmpty()) {
-                        val maxDepth = lines.maxOfOrNull { it.depth ?: 0 } ?: 0
-                        if (maxDepth > lastDepth) {
-                            lastDepth = maxDepth
-                            android.util.Log.i(NATIVE_TAG, "⬆️ Depth: $maxDepth")
-                            onPartial?.invoke(lines)
-                        }
-                    }
-
-                    if (bestMove != null) {
-                        android.util.Log.i(NATIVE_TAG, "✅ bestmove: $bestMove at depth $lastDepth")
-                        best = bestMove
-                        break
-                    }
-
-                    if (sb.contains("bestmove (none)")) {
-                        android.util.Log.i(NATIVE_TAG, "🏁 Terminal position: bestmove (none)")
-                        best = null
-                        break
-                    }
-
-                    if (wantedDepth > 0 && lastDepth >= wantedDepth) {
-                        android.util.Log.i(NATIVE_TAG, "🛑 Reached depth $wantedDepth, stopping")
-                        StockfishBridge.stop()
-                    }
-                } else {
-                    emptyCount++
-                    kotlinx.coroutines.delay(if (emptyCount < 5) 20 else if (emptyCount < 20) 50 else 100)
-                }
-            }
-
-            android.util.Log.i(NATIVE_TAG, "📊 pump finished: totalReads=$totalReads, depth=$lastDepth, best=$best")
-
-            return parseOutput(sb.toString()).let { (lines, bm) ->
-                val finalBest = best ?: bm
-                val safe = if (lines.isEmpty()) listOf(LineDTO(pv = emptyList(), cp = null, mate = 0)) else lines
-                safe to finalBest
-            }
+            Log.d(NATIVE_TAG, "✓ Engine pool stopped")
         }
 
         suspend fun evaluateFenDetailedLocal(
@@ -1344,27 +1166,32 @@ object EngineClient {
             depth: Int,
             multiPv: Int,
             skillLevel: Int?
-        ): PositionDTO = withTimeout(120_000) {
-            val ctx = appCtx ?: throw IllegalStateException("Context not set")
-            ensureStarted(ctx)
-            engineMutex.withLock {
-                StockfishBridge.readOutput()
-                StockfishBridge.send("stop")
-                StockfishBridge.send("isready")
-                StockfishBridge.send("ucinewgame")
-                StockfishBridge.send("isready")
+        ): EngineClient.PositionDTO = withContext(Dispatchers.IO) {
+
+            val engine = StockfishBridge.acquire()
+
+            try {
+                StockfishBridge.readOutput() // Очистка
+                StockfishBridge.send(engine, "ucinewgame")
+                StockfishBridge.send(engine, "isready")
 
                 if (skillLevel != null) {
-                    StockfishBridge.send("setoption name Skill Level value $skillLevel")
+                    StockfishBridge.send(engine, "setoption name Skill Level value $skillLevel")
                 }
-                StockfishBridge.send("setoption name MultiPV value ${multiPv.coerceAtLeast(1)}")
-                StockfishBridge.send("isready")
 
-                StockfishBridge.send("position fen $fen")
-                StockfishBridge.go(depth)
+                StockfishBridge.send(engine, "setoption name MultiPV value ${multiPv.coerceAtLeast(1)}")
+                StockfishBridge.send(engine, "isready")
+                delay(50)
 
-                val (lines, best) = pumpUntilBestmove(depth, onPartial = null)
-                PositionDTO(lines, best ?: lines.firstOrNull()?.pv?.firstOrNull())
+                StockfishBridge.send(engine, "position fen $fen")
+                StockfishBridge.go(engine, depth)
+
+                val (lines, best) = pumpUntilBestmove(engine, depth)
+
+                EngineClient.PositionDTO(lines, best ?: lines.firstOrNull()?.pv?.firstOrNull())
+
+            } finally {
+                StockfishBridge.release(engine)
             }
         }
 
@@ -1373,42 +1200,136 @@ object EngineClient {
             depth: Int,
             multiPv: Int,
             skillLevel: Int?,
-            onUpdate: (List<LineDTO>) -> Unit
-        ): PositionDTO = coroutineScope {
-            val ctx = appCtx ?: throw IllegalStateException("Context not set")
-            ensureStarted(ctx)
+            onUpdate: (List<EngineClient.LineDTO>) -> Unit
+        ): EngineClient.PositionDTO = coroutineScope {
 
-            val res = CompletableDeferred<PositionDTO>()
-            currentAnalysisJob?.cancel()
-            currentAnalysisJob = launch(Dispatchers.IO) {
-                engineMutex.withLock {
-                    StockfishBridge.readOutput()
-                    StockfishBridge.send("stop")
-                    StockfishBridge.send("isready")
-                    StockfishBridge.send("ucinewgame")
-                    StockfishBridge.send("isready")
+            val engine = StockfishBridge.acquire()
 
-                    if (skillLevel != null) {
-                        StockfishBridge.send("setoption name Skill Level value $skillLevel")
+            try {
+                StockfishBridge.readOutput()
+                StockfishBridge.send(engine, "ucinewgame")
+                StockfishBridge.send(engine, "isready")
+
+                if (skillLevel != null) {
+                    StockfishBridge.send(engine, "setoption name Skill Level value $skillLevel")
+                }
+
+                StockfishBridge.send(engine, "setoption name MultiPV value ${multiPv.coerceAtLeast(1)}")
+                StockfishBridge.send(engine, "isready")
+                delay(50)
+
+                StockfishBridge.send(engine, "position fen $fen")
+                StockfishBridge.go(engine, depth)
+
+                val (lines, best) = pumpUntilBestmove(
+                    engine = engine,
+                    wantedDepth = depth,
+                    onPartial = { onUpdate(it) }
+                )
+
+                EngineClient.PositionDTO(lines, best ?: lines.firstOrNull()?.pv?.firstOrNull())
+
+            } finally {
+                StockfishBridge.release(engine)
+            }
+        }
+
+        private suspend fun pumpUntilBestmove(
+            engine: StockfishBridge.EngineInstance,
+            wantedDepth: Int,
+            onPartial: ((List<EngineClient.LineDTO>) -> Unit)? = null,
+            timeoutMs: Long = 120_000
+        ): Pair<List<EngineClient.LineDTO>, String?> {
+
+            val rxInfo = Regex("""^info\s+.*\bdepth\s+\d+.*""", RegexOption.MULTILINE)
+            val rxDepth = Regex("""\bdepth\s+(\d+)""")
+            val rxMultiPv = Regex("""\bmultipv\s+(\d+)""")
+            val rxScoreCp = Regex("""\bscore\s+cp\s+(-?\d+)""")
+            val rxScoreMate = Regex("""\bscore\s+mate\s+(-?\d+)""")
+            val rxPv = Regex("""\bpv\s+(.+)$""")
+            val rxBestmove = Regex("""^bestmove\s+(\S+)""", RegexOption.MULTILINE)
+
+            data class AccLine(
+                var depth: Int? = null,
+                var cp: Int? = null,
+                var mate: Int? = null,
+                var pv: List<String> = emptyList()
+            )
+
+            val start = System.currentTimeMillis()
+            val acc = mutableMapOf<Int, AccLine>()
+            var best: String? = null
+            var lastDepth = 0
+
+            while (System.currentTimeMillis() - start < timeoutMs) {
+                val chunk = StockfishBridge.readOutput()
+
+                if (chunk.isNotEmpty()) {
+                    chunk.lineSequence().forEach { line ->
+                        when {
+                            rxInfo.matches(line) -> {
+                                val mp = rxMultiPv.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
+                                val slot = acc.getOrPut(mp) { AccLine() }
+
+                                slot.depth = rxDepth.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: slot.depth
+
+                                val mMate = rxScoreMate.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                                val mCp = rxScoreCp.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+                                if (mMate != null) {
+                                    slot.mate = mMate
+                                    slot.cp = null
+                                } else if (mCp != null) {
+                                    slot.cp = mCp
+                                    slot.mate = null
+                                }
+
+                                rxPv.find(line)?.groupValues?.getOrNull(1)?.let { pv ->
+                                    slot.pv = pv.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+                                }
+
+                                val currentDepth = slot.depth ?: 0
+                                if (currentDepth > lastDepth) {
+                                    lastDepth = currentDepth
+
+                                    val snapshot = acc.entries.sortedBy { it.key }.map { (mp, a) ->
+                                        EngineClient.LineDTO(a.pv, a.cp, a.mate, a.depth, mp)
+                                    }
+
+                                    onPartial?.invoke(snapshot)
+                                }
+                            }
+
+                            line.startsWith("bestmove") -> {
+                                val m = rxBestmove.find(line)
+                                best = m?.groupValues?.getOrNull(1)?.let { bm ->
+                                    if (bm != "(none)" && bm != "0000") bm else null
+                                }
+
+                                val finalLines = acc.entries.sortedBy { it.key }.map { (mp, a) ->
+                                    EngineClient.LineDTO(a.pv, a.cp, a.mate, a.depth, mp)
+                                }
+
+                                return finalLines to best
+                            }
+                        }
                     }
-                    StockfishBridge.send("setoption name MultiPV value ${multiPv.coerceAtLeast(1)}")
-                    StockfishBridge.send("isready")
+                } else {
+                    delay(20)
+                }
 
-                    StockfishBridge.send("position fen $fen")
-                    StockfishBridge.go(depth)
-
-                    val (lines, best) = pumpUntilBestmove(depth, onPartial = { snap ->
-                        if (snap.isNotEmpty()) onUpdate(snap)
-                    })
-                    val pos = PositionDTO(lines, best ?: lines.firstOrNull()?.pv?.firstOrNull())
-                    onUpdate(pos.lines)
-                    res.complete(pos)
+                if (wantedDepth > 0 && lastDepth >= wantedDepth) {
+                    StockfishBridge.stop(engine)
                 }
             }
-            res.await()
+
+            val finalLines = acc.entries.sortedBy { it.key }.map { (mp, a) ->
+                EngineClient.LineDTO(a.pv, a.cp, a.mate, a.depth, mp)
+            }
+
+            return finalLines to best
         }
     }
-
     private fun parseClockDataFromPgn(pgn: String): ClockData {
         val clockPattern = Regex("""\[%clk\s+(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:\.(\d+))?\]""", RegexOption.IGNORE_CASE)
         val whiteTimes = mutableListOf<Int>()

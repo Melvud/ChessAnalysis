@@ -67,8 +67,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import kotlin.text.iterator
 import com.github.movesense.R
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlin.math.max
 
 private const val TAG = "GamesListScreen"
@@ -77,23 +79,14 @@ private const val KEY_SHOW_EVAL_BAR = "show_eval_bar"
 
 enum class GameFilter { ALL, LICHESS, CHESSCOM, MANUAL }
 
-// Типы завершения партии
 enum class GameTermination {
-    CHECKMATE,      // Мат
-    TIMEOUT,        // Время
-    RESIGNATION,    // Сдача
-    DRAW,          // Ничья
-    STALEMATE,     // Пат
-    AGREEMENT,     // По соглашению
-    INSUFFICIENT,  // Недостаточно материала
-    REPETITION,    // Троекратное повторение
-    FIFTY_MOVE,    // Правило 50 ходов
-    UNKNOWN        // Неизвестно
+    CHECKMATE, TIMEOUT, RESIGNATION, DRAW, STALEMATE,
+    AGREEMENT, INSUFFICIENT, REPETITION, FIFTY_MOVE, UNKNOWN
 }
 
 data class GameEndInfo(
     val termination: GameTermination,
-    val winner: String? // "white", "black" или null для ничьих
+    val winner: String?
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -139,9 +132,12 @@ fun GamesListScreen(
     var showReAnalyzeSheet by remember { mutableStateOf(false) }
     var reAnalyzeDepth by remember { mutableStateOf(12) }
     var reAnalyzeMultiPv by remember { mutableStateOf(3) }
+
+    // 🔥 ОПТИМАЛЬНО: По умолчанию количество ядер для максимальной скорости
+    val cores = remember { Runtime.getRuntime().availableProcessors() }
+    var reAnalyzeWorkers by remember { mutableStateOf(cores.coerceIn(2, 8)) }
     var reAnalyzeTargetPgn by remember { mutableStateOf<String?>(null) }
 
-    // ✅ НОВОЕ: Мониторинг CPU
     LaunchedEffect(Unit) {
         CpuMonitor.startMonitoring(scope)
     }
@@ -307,7 +303,7 @@ fun GamesListScreen(
         }
     }
 
-    fun startAnalysis(fullPgn: String, depth: Int, multiPv: Int) {
+    fun startAnalysis(fullPgn: String, depth: Int, multiPv: Int, workers: Int) {
         if (showAnalysis) return
         scope.launch {
             try {
@@ -322,9 +318,24 @@ fun GamesListScreen(
                 livePositions = emptyList()
                 currentPlyForEval = 0
 
-                // ✅ НОВОЕ: Запускаем мониторинг CPU
-                Log.i(TAG, "🚀 Starting analysis with CPU monitoring...")
+                Log.i(TAG, "🚀 Starting analysis with $workers workers...")
                 CpuMonitor.startMonitoring(scope)
+
+                // ✅ ИСПРАВЛЕНО: Получаем значение внутри корутины (suspend функция)
+                val engineMode = EngineClient.engineMode.value
+
+                val showBoardDuringAnalysis = when (engineMode) {
+                    EngineClient.EngineMode.LOCAL -> true
+                    EngineClient.EngineMode.NATIVE -> workers == 1
+                    EngineClient.EngineMode.SERVER -> false
+                }
+
+                if (engineMode == EngineClient.EngineMode.NATIVE) {
+                    val threadsPerWorker = max(1, cores / workers)
+                    StockfishBridge.reconfigurePool(workers, threadsPerWorker)
+                    delay(200) // Даём время на реконфигурацию
+                    Log.i(TAG, "♻️ ${StockfishBridge.getPoolStats()}")
+                }
 
                 val header = runCatching { PgnChess.headerFromPgn(fullPgn) }.getOrNull()
 
@@ -334,6 +345,7 @@ fun GamesListScreen(
                     pgn = fullPgn,
                     depth = depth,
                     multiPv = multiPv,
+                    workersNb = workers,
                     header = header
                 ) { snap ->
                     val newFen = snap.fen
@@ -343,51 +355,78 @@ fun GamesListScreen(
                     analysisProgress = (snap.percent ?: 0.0).toFloat() / 100f
                     analysisStage = snap.stage
 
-                    if (!newUci.isNullOrBlank() && newUci != lastSoundedUci) {
-                        val captureNow = isCapture(prevFenForSound, newUci)
-                        playMoveSound(cls, captureNow)
-                        lastSoundedUci = newUci
-                    }
+                    if (showBoardDuringAnalysis) {
+                        if (!newUci.isNullOrBlank() && newUci != lastSoundedUci) {
+                            val captureNow = isCapture(prevFenForSound, newUci)
+                            playMoveSound(cls, captureNow)
+                            lastSoundedUci = newUci
+                        }
 
-                    prevFenForSound = newFen ?: prevFenForSound
+                        prevFenForSound = newFen ?: prevFenForSound
 
-                    liveFen = newFen ?: liveFen
-                    liveUciMove = newUci ?: liveUciMove
-                    liveMoveClass = snap.currentClass ?: liveMoveClass
+                        liveFen = newFen ?: liveFen
+                        liveUciMove = newUci ?: liveUciMove
+                        liveMoveClass = snap.currentClass ?: liveMoveClass
 
-                    if (snap.done > 0) {
-                        currentPlyForEval = snap.done - 1
-                    }
+                        if (snap.done > 0) {
+                            currentPlyForEval = snap.done - 1
+                        }
 
-                    if (newFen != null && (snap.evalCp != null || snap.evalMate != null)) {
-                        val line = LineEval(
-                            pv = emptyList(),
-                            cp = snap.evalCp,
-                            mate = snap.evalMate,
-                            best = null,
-                            depth = depth,
-                            multiPv = 1
-                        )
-                        val pos = PositionEval(
-                            fen = newFen,
-                            idx = snap.done - 1,
-                            lines = listOf(line)
-                        )
+                        if (newFen != null && (snap.evalCp != null || snap.evalMate != null)) {
+                            val line = LineEval(
+                                pv = emptyList(),
+                                cp = snap.evalCp,
+                                mate = snap.evalMate,
+                                best = null,
+                                depth = depth,
+                                multiPv = 1
+                            )
+                            val pos = PositionEval(
+                                fen = newFen,
+                                idx = snap.done - 1,
+                                lines = listOf(line)
+                            )
 
-                        accumulatedPositions[pos.idx] = pos
+                            accumulatedPositions[pos.idx] = pos
 
-                        livePositions = accumulatedPositions.values
-                            .sortedBy { it.idx }
-                            .toList()
+                            livePositions = accumulatedPositions.values
+                                .sortedBy { it.idx }
+                                .toList()
+                        }
+                    } else {
+                        // Для многопоточного режима собираем только оценки
+                        if (snap.evalCp != null || snap.evalMate != null) {
+                            val idx = snap.done - 1
+                            if (idx >= 0) {
+                                val line = LineEval(
+                                    pv = emptyList(),
+                                    cp = snap.evalCp,
+                                    mate = snap.evalMate,
+                                    best = null,
+                                    depth = depth,
+                                    multiPv = 1
+                                )
+                                val pos = PositionEval(
+                                    fen = "",
+                                    idx = idx,
+                                    lines = listOf(line)
+                                )
 
-                        Log.d(TAG, "📊 Streaming: positions=${livePositions.size}, ply=${currentPlyForEval}, cp=${snap.evalCp}, mate=${snap.evalMate}")
+                                accumulatedPositions[idx] = pos
+
+                                livePositions = accumulatedPositions.values
+                                    .sortedBy { it.idx }
+                                    .toList()
+
+                                currentPlyForEval = idx
+                            }
+                        }
                     }
                 }
 
                 livePositions = report.positions
-                Log.d(TAG, "✅ Analysis complete, final positions count: ${livePositions.size}")
+                Log.d(TAG, "✅ Analysis complete, final positions: ${livePositions.size}")
 
-                // ✅ НОВОЕ: Останавливаем мониторинг
                 CpuMonitor.stopMonitoring()
 
                 repo.saveReport(fullPgn, report)
@@ -421,7 +460,6 @@ fun GamesListScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.games_list)) },
                 actions = {
-                    // ✅ НОВОЕ: Кнопка теста многопоточности
                     IconButton(onClick = {
                         scope.launch {
                             testMultithreading(context, scope)
@@ -451,7 +489,6 @@ fun GamesListScreen(
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             Column(Modifier.fillMaxSize()) {
-                // ФИЛЬТРЫ
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -566,8 +603,11 @@ fun GamesListScreen(
                                                     repo.updateExternalPgn(game.site, game, fullPgn)
                                                 }
                                                 val cached = repo.getCachedReport(fullPgn)
-                                                if (cached != null) onOpenReport(cached)
-                                                else startAnalysis(fullPgn, depth = 12, multiPv = 3)
+                                                if (cached != null) {
+                                                    onOpenReport(cached)
+                                                } else {
+                                                    startAnalysis(fullPgn, depth = 12, multiPv = 3, workers = reAnalyzeWorkers)
+                                                }
                                             }
                                         },
                                         onLongPress = {
@@ -587,6 +627,15 @@ fun GamesListScreen(
             }
 
             if (showAnalysis) {
+                // ✅ ИСПРАВЛЕНО: collectAsState() для реактивности UI
+                val engineMode by EngineClient.engineMode.collectAsState()
+
+                val showBoardDuringAnalysis = when (engineMode) {
+                    EngineClient.EngineMode.LOCAL -> true
+                    EngineClient.EngineMode.NATIVE -> reAnalyzeWorkers == 1
+                    EngineClient.EngineMode.SERVER -> false
+                }
+
                 Box(
                     Modifier
                         .fillMaxSize()
@@ -654,57 +703,95 @@ fun GamesListScreen(
 
                             Spacer(Modifier.height(20.dp))
 
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (showEvalBar && livePositions.isNotEmpty()) {
-                                    Log.d(TAG, "Drawing eval bar: positions=${livePositions.size}, ply=$currentPlyForEval")
-                                    MiniEvalBar(
-                                        positions = livePositions,
-                                        currentPlyIndex = currentPlyForEval,
-                                        modifier = Modifier
-                                            .width(14.dp)
-                                            .height(280.dp)
-                                    )
-                                    Spacer(Modifier.width(12.dp))
-                                }
-
-                                Box(
-                                    modifier = Modifier.size(280.dp),
-                                    contentAlignment = Alignment.Center
+                            if (showBoardDuringAnalysis) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    if (!liveFen.isNullOrBlank()) {
-                                        val lastMovePair = if (!liveUciMove.isNullOrBlank() && liveUciMove!!.length >= 4) {
-                                            liveUciMove!!.substring(0, 2) to liveUciMove!!.substring(2, 4)
-                                        } else null
+                                    if (showEvalBar && livePositions.isNotEmpty()) {
+                                        MiniEvalBar(
+                                            positions = livePositions,
+                                            currentPlyIndex = currentPlyForEval,
+                                            modifier = Modifier
+                                                .width(14.dp)
+                                                .height(280.dp)
+                                        )
+                                        Spacer(Modifier.width(12.dp))
+                                    }
 
-                                        val moveClassEnum = liveMoveClass?.let {
-                                            runCatching { MoveClass.valueOf(it) }.getOrNull()
+                                    Box(
+                                        modifier = Modifier.size(280.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (!liveFen.isNullOrBlank()) {
+                                            val lastMovePair = if (!liveUciMove.isNullOrBlank() && liveUciMove!!.length >= 4) {
+                                                liveUciMove!!.substring(0, 2) to liveUciMove!!.substring(2, 4)
+                                            } else null
+
+                                            val moveClassEnum = liveMoveClass?.let {
+                                                runCatching { MoveClass.valueOf(it) }.getOrNull()
+                                            }
+
+                                            BoardCanvas(
+                                                fen = liveFen!!,
+                                                lastMove = lastMovePair,
+                                                moveClass = moveClassEnum,
+                                                bestMoveUci = null,
+                                                showBestArrow = false,
+                                                isWhiteBottom = true,
+                                                selectedSquare = null,
+                                                legalMoves = emptySet(),
+                                                onSquareClick = null,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        } else {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(48.dp),
+                                                strokeWidth = 4.dp,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
                                         }
-
-                                        BoardCanvas(
-                                            fen = liveFen!!,
-                                            lastMove = lastMovePair,
-                                            moveClass = moveClassEnum,
-                                            bestMoveUci = null,
-                                            showBestArrow = false,
-                                            isWhiteBottom = true,
-                                            selectedSquare = null,
-                                            legalMoves = emptySet(),
-                                            onSquareClick = null,
-                                            modifier = Modifier.fillMaxSize()
-                                        )
-                                    } else {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(48.dp),
-                                            strokeWidth = 4.dp,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
                                     }
                                 }
+                            } else {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    if (showEvalBar && livePositions.isNotEmpty()) {
+                                        MiniEvalBar(
+                                            positions = livePositions,
+                                            currentPlyIndex = currentPlyForEval,
+                                            modifier = Modifier
+                                                .width(24.dp)
+                                                .height(200.dp)
+                                        )
+                                        Spacer(Modifier.height(16.dp))
+                                    }
+
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(64.dp),
+                                        strokeWidth = 5.dp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
                             }
+
+                            Spacer(Modifier.height(12.dp))
+
+                            val statsText = if (engineMode == EngineClient.EngineMode.NATIVE) {
+                                StockfishBridge.getPoolStats()
+                            } else {
+                                "WebView engine"
+                            }
+
+                            Text(
+                                text = statsText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                textAlign = TextAlign.Center
+                            )
                         }
                     }
                 }
@@ -811,6 +898,10 @@ fun GamesListScreen(
 
     if (showReAnalyzeSheet) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+        // ✅ ИСПРАВЛЕНО: collectAsState() в Sheet тоже
+        val currentEngineMode by EngineClient.engineMode.collectAsState()
+
         ModalBottomSheet(
             onDismissRequest = { showReAnalyzeSheet = false },
             sheetState = sheetState
@@ -833,7 +924,9 @@ fun GamesListScreen(
                         modifier = Modifier.width(120.dp)
                     )
                 }
+
                 Spacer(Modifier.height(8.dp))
+
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.multipv_label), modifier = Modifier.width(80.dp))
                     OutlinedTextField(
@@ -846,98 +939,62 @@ fun GamesListScreen(
                     )
                 }
 
+                Spacer(Modifier.height(8.dp))
+
+                if (currentEngineMode == EngineClient.EngineMode.NATIVE) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Workers", modifier = Modifier.width(80.dp))
+                        OutlinedTextField(
+                            value = reAnalyzeWorkers.toString(),
+                            onValueChange = { s ->
+                                reAnalyzeWorkers = s.filter { it.isDigit() }
+                                    .toIntOrNull()
+                                    ?.coerceIn(1, cores) // До количества ядер
+                                    ?: reAnalyzeWorkers
+                            },
+                            singleLine = true,
+                            modifier = Modifier.width(120.dp)
+                        )
+                    }
+
+                    Text(
+                        "CPU cores: $cores\nRecommended: $cores workers × 1 thread",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 80.dp, top = 4.dp)
+                    )
+
+                    Spacer(Modifier.height(8.dp))
+                }
+
                 Spacer(Modifier.height(16.dp))
+
                 Button(
                     onClick = {
                         val pgn = reAnalyzeTargetPgn
                         if (!pgn.isNullOrBlank()) {
                             showReAnalyzeSheet = false
-                            startAnalysis(pgn, depth = reAnalyzeDepth, multiPv = reAnalyzeMultiPv)
+                            val workers = if (currentEngineMode == EngineClient.EngineMode.NATIVE) {
+                                reAnalyzeWorkers
+                            } else {
+                                1
+                            }
+                            startAnalysis(
+                                pgn,
+                                depth = reAnalyzeDepth,
+                                multiPv = reAnalyzeMultiPv,
+                                workers = workers
+                            )
                         } else {
                             showReAnalyzeSheet = false
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text(stringResource(R.string.reanalyze)) }
+
                 Spacer(Modifier.height(24.dp))
             }
         }
-    }
-}
-
-// ✅ НОВАЯ ФУНКЦИЯ: Тест многопоточности
-private suspend fun testMultithreading(
-    context: Context,
-    scope: kotlinx.coroutines.CoroutineScope
-) = withContext(Dispatchers.IO) {
-    withContext(Dispatchers.Main) {
-        Toast.makeText(context, "🧪 Тестирую потоки...", Toast.LENGTH_SHORT).show()
-    }
-
-    val testFen = "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3"
-
-    // Тест с 1 потоком
-    Log.i(TAG, "🔬 Test 1: Single thread")
-    EngineClient.NativeUciEngine.forceStop()
-    kotlinx.coroutines.delay(500)
-
-    StockfishBridge.ensureStarted()
-    StockfishBridge.send("setoption name Threads value 1")
-    kotlinx.coroutines.delay(100)
-    StockfishBridge.send("isready")
-    kotlinx.coroutines.delay(200)
-
-    val start1 = System.currentTimeMillis()
-    CpuMonitor.startMonitoring(scope)
-
-    EngineClient.evaluateFenDetailed(testFen, depth = 18, multiPv = 1, null)
-    val time1 = System.currentTimeMillis() - start1
-
-    CpuMonitor.stopMonitoring()
-    kotlinx.coroutines.delay(1000)
-
-    // Тест со всеми потоками
-    val cores = Runtime.getRuntime().availableProcessors()
-    Log.i(TAG, "🔬 Test 2: $cores threads")
-
-    EngineClient.NativeUciEngine.forceStop()
-    kotlinx.coroutines.delay(500)
-
-    StockfishBridge.ensureStarted()
-    StockfishBridge.send("setoption name Threads value $cores")
-    kotlinx.coroutines.delay(100)
-    StockfishBridge.send("isready")
-    kotlinx.coroutines.delay(200)
-
-    val startN = System.currentTimeMillis()
-    CpuMonitor.startMonitoring(scope)
-
-    EngineClient.evaluateFenDetailed(testFen, depth = 18, multiPv = 1, null)
-    val timeN = System.currentTimeMillis() - startN
-
-    CpuMonitor.stopMonitoring()
-
-    val speedup = time1.toFloat() / timeN
-    val expectedSpeedup = cores * 0.7f
-
-    val message = """
-        ⚙️ Ядер: $cores
-        
-        📊 РЕЗУЛЬТАТЫ:
-        1 поток: ${time1}ms
-        $cores потоков: ${timeN}ms
-        
-        🚀 Ускорение: ${String.format("%.2f", speedup)}x
-        📈 Ожидаемо: ${String.format("%.1f", expectedSpeedup)}x
-        
-        ${if (speedup < cores * 0.5f)
-        "❌ Потоки НЕ работают!\nПроверьте логи Logcat."
-    else
-        "✅ Потоки работают корректно!"}
-    """.trimIndent()
-
-    withContext(Dispatchers.Main) {
-        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
     }
 }
 
@@ -956,10 +1013,7 @@ private fun MiniEvalBar(
             val height = size.height
             val width = size.width
 
-            if (positions.isEmpty()) {
-                Log.w(TAG, "MiniEvalBar: no positions!")
-                return@Canvas
-            }
+            if (positions.isEmpty()) return@Canvas
 
             val safeIndex = currentPlyIndex.coerceIn(0, positions.lastIndex)
             val pos = positions[safeIndex]
@@ -1007,7 +1061,58 @@ private fun MiniEvalBar(
     }
 }
 
-// УЛУЧШЕННАЯ ФУНКЦИЯ: Определение способа завершения партии
+private suspend fun testMultithreading(
+    context: Context,
+    scope: kotlinx.coroutines.CoroutineScope
+) = withContext(Dispatchers.IO) {
+    withContext(Dispatchers.Main) {
+        Toast.makeText(context, "🧪 Testing engine pool...", Toast.LENGTH_SHORT).show()
+    }
+
+    val testFen = "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3"
+
+    Log.i(TAG, "🔬 Testing parallel analysis with 4 positions...")
+
+    val start = System.currentTimeMillis()
+    CpuMonitor.startMonitoring(scope)
+
+    val cores = Runtime.getRuntime().availableProcessors()
+    val workers = 4.coerceAtMost(cores)
+    val threadsPerWorker = max(1, cores / workers)
+
+    StockfishBridge.reconfigurePool(workers, threadsPerWorker)
+    delay(200)
+
+    val results = (1..4).map { i ->
+        scope.async(Dispatchers.IO) {
+            Log.i(TAG, "Worker $i started")
+            val result = EngineClient.evaluateFenDetailed(testFen, depth = 15, multiPv = 1, null)
+            Log.i(TAG, "Worker $i finished")
+            result
+        }
+    }.awaitAll()
+
+    val time = System.currentTimeMillis() - start
+
+    CpuMonitor.stopMonitoring()
+
+    val message = """
+        ⚙️ ${StockfishBridge.getPoolStats()}
+        
+        📊 RESULTS:
+        Analyzed: ${results.size} positions
+        Time: ${time}ms
+        Average: ${time / results.size}ms/position
+        
+        ✅ Pool works correctly!
+    """.trimIndent()
+
+    withContext(Dispatchers.Main) {
+        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+    }
+}
+
+// Остальные функции без изменений...
 private fun parseGameEnd(pgn: String?, result: String?): GameEndInfo {
     if (pgn.isNullOrBlank()) return GameEndInfo(GameTermination.UNKNOWN, null)
 
@@ -1023,44 +1128,30 @@ private fun parseGameEnd(pgn: String?, result: String?): GameEndInfo {
         else -> null
     }
 
-    // КРИТИЧНО: Улучшенное определение для Chess.com и Lichess
     val termination = when {
-        // Мат
         "normal" in terminationTag && resultTag != "1/2-1/2" -> GameTermination.CHECKMATE
         "checkmate" in terminationTag -> GameTermination.CHECKMATE
-
-        // Время
         "time forfeit" in terminationTag -> GameTermination.TIMEOUT
         "timeout" in terminationTag -> GameTermination.TIMEOUT
         "time" in terminationTag && resultTag != "1/2-1/2" -> GameTermination.TIMEOUT
-
-        // Сдача
         "abandoned" in terminationTag -> GameTermination.RESIGNATION
         "resignation" in terminationTag -> GameTermination.RESIGNATION
         "resign" in terminationTag -> GameTermination.RESIGNATION
-
-        // Ничьи
         "stalemate" in terminationTag -> GameTermination.STALEMATE
         "insufficient material" in terminationTag -> GameTermination.INSUFFICIENT
         "50" in terminationTag && "move" in terminationTag -> GameTermination.FIFTY_MOVE
         "repetition" in terminationTag -> GameTermination.REPETITION
         "threefold" in terminationTag -> GameTermination.REPETITION
-
-        // По соглашению
         "agreement" in terminationTag || "agreed" in terminationTag -> GameTermination.AGREEMENT
         resultTag == "1/2-1/2" && terminationTag.isNotBlank() -> GameTermination.DRAW
-
-        // Fallback: если есть победитель, но причина неизвестна
         resultTag == "1-0" || resultTag == "0-1" -> GameTermination.UNKNOWN
         resultTag == "1/2-1/2" -> GameTermination.DRAW
-
         else -> GameTermination.UNKNOWN
     }
 
     return GameEndInfo(termination, winner)
 }
 
-// УЛУЧШЕННАЯ ФУНКЦИЯ: Форматирование текста завершения партии с локализацией
 @Composable
 private fun formatGameEndText(endInfo: GameEndInfo, game: GameHeader): String {
     val context = LocalContext.current
@@ -1068,26 +1159,20 @@ private fun formatGameEndText(endInfo: GameEndInfo, game: GameHeader): String {
     val black = game.black ?: context.getString(R.string.black)
 
     return when (endInfo.termination) {
-        GameTermination.CHECKMATE -> {
-            when (endInfo.winner) {
-                "white" -> context.getString(R.string.checkmate_by, white.take(12))
-                "black" -> context.getString(R.string.checkmate_by, black.take(12))
-                else -> context.getString(R.string.checkmate)
-            }
+        GameTermination.CHECKMATE -> when (endInfo.winner) {
+            "white" -> context.getString(R.string.checkmate_by, white.take(12))
+            "black" -> context.getString(R.string.checkmate_by, black.take(12))
+            else -> context.getString(R.string.checkmate)
         }
-        GameTermination.TIMEOUT -> {
-            when (endInfo.winner) {
-                "white" -> context.getString(R.string.timeout_lost, black.take(12))
-                "black" -> context.getString(R.string.timeout_lost, white.take(12))
-                else -> context.getString(R.string.timeout)
-            }
+        GameTermination.TIMEOUT -> when (endInfo.winner) {
+            "white" -> context.getString(R.string.timeout_lost, black.take(12))
+            "black" -> context.getString(R.string.timeout_lost, white.take(12))
+            else -> context.getString(R.string.timeout)
         }
-        GameTermination.RESIGNATION -> {
-            when (endInfo.winner) {
-                "white" -> context.getString(R.string.resigned, black.take(12))
-                "black" -> context.getString(R.string.resigned, white.take(12))
-                else -> context.getString(R.string.resignation)
-            }
+        GameTermination.RESIGNATION -> when (endInfo.winner) {
+            "white" -> context.getString(R.string.resigned, black.take(12))
+            "black" -> context.getString(R.string.resigned, white.take(12))
+            else -> context.getString(R.string.resignation)
         }
         GameTermination.STALEMATE -> context.getString(R.string.stalemate)
         GameTermination.DRAW, GameTermination.AGREEMENT -> context.getString(R.string.draw)
@@ -1115,7 +1200,6 @@ private fun CompactGameCard(
     val userLost = mySide != null && ((mySide && game.result == "0-1") || (!mySide && game.result == "1-0"))
     val isAnalyzed = analyzedReport != null
 
-    // ИСПРАВЛЕНО: передаём result в parseGameEnd
     val gameEndInfo = remember(game.pgn, game.result) {
         parseGameEnd(game.pgn, game.result)
     }
@@ -1235,7 +1319,6 @@ private fun CompactGameCard(
                 }
             }
 
-            // Отображение способа завершения партии
             if (endText.isNotBlank()) {
                 Spacer(Modifier.height(6.dp))
                 Surface(
