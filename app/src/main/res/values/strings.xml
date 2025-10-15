@@ -167,4 +167,8 @@
     <string name="insufficient_material">= Недостаточно материала</string>
     <string name="threefold_repetition">= Троекратное повторение</string>
     <string name="fifty_move_rule">= Правило 50 ходов</string>
+
+    <!-- GamesListScreen -->
+    <string name="remaining_time">Осталось: %1$s</string>
+
 </resources>

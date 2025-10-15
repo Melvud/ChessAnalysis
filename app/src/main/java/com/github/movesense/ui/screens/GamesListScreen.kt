@@ -59,9 +59,11 @@ import com.github.movesense.Provider
 import com.github.movesense.data.local.gameRepository
 import com.github.movesense.ui.UserProfile
 import com.github.movesense.ui.components.BoardCanvas
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
-import kotlin.text.iterator
+import kotlin.math.max
+import kotlin.math.roundToLong
 import com.github.movesense.R
 
 private const val TAG = "GamesListScreen"
@@ -75,13 +77,13 @@ enum class GameTermination {
     CHECKMATE,      // Мат
     TIMEOUT,        // Время
     RESIGNATION,    // Сдача
-    DRAW,          // Ничья
-    STALEMATE,     // Пат
-    AGREEMENT,     // По соглашению
-    INSUFFICIENT,  // Недостаточно материала
-    REPETITION,    // Троекратное повторение
-    FIFTY_MOVE,    // Правило 50 ходов
-    UNKNOWN        // Неизвестно
+    DRAW,           // Ничья
+    STALEMATE,      // Пат
+    AGREEMENT,      // По соглашению
+    INSUFFICIENT,   // Недостаточно материала
+    REPETITION,     // Троекратное повторение
+    FIFTY_MOVE,     // Правило 50 ходов
+    UNKNOWN         // Неизвестно
 }
 
 data class GameEndInfo(
@@ -123,6 +125,16 @@ fun GamesListScreen(
     var livePositions by remember { mutableStateOf<List<PositionEval>>(emptyList()) }
     var currentPlyForEval by remember { mutableStateOf(0) }
 
+    // 🔵 ETA: состояние и расчёт (монотонно не растёт)
+    var visibleEtaMs by remember { mutableStateOf<Long?>(null) }        // то, что показываем в UI (тикает каждую секунду)
+    var emaPerMoveMs by remember { mutableStateOf<Double?>(null) }      // сглаженная средняя длительность полухода
+    var lastTickDone by remember { mutableStateOf<Int?>(null) }         // done в момент последнего апдейта скорости
+    var lastTickAtMs by remember { mutableStateOf<Long?>(null) }        // время того апдейта
+    var etaAnchorStartMs by remember { mutableStateOf<Long?>(null) }    // якорная точка обратного отсчёта
+    var etaInitialMs by remember { mutableStateOf<Long?>(null) }        // стартовое значение обратного отсчёта
+    var totalPly by remember { mutableStateOf<Int?>(null) }             // общее число полуходов
+    var analysisStartAtMs by remember { mutableStateOf<Long?>(null) }   // время старта анализа (для первой оценки)
+
     var prevFenForSound by remember { mutableStateOf<String?>(null) }
     var lastSoundedUci by remember { mutableStateOf<String?>(null) }
 
@@ -130,8 +142,8 @@ fun GamesListScreen(
     var pastedPgn by remember { mutableStateOf("") }
 
     var showReAnalyzeSheet by remember { mutableStateOf(false) }
-    var reAnalyzeDepth by remember { mutableStateOf(16) }
-    var reAnalyzeMultiPv by remember { mutableStateOf(3) }
+    var reAnalyzeDepth by remember { mutableStateOf(14) }
+    var reAnalyzeMultiPv by remember { mutableStateOf(2) }
     var reAnalyzeTargetPgn by remember { mutableStateOf<String?>(null) }
 
     fun playMoveSound(cls: MoveClass?, isCapture: Boolean) {
@@ -304,6 +316,16 @@ fun GamesListScreen(
                 livePositions = emptyList()
                 currentPlyForEval = 0
 
+                // 🔵 Сброс ETA/скорости
+                visibleEtaMs = null
+                emaPerMoveMs = null
+                lastTickDone = null
+                lastTickAtMs = null
+                etaAnchorStartMs = null
+                etaInitialMs = null
+                totalPly = null
+                analysisStartAtMs = System.currentTimeMillis()
+
                 val header = runCatching { PgnChess.headerFromPgn(fullPgn) }.getOrNull()
 
                 val accumulatedPositions = mutableMapOf<Int, PositionEval>()
@@ -314,12 +336,64 @@ fun GamesListScreen(
                     multiPv = multiPv,
                     header = header
                 ) { snap ->
+                    val now = System.currentTimeMillis()
+
                     val newFen = snap.fen
                     val newUci = snap.currentUci
                     val cls = snap.currentClass?.let { runCatching { MoveClass.valueOf(it) }.getOrNull() }
 
                     analysisProgress = (snap.percent ?: 0.0).toFloat() / 100f
                     analysisStage = snap.stage
+
+                    // 🔵 Скорость и монотонный ETA
+                    totalPly = snap.total
+                    val prevDone = lastTickDone
+                    if (snap.done > 0 && snap.total > 0) {
+                        // EMA-оценка скорости (не используется для увеличения, только для возможного уменьшения)
+                        if (prevDone != null && snap.done > prevDone) {
+                            val dt = (now - (lastTickAtMs ?: now)).coerceAtLeast(1L)
+                            val dDone = (snap.done - prevDone).coerceAtLeast(1)
+                            val instPerMove = dt.toDouble() / dDone.toDouble()
+                            emaPerMoveMs = emaPerMoveMs?.let { 0.2 * instPerMove + 0.8 * it } ?: instPerMove
+                        }
+                        lastTickDone = snap.done
+                        lastTickAtMs = now
+
+                        val remainingPly = (snap.total - snap.done).coerceAtLeast(0)
+
+                        if (etaAnchorStartMs == null || etaInitialMs == null) {
+                            // ⛳️ ПЕРВИЧНАЯ оценка: считаем ОДИН РАЗ и берём консервативную (бОльшую)
+                            val avgPerMove = ((now - (analysisStartAtMs ?: now)).toDouble() / snap.done.toDouble())
+                                .takeIf { it.isFinite() && it > 0 }
+                            val localRemaining = avgPerMove?.times(remainingPly)?.roundToLong()
+                            val backendRemaining = snap.etaMs
+                            val initial = listOfNotNull(localRemaining, backendRemaining).maxOrNull()
+                                ?: backendRemaining
+                                ?: localRemaining
+                                ?: 0L
+                            etaAnchorStartMs = now
+                            etaInitialMs = initial
+                            visibleEtaMs = initial
+                        } else {
+                            // Кандидаты на уменьшение
+                            val emaRemaining = emaPerMoveMs?.times(remainingPly)?.roundToLong()
+                            val candidate = listOfNotNull(emaRemaining, snap.etaMs).minOrNull()
+                            if (candidate != null) {
+                                val currentLeft = max(0L, etaAnchorStartMs!! + etaInitialMs!! - now)
+                                // Разрешаем только уменьшение
+                                if (candidate < currentLeft) {
+                                    etaAnchorStartMs = now
+                                    etaInitialMs = candidate
+                                    visibleEtaMs = candidate
+                                }
+                            }
+                        }
+                    } else if (visibleEtaMs == null && snap.etaMs != null) {
+                        // Фолбэк до первого done
+                        etaAnchorStartMs = now
+                        etaInitialMs = snap.etaMs
+                        visibleEtaMs = snap.etaMs
+                    }
 
                     if (!newUci.isNullOrBlank() && newUci != lastSoundedUci) {
                         val captureNow = isCapture(prevFenForSound, newUci)
@@ -378,6 +452,29 @@ fun GamesListScreen(
                     Toast.LENGTH_LONG
                 ).show()
             }
+        }
+    }
+
+    // 🔵 Каждую секунду убываем от якоря; вверх не скачем (только уменьшаем якорь в onProgress)
+    LaunchedEffect(showAnalysis, etaAnchorStartMs, etaInitialMs) {
+        if (!showAnalysis || etaAnchorStartMs == null || etaInitialMs == null) return@LaunchedEffect
+        while (showAnalysis && etaAnchorStartMs != null && etaInitialMs != null) {
+            val now = System.currentTimeMillis()
+            val left = max(0L, etaAnchorStartMs!! + etaInitialMs!! - now)
+            visibleEtaMs = left
+            delay(1000)
+        }
+    }
+
+    fun formatEta(ms: Long?): String {
+        if (ms == null) return "—"
+        val totalSec = (ms / 1000.0).roundToLong()
+        val h = totalSec / 3600
+        val m = (totalSec % 3600) / 60
+        val s = totalSec % 60
+        return when {
+            h > 0 -> String.format("%d:%02d:%02d", h, m, s)
+            else -> String.format("%d:%02d", m, s)
         }
     }
 
@@ -529,13 +626,13 @@ fun GamesListScreen(
                                                 }
                                                 val cached = repo.getCachedReport(fullPgn)
                                                 if (cached != null) onOpenReport(cached)
-                                                else startAnalysis(fullPgn, depth = 16, multiPv = 3)
+                                                else startAnalysis(fullPgn, depth = 12, multiPv = 3)
                                             }
                                         },
                                         onLongPress = {
                                             if (analyzedReport != null) {
                                                 reAnalyzeTargetPgn = game.pgn
-                                                reAnalyzeDepth = 16
+                                                reAnalyzeDepth = 12
                                                 reAnalyzeMultiPv = 3
                                                 showReAnalyzeSheet = true
                                             }
@@ -588,7 +685,19 @@ fun GamesListScreen(
                                 )
                             }
 
-                            Spacer(Modifier.height(12.dp))
+                            // 🔵 ETA — показываем прямо над прогресс-баром
+                            val etaLabel = formatEta(visibleEtaMs)
+                            if (etaLabel != "—") {
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    text = stringResource(R.string.remaining_time, etaLabel),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+
+                            Spacer(Modifier.height(10.dp))
 
                             Box(
                                 modifier = Modifier
@@ -614,7 +723,7 @@ fun GamesListScreen(
                                 )
                             }
 
-                            Spacer(Modifier.height(20.dp))
+                            Spacer(Modifier.height(16.dp))
 
                             Row(
                                 modifier = Modifier.fillMaxWidth(),

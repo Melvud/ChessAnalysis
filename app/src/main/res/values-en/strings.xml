@@ -169,4 +169,8 @@
     <string name="insufficient_material">= Insufficient material</string>
     <string name="threefold_repetition">= Threefold repetition</string>
     <string name="fifty_move_rule">= 50-move rule</string>
+
+    <!-- GamesListScreen -->
+    <string name="remaining_time">Time left: %1$s</string>
+
 </resources>
