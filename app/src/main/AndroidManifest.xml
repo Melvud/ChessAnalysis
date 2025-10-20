@@ -18,7 +18,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.ChessAnalyzer"
-        android:configChanges="orientation|screenSize|keyboardHidden"
+        android:configChanges="orientation|screenSize|locale|layoutDirection"
         android:usesCleartextTraffic="true"
         android:extractNativeLibs="true"
         android:enableOnBackInvokedCallback="true"

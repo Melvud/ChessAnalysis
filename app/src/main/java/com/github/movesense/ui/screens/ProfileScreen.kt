@@ -1,5 +1,6 @@
 package com.github.movesense.ui.screens
 
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -54,7 +55,7 @@ fun ProfileScreen(
 
     // Функция для проверки существования пользователя на Lichess
     suspend fun checkLichessUserExists(username: String): Boolean = withContext(Dispatchers.IO) {
-        if (username.isBlank()) return@withContext true // пустой ник считаем валидным
+        if (username.isBlank()) return@withContext true
         try {
             val client = OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
@@ -75,7 +76,7 @@ fun ProfileScreen(
 
     // Функция для проверки существования пользователя на Chess.com
     suspend fun checkChessComUserExists(username: String): Boolean = withContext(Dispatchers.IO) {
-        if (username.isBlank()) return@withContext true // пустой ник считаем валидным
+        if (username.isBlank()) return@withContext true
         try {
             val client = OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
@@ -164,7 +165,9 @@ fun ProfileScreen(
                 },
                 colors = TextFieldDefaults.colors(
                     disabledTextColor = MaterialTheme.colorScheme.onSurface,
-                    disabledContainerColor = MaterialTheme.colorScheme.surface
+                    disabledContainerColor = MaterialTheme.colorScheme.surface,
+                    disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    disabledTrailingIconColor = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             )
 
@@ -188,7 +191,7 @@ fun ProfileScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Server Mode (DISABLED - только показываем, но нельзя выбрать)
+                    // Server Mode (DISABLED)
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
@@ -197,8 +200,8 @@ fun ProfileScreen(
                     ) {
                         RadioButton(
                             selected = engineMode == EngineClient.EngineMode.SERVER,
-                            onClick = null, // Нельзя нажать
-                            enabled = false // Заблокировано
+                            onClick = null,
+                            enabled = false
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
@@ -217,7 +220,7 @@ fun ProfileScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Local Mode (единственный доступный вариант)
+                    // Local Mode
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
@@ -300,27 +303,27 @@ fun ProfileScreen(
 
                         scope.launch {
                             try {
-                                // Проверка существования никнеймов
-                                val lichessTrimed = lichessName.trim()
-                                val chessTrimed = chessName.trim()
+                                val lichessTrimmed = lichessName.trim()
+                                val chessTrimmed = chessName.trim()
 
-                                if (lichessTrimed.isNotEmpty()) {
-                                    val lichessExists = checkLichessUserExists(lichessTrimed)
+                                // Проверка существования никнеймов
+                                if (lichessTrimmed.isNotEmpty()) {
+                                    val lichessExists = checkLichessUserExists(lichessTrimmed)
                                     if (!lichessExists) {
                                         errorMessage = context.getString(
                                             R.string.user_not_found_error
-                                        ) + " (Lichess: $lichessTrimed)"
+                                        ) + " (Lichess: $lichessTrimmed)"
                                         isSaving = false
                                         return@launch
                                     }
                                 }
 
-                                if (chessTrimed.isNotEmpty()) {
-                                    val chessComExists = checkChessComUserExists(chessTrimed)
+                                if (chessTrimmed.isNotEmpty()) {
+                                    val chessComExists = checkChessComUserExists(chessTrimmed)
                                     if (!chessComExists) {
                                         errorMessage = context.getString(
                                             R.string.user_not_found_error
-                                        ) + " (Chess.com: $chessTrimed)"
+                                        ) + " (Chess.com: $chessTrimmed)"
                                         isSaving = false
                                         return@launch
                                     }
@@ -337,11 +340,14 @@ fun ProfileScreen(
                                         user.updateEmail(newEmail).await()
                                     }
 
+                                    // ✅ Проверяем, изменился ли язык
+                                    val languageChanged = selectedLanguage.code != profile.language
+
                                     // Update Firestore
                                     val data = mapOf(
                                         "nickname" to nickname.trim(),
-                                        "lichessUsername" to lichessTrimed,
-                                        "chessUsername" to chessTrimed,
+                                        "lichessUsername" to lichessTrimmed,
+                                        "chessUsername" to chessTrimmed,
                                         "language" to selectedLanguage.code
                                     )
 
@@ -351,20 +357,34 @@ fun ProfileScreen(
                                         .update(data)
                                         .await()
 
-                                    // Apply locale
-                                    LocaleManager.setLocale(context, selectedLanguage)
-
-                                    // Save profile
+                                    // Создаем обновленный профиль
                                     val updatedProfile = UserProfile(
                                         email = newEmail,
                                         nickname = nickname.trim(),
-                                        lichessUsername = lichessTrimed,
-                                        chessUsername = chessTrimed,
+                                        lichessUsername = lichessTrimmed,
+                                        chessUsername = chessTrimmed,
                                         language = selectedLanguage.code
                                     )
 
-                                    isSaving = false
+                                    // ✅ Сохраняем обновленный профиль
                                     onSave(updatedProfile)
+
+                                    // ✅ Если язык изменился, применяем его и перезапускаем Activity
+                                    if (languageChanged) {
+                                        withContext(Dispatchers.Main) {
+                                            LocaleManager.setLocale(
+                                                context as ComponentActivity,
+                                                selectedLanguage
+                                            )
+                                            // setLocale сам перезапустит Activity
+                                        }
+                                    } else {
+                                        // Если язык не менялся, просто возвращаемся назад
+                                        isSaving = false
+                                        withContext(Dispatchers.Main) {
+                                            onBack()
+                                        }
+                                    }
 
                                 } else {
                                     errorMessage = context.getString(R.string.user_not_found_error)
@@ -418,7 +438,7 @@ fun ProfileScreen(
     if (showLanguageDialog) {
         AlertDialog(
             onDismissRequest = { showLanguageDialog = false },
-            title = { Text(stringResource(R.string.language)) },
+            title = { Text(stringResource(R.string.select_language)) },
             text = {
                 Column {
                     LocaleManager.Language.values().forEach { language ->

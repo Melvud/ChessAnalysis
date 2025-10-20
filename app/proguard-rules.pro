@@ -35,7 +35,16 @@
 -keep @androidx.room.Entity class *
 -dontwarn androidx.room.paging.**
 
-# WebView debugging (если нужен remote debugging)
+# WebView debugging
 -keepclassmembers class * extends android.webkit.WebView {
    public *;
+}
+
+# ✅ КРИТИЧНО: Сохраняем LocaleManager
+-keep class com.github.movesense.util.LocaleManager { *; }
+-keep class com.github.movesense.util.LocaleManager$** { *; }
+
+# ✅ Сохраняем все ресурсы
+-keepclassmembers class **.R$* {
+    public static <fields>;
 }

@@ -1,8 +1,12 @@
+@file:Suppress("DEPRECATION")
+
 package com.github.movesense.util
 
+import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.content.res.Configuration
-import android.content.res.Resources
+import android.os.Build
 import java.util.Locale
 
 object LocaleManager {
@@ -17,42 +21,70 @@ object LocaleManager {
 
         companion object {
             fun fromCode(code: String): Language {
-                return values().find { it.code == code } ?: ENGLISH // Изменено с RUSSIAN на ENGLISH
+                return values().find { it.code == code } ?: ENGLISH
             }
         }
     }
 
+    /**
+     * Устанавливает язык и ПЕРЕЗАПУСКАЕТ Activity для применения изменений
+     */
     fun setLocale(context: Context, language: Language) {
+        val currentLanguage = getLocale(context)
+
+        // Сохраняем новый язык
         saveLanguage(context, language)
-        updateResources(context, language.code)
+
+        // Если язык изменился, перезапускаем Activity
+        if (currentLanguage != language && context is Activity) {
+            val intent = context.intent
+            context.finish()
+            context.startActivity(intent)
+        }
     }
 
+    /**
+     * Получает текущий язык из SharedPreferences
+     */
     fun getLocale(context: Context): Language {
         val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-        val code = prefs.getString(KEY_LANGUAGE, Language.ENGLISH.code) ?: Language.ENGLISH.code // Изменено с RUSSIAN на ENGLISH
-        return Language.fromCode(code)
+        val code = prefs.getString(KEY_LANGUAGE, null)
+        return if (code != null) {
+            Language.fromCode(code)
+        } else {
+            Language.ENGLISH
+        }
     }
 
+    /**
+     * Сохраняет язык в SharedPreferences
+     */
     private fun saveLanguage(context: Context, language: Language) {
         val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         prefs.edit().putString(KEY_LANGUAGE, language.code).apply()
     }
 
-    fun updateResources(context: Context, languageCode: String) {
-        val locale = Locale(languageCode)
-        Locale.setDefault(locale)
-
-        val resources: Resources = context.resources
-        val config: Configuration = resources.configuration
-        config.setLocale(locale)
-
-        context.createConfigurationContext(config)
-        resources.updateConfiguration(config, resources.displayMetrics)
+    /**
+     * Получает код языка из SharedPreferences (может быть null)
+     */
+    fun getSavedLanguageCode(context: Context): String? {
+        val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_LANGUAGE, null)
     }
 
+    /**
+     * Применяет локаль к контексту (для attachBaseContext)
+     */
     fun applyLocale(context: Context): Context {
         val language = getLocale(context)
-        val locale = Locale(language.code)
+        return updateContextLocale(context, language.code)
+    }
+
+    /**
+     * Создает новый контекст с правильной локалью
+     */
+    private fun updateContextLocale(context: Context, languageCode: String): Context {
+        val locale = Locale(languageCode)
         Locale.setDefault(locale)
 
         val config = Configuration(context.resources.configuration)
