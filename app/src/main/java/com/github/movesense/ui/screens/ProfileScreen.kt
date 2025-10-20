@@ -1,33 +1,33 @@
 package com.github.movesense.ui.screens
 
-import android.widget.Toast
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.github.movesense.EngineClient
-import com.github.movesense.EngineClient.EngineMode
-import com.github.movesense.R
 import com.github.movesense.ui.UserProfile
+import com.github.movesense.EngineClient
 import com.github.movesense.util.LocaleManager
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
+import com.github.movesense.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,67 +44,64 @@ fun ProfileScreen(
     var nickname by remember { mutableStateOf(profile.nickname) }
     var lichessName by remember { mutableStateOf(profile.lichessUsername) }
     var chessName by remember { mutableStateOf(profile.chessUsername) }
-    var selectedLanguage by remember { mutableStateOf(LocaleManager.Language.fromCode(profile.language)) }
+    var selectedLanguage by remember {
+        mutableStateOf(LocaleManager.Language.fromCode(profile.language))
+    }
     var showLanguageDialog by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
     val engineMode by EngineClient.engineMode.collectAsState()
 
+    // Функция для проверки существования пользователя на Lichess
     suspend fun checkLichessUserExists(username: String): Boolean = withContext(Dispatchers.IO) {
         if (username.isBlank()) return@withContext true
-        runCatching {
+        try {
             val client = OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(10, TimeUnit.SECONDS)
                 .build()
+
             val request = Request.Builder()
                 .url("https://lichess.org/api/user/$username")
                 .get()
                 .build()
-            client.newCall(request).execute().use { it.isSuccessful }
-        }.getOrElse { false }
+
+            val response = client.newCall(request).execute()
+            response.isSuccessful
+        } catch (e: Exception) {
+            false
+        }
     }
 
+    // Функция для проверки существования пользователя на Chess.com
     suspend fun checkChessComUserExists(username: String): Boolean = withContext(Dispatchers.IO) {
         if (username.isBlank()) return@withContext true
-        runCatching {
+        try {
             val client = OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(10, TimeUnit.SECONDS)
                 .build()
+
             val request = Request.Builder()
                 .url("https://api.chess.com/pub/player/$username")
                 .get()
                 .build()
-            client.newCall(request).execute().use { it.isSuccessful }
-        }.getOrElse { false }
+
+            val response = client.newCall(request).execute()
+            response.isSuccessful
+        } catch (e: Exception) {
+            false
+        }
     }
 
     Scaffold(
         topBar = {
-            // используем библиотечный Material3 SmallTopAppBar
             TopAppBar(
-                title = { Text(stringResource(R.string.profile), fontSize = 20.sp, fontWeight = FontWeight.SemiBold) },
+                title = { Text(stringResource(R.string.profile)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.back))
-                    }
-                },
-                actions = {
-                    IconButton(onClick = {
-                        onSave(
-                            profile.copy(
-                                email = email.trim(),
-                                nickname = nickname.trim(),
-                                lichessUsername = lichessName.trim(),
-                                chessUsername = chessName.trim(),
-                                language = selectedLanguage.code
-                            )
-                        )
-                        Toast.makeText(context, R.string.saved, Toast.LENGTH_SHORT).show()
-                    }) {
-                        Icon(Icons.Default.Save, contentDescription = stringResource(R.string.save_profile))
                     }
                 }
             )
@@ -118,39 +115,43 @@ fun ProfileScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Email
             OutlinedTextField(
                 value = email,
                 onValueChange = { email = it },
                 label = { Text(stringResource(R.string.email)) },
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
                 enabled = !isSaving
             )
+
+            // Nickname
             OutlinedTextField(
                 value = nickname,
                 onValueChange = { nickname = it },
                 label = { Text(stringResource(R.string.nickname)) },
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
                 enabled = !isSaving
             )
+
+            // Lichess Username
             OutlinedTextField(
                 value = lichessName,
                 onValueChange = { lichessName = it },
                 label = { Text(stringResource(R.string.lichess_username)) },
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
                 enabled = !isSaving
             )
+
+            // Chess.com Username
             OutlinedTextField(
                 value = chessName,
                 onValueChange = { chessName = it },
                 label = { Text(stringResource(R.string.chesscom_username)) },
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
                 enabled = !isSaving
             )
 
+            // Language Selector
             OutlinedTextField(
                 value = getLanguageDisplayName(selectedLanguage),
                 onValueChange = {},
@@ -158,166 +159,140 @@ fun ProfileScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable(enabled = !isSaving) { showLanguageDialog = true },
-                readOnly = true,
-                enabled = !isSaving,
-                trailingIcon = { Icon(Icons.Default.ArrowBack, contentDescription = null) }
+                enabled = false,
+                trailingIcon = {
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                },
+                colors = TextFieldDefaults.colors(
+                    disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                    disabledContainerColor = MaterialTheme.colorScheme.surface,
+                    disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    disabledTrailingIconColor = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             )
 
-            Divider()
+            Spacer(modifier = Modifier.height(8.dp))
 
-            Text(stringResource(R.string.engine_mode), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            // Engine Mode Selection
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.engine_mode),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
 
-            // Server
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(enabled = !isSaving) {
-                        scope.launch {
-                            try {
-                                EngineClient.setAndroidContext(context.applicationContext)
-                                EngineClient.setEngineMode(EngineMode.SERVER)
-                                Toast.makeText(context, "Режим: Server", Toast.LENGTH_SHORT).show()
-                            } catch (e: Exception) {
-                                errorMessage = context.getString(R.string.switch_error, e.message ?: "")
-                            }
+                    // Server Mode (DISABLED)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp)
+                    ) {
+                        RadioButton(
+                            selected = engineMode == EngineClient.EngineMode.SERVER,
+                            onClick = null,
+                            enabled = false
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = stringResource(R.string.engine_server),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                            Text(
+                                text = stringResource(R.string.engine_server_desc),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
                         }
                     }
-                    .padding(vertical = 8.dp)
-            ) {
-                RadioButton(
-                    selected = engineMode == EngineMode.SERVER,
-                    onClick = {
-                        scope.launch {
-                            try {
-                                EngineClient.setAndroidContext(context.applicationContext)
-                                EngineClient.setEngineMode(EngineMode.SERVER)
-                                Toast.makeText(context, "Режим: Server", Toast.LENGTH_SHORT).show()
-                            } catch (e: Exception) {
-                                errorMessage = context.getString(R.string.switch_error, e.message ?: "")
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Local Mode
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = !isSaving) {
+                                scope.launch {
+                                    try {
+                                        EngineClient.setAndroidContext(context.applicationContext)
+                                        EngineClient.setEngineMode(EngineClient.EngineMode.LOCAL)
+                                    } catch (e: Exception) {
+                                        errorMessage = context.getString(
+                                            R.string.switch_error,
+                                            e.message ?: ""
+                                        )
+                                    }
+                                }
                             }
+                            .padding(vertical = 8.dp)
+                    ) {
+                        RadioButton(
+                            selected = engineMode == EngineClient.EngineMode.LOCAL,
+                            onClick = {
+                                scope.launch {
+                                    try {
+                                        EngineClient.setAndroidContext(context.applicationContext)
+                                        EngineClient.setEngineMode(EngineClient.EngineMode.LOCAL)
+                                    } catch (e: Exception) {
+                                        errorMessage = context.getString(
+                                            R.string.switch_error,
+                                            e.message ?: ""
+                                        )
+                                    }
+                                }
+                            },
+                            enabled = !isSaving
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = stringResource(R.string.engine_local),
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                            Text(
+                                text = stringResource(R.string.engine_local_desc),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
-                    },
-                    enabled = !isSaving
-                )
-                Spacer(Modifier.width(8.dp))
-                Column {
-                    Text("Server (удалённый)")
-                    Text(
-                        "Использовать облачный бэкенд",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    }
                 }
             }
 
-            // Local (WebView)
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(enabled = !isSaving) {
-                        scope.launch {
-                            try {
-                                EngineClient.setAndroidContext(context.applicationContext)
-                                EngineClient.setEngineMode(EngineMode.LOCAL)
-                                Toast.makeText(context, "Режим: Local (Web)", Toast.LENGTH_SHORT).show()
-                            } catch (e: Exception) {
-                                errorMessage = context.getString(R.string.switch_error, e.message ?: "")
-                            }
-                        }
-                    }
-                    .padding(vertical = 8.dp)
-            ) {
-                RadioButton(
-                    selected = engineMode == EngineMode.LOCAL,
-                    onClick = {
-                        scope.launch {
-                            try {
-                                EngineClient.setAndroidContext(context.applicationContext)
-                                EngineClient.setEngineMode(EngineMode.LOCAL)
-                                Toast.makeText(context, "Режим: Local (Web)", Toast.LENGTH_SHORT).show()
-                            } catch (e: Exception) {
-                                errorMessage = context.getString(R.string.switch_error, e.message ?: "")
-                            }
-                        }
-                    },
-                    enabled = !isSaving
-                )
-                Spacer(Modifier.width(8.dp))
-                Column {
-                    Text("Local (WebView)")
-                    Text(
-                        "Встроенный JS-движок в WebView",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            // Native (JNI)
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(enabled = !isSaving) {
-                        scope.launch {
-                            try {
-                                EngineClient.setAndroidContext(context.applicationContext)
-                                EngineClient.setEngineMode(EngineMode.NATIVE)
-                                Toast.makeText(context, "Режим: Native (JNI)", Toast.LENGTH_SHORT).show()
-                            } catch (e: Exception) {
-                                errorMessage = context.getString(R.string.switch_error, e.message ?: "")
-                            }
-                        }
-                    }
-                    .padding(vertical = 8.dp)
-            ) {
-                RadioButton(
-                    selected = engineMode == EngineMode.NATIVE,
-                    onClick = {
-                        scope.launch {
-                            try {
-                                EngineClient.setAndroidContext(context.applicationContext)
-                                EngineClient.setEngineMode(EngineMode.NATIVE)
-                                Toast.makeText(context, "Режим: Native (JNI)", Toast.LENGTH_SHORT).show()
-                            } catch (e: Exception) {
-                                errorMessage = context.getString(R.string.switch_error, e.message ?: "")
-                            }
-                        }
-                    },
-                    enabled = !isSaving
-                )
-                Spacer(Modifier.width(8.dp))
-                Column {
-                    Text("Native (JNI)")
-                    Text(
-                        "libstockfish через JNI (без скачиваний)",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
+            // Error Message
             if (errorMessage != null) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    )
                 ) {
-                    Row(
+                    Text(
+                        text = errorMessage!!,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
                         modifier = Modifier.padding(16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = errorMessage!!,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
             }
 
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Save Button
             Button(
                 onClick = {
                     if (email.trim().isEmpty() || nickname.trim().isEmpty()) {
@@ -325,37 +300,101 @@ fun ProfileScreen(
                     } else {
                         errorMessage = null
                         isSaving = true
+
                         scope.launch {
                             try {
-                                val lichessTrimed = lichessName.trim()
-                                val chessTrimed = chessName.trim()
+                                val lichessTrimmed = lichessName.trim()
+                                val chessTrimmed = chessName.trim()
 
-                                if (lichessTrimed.isNotEmpty() && !checkLichessUserExists(lichessTrimed)) {
-                                    errorMessage = context.getString(R.string.user_not_found_error) + " (Lichess: $lichessTrimed)"
-                                    isSaving = false
-                                    return@launch
+                                // Проверка существования никнеймов
+                                if (lichessTrimmed.isNotEmpty()) {
+                                    val lichessExists = checkLichessUserExists(lichessTrimmed)
+                                    if (!lichessExists) {
+                                        errorMessage = context.getString(
+                                            R.string.user_not_found_error
+                                        ) + " (Lichess: $lichessTrimmed)"
+                                        isSaving = false
+                                        return@launch
+                                    }
                                 }
-                                if (chessTrimed.isNotEmpty() && !checkChessComUserExists(chessTrimed)) {
-                                    errorMessage = context.getString(R.string.user_not_found_error) + " (Chess.com: $chessTrimed)"
-                                    isSaving = false
-                                    return@launch
+
+                                if (chessTrimmed.isNotEmpty()) {
+                                    val chessComExists = checkChessComUserExists(chessTrimmed)
+                                    if (!chessComExists) {
+                                        errorMessage = context.getString(
+                                            R.string.user_not_found_error
+                                        ) + " (Chess.com: $chessTrimmed)"
+                                        isSaving = false
+                                        return@launch
+                                    }
                                 }
 
-                                LocaleManager.setLocale(context, selectedLanguage)
+                                val user = FirebaseAuth.getInstance().currentUser
+                                val uid = user?.uid
 
-                                onSave(
-                                    profile.copy(
-                                        email = email.trim(),
+                                if (user != null && uid != null) {
+                                    val newEmail = email.trim()
+
+                                    // Update email if changed
+                                    if (newEmail != user.email) {
+                                        user.updateEmail(newEmail).await()
+                                    }
+
+                                    // ✅ Проверяем, изменился ли язык
+                                    val languageChanged = selectedLanguage.code != profile.language
+
+                                    // Update Firestore
+                                    val data = mapOf(
+                                        "nickname" to nickname.trim(),
+                                        "lichessUsername" to lichessTrimmed,
+                                        "chessUsername" to chessTrimmed,
+                                        "language" to selectedLanguage.code
+                                    )
+
+                                    FirebaseFirestore.getInstance()
+                                        .collection("users")
+                                        .document(uid)
+                                        .update(data)
+                                        .await()
+
+                                    // Создаем обновленный профиль
+                                    val updatedProfile = UserProfile(
+                                        email = newEmail,
                                         nickname = nickname.trim(),
-                                        lichessUsername = lichessTrimed,
-                                        chessUsername = chessTrimed,
+                                        lichessUsername = lichessTrimmed,
+                                        chessUsername = chessTrimmed,
                                         language = selectedLanguage.code
                                     )
-                                )
-                                Toast.makeText(context, R.string.saved, Toast.LENGTH_SHORT).show()
+
+                                    // ✅ Сохраняем обновленный профиль
+                                    onSave(updatedProfile)
+
+                                    // ✅ Если язык изменился, применяем его и перезапускаем Activity
+                                    if (languageChanged) {
+                                        withContext(Dispatchers.Main) {
+                                            LocaleManager.setLocale(
+                                                context as ComponentActivity,
+                                                selectedLanguage
+                                            )
+                                            // setLocale сам перезапустит Activity
+                                        }
+                                    } else {
+                                        // Если язык не менялся, просто возвращаемся назад
+                                        isSaving = false
+                                        withContext(Dispatchers.Main) {
+                                            onBack()
+                                        }
+                                    }
+
+                                } else {
+                                    errorMessage = context.getString(R.string.user_not_found_error)
+                                    isSaving = false
+                                }
                             } catch (e: Exception) {
-                                errorMessage = context.getString(R.string.save_error, e.message ?: context.getString(R.string.unknown))
-                            } finally {
+                                errorMessage = context.getString(
+                                    R.string.save_error,
+                                    e.message ?: context.getString(R.string.unknown)
+                                )
                                 isSaving = false
                             }
                         }
@@ -365,32 +404,41 @@ fun ProfileScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 if (isSaving) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimary
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.saving))
+                    Row(
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.saving))
+                    }
                 } else {
                     Text(stringResource(R.string.save_profile))
                 }
             }
 
+            // Logout Button
             OutlinedButton(
-                onClick = onLogout,
+                onClick = { if (!isSaving) onLogout() },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !isSaving
-            ) { Text(stringResource(R.string.logout)) }
+            ) {
+                Text(stringResource(R.string.logout))
+            }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 
+    // Language Selection Dialog
     if (showLanguageDialog) {
         AlertDialog(
             onDismissRequest = { showLanguageDialog = false },
-            title = { Text(stringResource(R.string.language)) },
+            title = { Text(stringResource(R.string.select_language)) },
             text = {
                 Column {
                     LocaleManager.Language.values().forEach { language ->
@@ -411,8 +459,11 @@ fun ProfileScreen(
                                     showLanguageDialog = false
                                 }
                             )
-                            Spacer(Modifier.width(8.dp))
-                            Text(getLanguageDisplayName(language))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = getLanguageDisplayName(language),
+                                style = MaterialTheme.typography.bodyLarge
+                            )
                         }
                     }
                 }

@@ -169,15 +169,7 @@
     <string name="threefold_repetition">= Threefold repetition</string>
     <string name="fifty_move_rule">= 50-move rule</string>
 
-    <!-- Добавьте эти строки -->
-    <string name="engine_native">Native Stockfish</string>
-    <string name="engine_native_desc">Maximum performance</string>
-    <string name="install_native_engine">Install native engine</string>
-    <string name="uninstall_native_engine">Uninstall native engine</string>
-    <string name="engine_installed">Engine installed</string>
-    <string name="downloading">Downloading…</string>
-    <string name="installing">Installing…</string>
-    <string name="install_complete">Installation complete</string>
-    <string name="install_failed">Installation failed</string>
-    <string name="saved">Сохранить</string>
+    <!-- GamesListScreen -->
+    <string name="remaining_time">Tiempo restante: %1$s</string>
+    <string name="select_language">Seleccionar idioma</string>
 </resources>

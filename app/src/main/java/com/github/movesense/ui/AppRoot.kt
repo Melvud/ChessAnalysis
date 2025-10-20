@@ -1,5 +1,7 @@
 package com.github.movesense.ui
 
+import android.content.Context
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
@@ -12,6 +14,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -23,35 +26,37 @@ import com.github.movesense.ui.screens.HomeWithBottomNav
 import com.github.movesense.ui.screens.LoginScreen
 import com.github.movesense.ui.screens.ProfileScreen
 import com.github.movesense.ui.screens.ReportScreen
+import com.github.movesense.util.LocaleManager
 import com.google.android.gms.tasks.Task
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 @Composable
 fun AppRoot() {
     val rootNav = rememberNavController()
+    val context = LocalContext.current
 
     var isBootLoading by rememberSaveable { mutableStateOf(true) }
     var currentUserProfile by rememberSaveable { mutableStateOf<UserProfile?>(null) }
     var games by rememberSaveable { mutableStateOf<List<GameHeader>>(emptyList()) }
     var openingFens by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
-
-    // НОВОЕ: флаг первой загрузки
     var isFirstLoad by rememberSaveable { mutableStateOf(true) }
 
     val json = remember {
         Json { ignoreUnknownKeys = true; explicitNulls = false }
     }
 
-    // Проверяем сохранённую сессию Firebase при старте
+    // В LaunchedEffect при загрузке профиля:
     LaunchedEffect(Unit) {
         runCatching {
             val auth = FirebaseAuth.getInstance()
             val user = auth.currentUser
+
             if (user != null) {
                 val doc = FirebaseFirestore.getInstance()
                     .collection("users")
@@ -59,16 +64,43 @@ fun AppRoot() {
                     .get()
                     .await()
 
+                val languageCode = doc.getString("language")
+
+                if (!languageCode.isNullOrBlank()) {
+                    val savedLanguageCode = LocaleManager.getSavedLanguageCode(context)
+
+                    // ✅ Применяем язык только если он изменился
+                    if (savedLanguageCode != languageCode) {
+                        val language = LocaleManager.Language.fromCode(languageCode)
+                        LocaleManager.setLocale(context as ComponentActivity, language)
+                        return@runCatching // Activity перезапустится автоматически
+                    }
+                }
+
                 currentUserProfile = UserProfile(
                     email = user.email ?: "",
                     nickname = doc.getString("nickname") ?: "",
                     lichessUsername = doc.getString("lichessUsername") ?: "",
-                    chessUsername = doc.getString("chessUsername") ?: ""
+                    chessUsername = doc.getString("chessUsername") ?: "",
+                    language = languageCode ?: LocaleManager.Language.ENGLISH.code
                 )
             } else {
                 currentUserProfile = null
+
+                val savedLanguageCode = LocaleManager.getSavedLanguageCode(context)
+                if (savedLanguageCode == null) {
+                    LocaleManager.setLocale(context as ComponentActivity, LocaleManager.Language.ENGLISH)
+                }
             }
-        }.onFailure { currentUserProfile = null }
+        }.onFailure {
+            currentUserProfile = null
+
+            val savedLanguageCode = LocaleManager.getSavedLanguageCode(context)
+            if (savedLanguageCode == null) {
+                LocaleManager.setLocale(context as ComponentActivity, LocaleManager.Language.ENGLISH)
+            }
+        }
+
         isBootLoading = false
     }
 
@@ -88,13 +120,17 @@ fun AppRoot() {
             LoginScreen(
                 onLoginSuccess = { profile ->
                     currentUserProfile = profile
-                    isFirstLoad = true // Сбрасываем флаг при логине
-                    rootNav.navigate("home") { popUpTo("login") { inclusive = true } }
+                    isFirstLoad = true
+                    rootNav.navigate("home") {
+                        popUpTo("login") { inclusive = true }
+                    }
                 },
                 onRegisterSuccess = { profile ->
                     currentUserProfile = profile
-                    isFirstLoad = true // Сбрасываем флаг при регистрации
-                    rootNav.navigate("home") { popUpTo("login") { inclusive = true } }
+                    isFirstLoad = true
+                    rootNav.navigate("home") {
+                        popUpTo("login") { inclusive = true }
+                    }
                 }
             )
         }
@@ -103,14 +139,16 @@ fun AppRoot() {
         composable("home") {
             val profile = currentUserProfile
             if (profile == null) {
-                rootNav.navigate("login") { popUpTo("home") { inclusive = true } }
+                rootNav.navigate("login") {
+                    popUpTo("home") { inclusive = true }
+                }
             } else {
                 HomeWithBottomNav(
                     profile = profile,
                     games = games,
                     openingFens = openingFens,
-                    isFirstLoad = isFirstLoad, // ПЕРЕДАЕМ ФЛАГ
-                    onFirstLoadComplete = { isFirstLoad = false }, // КОЛБЭК
+                    isFirstLoad = isFirstLoad,
+                    onFirstLoadComplete = { isFirstLoad = false },
                     onOpenReport = { report ->
                         val packed = json.encodeToString(report)
                         rootNav.currentBackStackEntry?.savedStateHandle?.set("reportJson", packed)
@@ -143,7 +181,7 @@ fun AppRoot() {
                     profile = profile,
                     onSave = { updated ->
                         currentUserProfile = updated
-                        rootNav.popBackStack()
+                        // ✅ НЕ вызываем popBackStack здесь - Activity уже перезапустится
                     },
                     onLogout = {
                         FirebaseAuth.getInstance().signOut()
@@ -151,7 +189,9 @@ fun AppRoot() {
                         games = emptyList()
                         openingFens = emptySet()
                         isFirstLoad = true
-                        rootNav.navigate("login") { popUpTo("home") { inclusive = true } }
+                        rootNav.navigate("login") {
+                            popUpTo("home") { inclusive = true }
+                        }
                     },
                     onBack = { rootNav.popBackStack() }
                 )
@@ -166,7 +206,9 @@ fun AppRoot() {
                 key = "reportJson"
             )
             val report: FullReport? = reportJson?.let {
-                runCatching { Json.decodeFromString(FullReport.serializer(), it) }.getOrNull()
+                runCatching {
+                    Json.decodeFromString(FullReport.serializer(), it)
+                }.getOrNull()
             }
 
             if (report == null) {
@@ -192,7 +234,9 @@ fun AppRoot() {
                 key = "reportJson"
             )
             val report: FullReport? = reportJson?.let {
-                runCatching { Json.decodeFromString(FullReport.serializer(), it) }.getOrNull()
+                runCatching {
+                    Json.decodeFromString(FullReport.serializer(), it)
+                }.getOrNull()
             }
 
             if (report == null) {
@@ -207,13 +251,18 @@ fun AppRoot() {
     }
 }
 
-// --- утилиты ---
+// --- Утилиты ---
 
 private suspend fun <T> Task<T>.await(): T {
     return suspendCancellableCoroutine { cont ->
         addOnCompleteListener { task ->
-            if (task.isSuccessful) cont.resume(task.result, null)
-            else cont.resumeWithException(task.exception ?: RuntimeException("Task failed"))
+            if (task.isSuccessful) {
+                cont.resume(task.result, null)
+            } else {
+                cont.resumeWithException(
+                    task.exception ?: RuntimeException("Task failed")
+                )
+            }
         }
     }
 }
@@ -225,7 +274,9 @@ private fun readArg(
 ): String? {
     val fromCurrent = current?.savedStateHandle?.get<String>(key)
     if (!fromCurrent.isNullOrEmpty()) return fromCurrent
+
     val fromPrev = previous?.savedStateHandle?.get<String>(key)
     if (!fromPrev.isNullOrEmpty()) return fromPrev
+
     return null
 }

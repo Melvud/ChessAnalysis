@@ -1,182 +1,176 @@
 <resources>
-    <string name="app_name">MoveSense</string>
+<string name="app_name">MoveSense</string>
 
-    <!-- Common -->
-    <string name="ok">ОК</string>
-    <string name="cancel">Отмена</string>
-    <string name="save">Сохранить</string>
-    <string name="back">Назад</string>
-    <string name="delete">Удалить</string>
-    <string name="close">Закрыть</string>
-    <string name="loading">Загрузка…</string>
-    <string name="error">Ошибка</string>
+<!-- Common -->
+<string name="ok">OK</string>
+<string name="cancel">Cancel</string>
+<string name="save">Save</string>
+<string name="back">Back</string>
+<string name="delete">Delete</string>
+<string name="close">Close</string>
+<string name="loading">Loading…</string>
+<string name="error">Error</string>
 
-    <!-- Login Screen -->
-    <string name="welcome">Добро пожаловать</string>
-    <string name="login_title">Вход в MoveSense</string>
-    <string name="email">Email</string>
-    <string name="password">Пароль</string>
-    <string name="login">Войти</string>
-    <string name="register">Зарегистрироваться</string>
-    <string name="no_account">Нет аккаунта?</string>
-    <string name="have_account">Уже есть аккаунт?</string>
-    <string name="login_error">Ошибка входа: %s</string>
-    <string name="register_error">Ошибка регистрации: %s</string>
+<!-- Login Screen -->
+<string name="welcome">Welcome</string>
+<string name="login_title">Login to MoveSense</string>
+<string name="email">Email</string>
+<string name="password">Password</string>
+<string name="login">Login</string>
+<string name="register">Register</string>
+<string name="no_account">No account?</string>
+<string name="have_account">Already have an account?</string>
+<string name="login_error">Login error: %s</string>
+<string name="register_error">Registration error: %s</string>
 
-    <!-- Profile Screen -->
-    <string name="profile">Профиль</string>
-    <string name="nickname">Никнейм</string>
-    <string name="lichess_username">Lichess логин</string>
-    <string name="chesscom_username">Chess.com логин</string>
-    <string name="language">Язык</string>
-    <string name="logout">Выйти</string>
-    <string name="save_profile">Сохранить профиль</string>
-    <string name="profile_updated">Профиль обновлён</string>
+<!-- Profile Screen -->
+<string name="profile">Profile</string>
+<string name="nickname">Nickname</string>
+<string name="lichess_username">Lichess username</string>
+<string name="chesscom_username">Chess.com username</string>
+<string name="language">Language</string>
+<string name="logout">Logout</string>
+<string name="save_profile">Save Profile</string>
+<string name="profile_updated">Profile updated</string>
 
-    <!-- Games List Screen -->
-    <string name="games_list">Список партий</string>
-    <string name="add_game">Добавить партию</string>
-    <string name="no_games">Партий не найдено</string>
-    <string name="filter_all">Все (%d)</string>
-    <string name="filter_lichess">Lichess</string>
-    <string name="filter_chesscom">Chess.com</string>
-    <string name="filter_manual">Загруженные</string>
-    <string name="syncing">Синхронизация…</string>
-    <string name="games_added">Добавлено новых партий: %d</string>
-    <string name="sync_error">Ошибка синхронизации: %s</string>
-    <string name="analyzed">Анализ</string>
+<!-- Games List Screen -->
+<string name="games_list">Games List</string>
+<string name="add_game">Add Game</string>
+<string name="no_games">No games found</string>
+<string name="filter_all">All (%d)</string>
+<string name="filter_lichess">Lichess</string>
+<string name="filter_chesscom">Chess.com</string>
+<string name="filter_manual">Uploaded</string>
+<string name="syncing">Syncing…</string>
+<string name="games_added">New games added: %d</string>
+<string name="sync_error">Sync error: %s</string>
+<string name="analyzed">Analysis</string>
 
-    <!-- Add Game Dialog -->
-    <string name="add_game_title">Добавить партию</string>
-    <string name="paste_pgn_hint">Вставьте PGN полностью или выберите файл .pgn</string>
-    <string name="select_file">Выбрать файл .pgn</string>
-    <string name="game_added">Партия добавлена</string>
-    <string name="empty_pgn">PGN пустой</string>
-    <string name="add_error">Ошибка: %s</string>
+<!-- Add Game Dialog -->
+<string name="add_game_title">Add Game</string>
+<string name="paste_pgn_hint">Paste full PGN or select a .pgn file</string>
+<string name="select_file">Select .pgn file</string>
+<string name="game_added">Game added</string>
+<string name="empty_pgn">PGN is empty</string>
+<string name="add_error">Error: %s</string>
 
-    <!-- Game Report Screen -->
-    <string name="game_analysis">Анализ партии</string>
-    <string name="flip_board">Перевернуть</string>
-    <string name="to_start">В начало</string>
-    <string name="previous">Назад</string>
-    <string name="play">Играть</string>
-    <string name="pause">Пауза</string>
-    <string name="next">Вперед</string>
-    <string name="to_end">В конец</string>
+<!-- Game Report Screen -->
+<string name="game_analysis">Game Analysis</string>
+<string name="flip_board">Flip</string>
+<string name="to_start">To start</string>
+<string name="previous">Previous</string>
+<string name="play">Play</string>
+<string name="pause">Pause</string>
+<string name="next">Next</string>
+<string name="to_end">To end</string>
 
-    <!-- Analysis Settings -->
-    <string name="analysis_settings">Настройки анализа</string>
-    <string name="depth">Глубина: %d</string>
-    <string name="multipv">Линий (MultiPV): %d</string>
-    <string name="settings_note">💡 Настройки сохраняются для каждой позиции отдельно</string>
+<!-- Analysis Settings -->
+<string name="analysis_settings">Analysis Settings</string>
+<string name="depth">Depth: %d</string>
+<string name="multipv">Lines (MultiPV): %d</string>
+<string name="settings_note">💡 Settings are saved for each position separately</string>
 
-    <!-- Engine Lines Panel -->
-    <string name="engine_lines">Линии компьютера</string>
-    <string name="calculating">Расчёт линий…</string>
-    <string name="no_lines">Нет доступных линий для этой позиции</string>
+<!-- Engine Lines Panel -->
+<string name="engine_lines">Computer Lines</string>
+<string name="calculating">Calculating lines…</string>
+<string name="no_lines">No available lines for this position</string>
 
-    <!-- Report Screen -->
-    <string name="game_report">Отчёт о партии</string>
-    <string name="performance_evaluation">Оценка перформанса</string>
-    <string name="view_report">Смотреть отчёт</string>
-    <string name="return_back">Вернуться</string>
+<!-- Report Screen -->
+<string name="game_report">Game Report</string>
+<string name="performance_evaluation">Performance Evaluation</string>
+<string name="view_report">View Report</string>
+<string name="return_back">Return</string>
 
-    <!-- Move Classifications -->
-    <string name="move_splendid">Блестящий ход!!</string>
-    <string name="move_perfect">Замечательный!</string>
-    <string name="move_best">Лучший</string>
-    <string name="move_excellent">Отличный</string>
-    <string name="move_okay">Хороший</string>
-    <string name="move_opening">Теория</string>
-    <string name="move_inaccuracy">Неточность</string>
-    <string name="move_mistake">Ошибка</string>
-    <string name="move_forced">Единственный</string>
-    <string name="move_blunder">Зевок</string>
-    <string name="unknown">неизвестно</string>
-    <!-- Time Control -->
-    <string name="bullet">bullet</string>
-    <string name="blitz">blitz</string>
-    <string name="rapid">rapid</string>
-    <string name="classical">classical</string>
+<!-- Move Classifications -->
+<string name="move_splendid">Brilliant!!</string>
+<string name="move_perfect">Great!</string>
+<string name="move_best">Best</string>
+<string name="move_excellent">Excellent</string>
+<string name="move_okay">Good</string>
+<string name="move_opening">Book</string>
+<string name="move_inaccuracy">Inaccuracy</string>
+<string name="move_mistake">Mistake</string>
+<string name="move_forced">Forced</string>
+<string name="move_blunder">Blunder</string>
 
-    <!-- Player Info -->
-    <string name="white">White</string>
-    <string name="black">Black</string>
-    <string name="rating">(%d)</string>
+<!-- Time Control -->
+<string name="bullet">bullet</string>
+<string name="blitz">blitz</string>
+<string name="rapid">rapid</string>
+<string name="classical">classical</string>
 
-    <!-- Navigation -->
-    <string name="nav_games">Игры</string>
-    <string name="nav_profile">Профиль</string>
+<!-- Player Info -->
+<string name="white">White</string>
+<string name="black">Black</string>
+<string name="rating">(%d)</string>
 
-    <!-- Re-analyze -->
-    <string name="reanalyze">Анализировать заново</string>
-    <string name="reanalyze_title">Анализировать заново</string>
+<!-- Navigation -->
+<string name="nav_games">Games</string>
+<string name="nav_profile">Profile</string>
 
-    <!-- Language Names -->
-    <string name="lang_russian">Русский</string>
-    <string name="lang_english">English</string>
-    <string name="lang_spanish">Español</string>
-    <!-- Недостающие строки для всех трёх языков -->
+<!-- Re-analyze -->
+<string name="reanalyze">Re-analyze</string>
+<string name="reanalyze_title">Re-analyze</string>
 
-    <!-- GameReportScreen -->
-    <string name="depth_label">Глубина</string>
-    <string name="multipv_label">Линий (MultiPV)</string>
+<!-- Language Names -->
+<string name="lang_russian">Русский</string>
+<string name="lang_english">English</string>
+<string name="lang_spanish">Español</string>
 
-    <!-- GamesListScreen -->
-    <string name="analysis_error">Ошибка анализа: %s</string>
-    <string name="pgn_not_found">PGN не найден</string>
+<!-- Missing strings for English -->
 
-    <!-- LoginScreen -->
-    <string name="show_password">Показать пароль</string>
-    <string name="hide_password">Скрыть пароль</string>
-    <string name="profile_load_error">Ошибка загрузки профиля</string>
-    <string name="profile_save_error">Ошибка сохранения профиля</string>
+<!-- GameReportScreen -->
+<string name="depth_label">Depth</string>
+<string name="multipv_label">Lines (MultiPV)</string>
 
-    <!-- ProfileScreen -->
-    <string name="engine_mode">Режим движка</string>
-    <string name="engine_server">Сервер</string>
-    <string name="engine_server_desc">Быстрый анализ на сервере</string>
-    <string name="engine_local">Локальный</string>
-    <string name="engine_local_desc">Анализ на устройстве</string>
-    <string name="switch_error">Ошибка переключения: %s</string>
-    <string name="empty_fields_error">Email и имя не должны быть пустыми</string>
-    <string name="user_not_found_error">Не удалось определить пользователя</string>
-    <string name="save_error">Ошибка сохранения: %s</string>
-    <string name="saving">Сохранение…</string>
+<!-- GamesListScreen -->
+<string name="analysis_error">Analysis error: %s</string>
+<string name="pgn_not_found">PGN not found</string>
 
-    <!-- ReportScreen -->
-    <string name="move_classification">Классификация ходов</string>
+<!-- LoginScreen -->
+<string name="show_password">Show password</string>
+<string name="hide_password">Hide password</string>
+<string name="profile_load_error">Profile loading error</string>
+<string name="profile_save_error">Profile save error</string>
 
-    <string name="analyzing">Идет анализ</string>
-    <string name="show_eval_bar_mini">Показывать эвал-бар на мини-доске</string>
-    <string name="settings">Настройки</string>
+<!-- ProfileScreen -->
+<string name="engine_mode">Engine Mode</string>
+<string name="engine_server">Server</string>
+<string name="engine_server_desc">Fast analysis on server</string>
+<string name="engine_local">Local</string>
+<string name="engine_local_desc">Analysis on device</string>
+<string name="switch_error">Switch error: %s</string>
+<string name="empty_fields_error">Email and name must not be empty</string>
+<string name="user_not_found_error">Unable to identify user</string>
+<string name="save_error">Save error: %s</string>
+<string name="saving">Saving…</string>
+<string name="unknown">unknown</string>
 
-    <string name="variation_mode">Режим вариации</string>
-    <string name="variation_hint">Вы играете вариацию. Нажмите "Выйти" для возврата</string>
-    <string name="exit_variation">Выйти</string>
+<!-- ReportScreen -->
+<string name="move_classification">Move Classification</string>
 
-    <!-- Типы завершения партии -->
-    <string name="checkmate">♔ Мат</string>
-    <string name="checkmate_by">♔ Мат от %1$s</string>
-    <string name="timeout">⏱ Время</string>
-    <string name="timeout_lost">⏱ Время у %1$s</string>
-    <string name="resigned">🏳 Сдался %1$s</string>
-    <string name="resignation">🏳 Сдача</string>
-    <string name="stalemate">= Пат</string>
-    <string name="draw">= Ничья</string>
-    <string name="insufficient_material">= Недостаточно материала</string>
-    <string name="threefold_repetition">= Троекратное повторение</string>
-    <string name="fifty_move_rule">= Правило 50 ходов</string>
+<string name="analyzing">Analyzing</string>
+<string name="show_eval_bar_mini">Show eval bar on mini board</string>
+<string name="settings">Settings</string>
 
-    <!-- Добавьте эти строки -->
-    <string name="engine_native">Нативный Stockfish</string>
-    <string name="engine_native_desc">Максимальная производительность</string>
-    <string name="install_native_engine">Установить нативный движок</string>
-    <string name="uninstall_native_engine">Удалить нативный движок</string>
-    <string name="engine_installed">Движок установлен</string>
-    <string name="downloading">Скачивание…</string>
-    <string name="installing">Установка…</string>
-    <string name="install_complete">Установка завершена</string>
-    <string name="install_failed">Ошибка установки</string>
-    <string name="saved">Сохранить</string>
+<string name="variation_mode">Variation mode</string>
+<string name="variation_hint">You are in variation. Tap "Exit" to return</string>
+<string name="exit_variation">Exit</string>
+
+<!-- Game termination types -->
+<string name="checkmate">♔ Checkmate</string>
+<string name="checkmate_by">♔ Checkmate by %1$s</string>
+<string name="timeout">⏱ Time out</string>
+<string name="timeout_lost">⏱ Time out: %1$s</string>
+<string name="resigned">🏳 Resigned: %1$s</string>
+<string name="resignation">🏳 Resignation</string>
+<string name="stalemate">= Stalemate</string>
+<string name="draw">= Draw</string>
+<string name="insufficient_material">= Insufficient material</string>
+<string name="threefold_repetition">= Threefold repetition</string>
+<string name="fifty_move_rule">= 50-move rule</string>
+
+<!-- GamesListScreen -->
+<string name="remaining_time">Time left: %1$s</string>
+<string name="select_language">Select Language</string>
 </resources>
