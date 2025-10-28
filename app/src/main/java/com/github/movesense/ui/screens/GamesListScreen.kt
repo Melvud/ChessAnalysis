@@ -10,8 +10,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image // <-- ДОБАВЛЕН ИМПОРТ
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -38,6 +40,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource // <-- ДОБАВЛЕН ИМПОРТ
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -48,6 +51,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex // <-- ДОБАВЛЕН ИМПОРТ
 import com.github.movesense.EngineClient.analyzeGameByPgnWithProgress
 import com.github.movesense.FullReport
 import com.github.movesense.GameHeader
@@ -65,6 +69,9 @@ import kotlinx.serialization.json.Json
 import kotlin.math.max
 import kotlin.math.roundToLong
 import com.github.movesense.R
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 private const val TAG = "GamesListScreen"
 private const val PREFS_NAME = "games_list_prefs"
@@ -91,6 +98,9 @@ data class GameEndInfo(
     val winner: String? // "white", "black" или null для ничьих
 )
 
+// --- НОВЫЙ data class для титулов ---
+private data class PlayerInfo(val name: String, val title: String?)
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun GamesListScreen(
@@ -111,7 +121,6 @@ fun GamesListScreen(
     var showSettingsDialog by remember { mutableStateOf(false) }
 
     var items by remember { mutableStateOf<List<GameHeader>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(false) }
     var analyzedGames by remember { mutableStateOf<Map<String, FullReport>>(emptyMap()) }
 
     var currentFilter by remember { mutableStateOf(GameFilter.ALL) }
@@ -125,15 +134,15 @@ fun GamesListScreen(
     var livePositions by remember { mutableStateOf<List<PositionEval>>(emptyList()) }
     var currentPlyForEval by remember { mutableStateOf(0) }
 
-    // 🔵 ETA: состояние и расчёт (монотонно не растёт)
-    var visibleEtaMs by remember { mutableStateOf<Long?>(null) }        // то, что показываем в UI (тикает каждую секунду)
-    var emaPerMoveMs by remember { mutableStateOf<Double?>(null) }      // сглаженная средняя длительность полухода
-    var lastTickDone by remember { mutableStateOf<Int?>(null) }         // done в момент последнего апдейта скорости
-    var lastTickAtMs by remember { mutableStateOf<Long?>(null) }        // время того апдейта
-    var etaAnchorStartMs by remember { mutableStateOf<Long?>(null) }    // якорная точка обратного отсчёта
-    var etaInitialMs by remember { mutableStateOf<Long?>(null) }        // стартовое значение обратного отсчёта
-    var totalPly by remember { mutableStateOf<Int?>(null) }             // общее число полуходов
-    var analysisStartAtMs by remember { mutableStateOf<Long?>(null) }   // время старта анализа (для первой оценки)
+    // 🔵 ETA: ... (остается без изменений)
+    var visibleEtaMs by remember { mutableStateOf<Long?>(null) }
+    var emaPerMoveMs by remember { mutableStateOf<Double?>(null) }
+    var lastTickDone by remember { mutableStateOf<Int?>(null) }
+    var lastTickAtMs by remember { mutableStateOf<Long?>(null) }
+    var etaAnchorStartMs by remember { mutableStateOf<Long?>(null) }
+    var etaInitialMs by remember { mutableStateOf<Long?>(null) }
+    var totalPly by remember { mutableStateOf<Int?>(null) }
+    var analysisStartAtMs by remember { mutableStateOf<Long?>(null) }
 
     var prevFenForSound by remember { mutableStateOf<String?>(null) }
     var lastSoundedUci by remember { mutableStateOf<String?>(null) }
@@ -146,6 +155,22 @@ fun GamesListScreen(
     var reAnalyzeMultiPv by remember { mutableStateOf(2) }
     var reAnalyzeTargetPgn by remember { mutableStateOf<String?>(null) }
 
+    // --- НОВЫЕ Состояния для Загрузки ---
+    var isDeltaSyncing by remember { mutableStateOf(false) } // Для Pull-to-refresh
+    var isFullSyncing by remember { mutableStateOf(false) } // Для диалога загрузки
+    var fullSyncProgress by remember { mutableStateOf<Float?>(null) }
+    var fullSyncMessage by remember { mutableStateOf("") }
+
+    // Состояние для Date Pickers
+    var showDatePickerFrom by remember { mutableStateOf(false) }
+    var showDatePickerUntil by remember { mutableStateOf(false) }
+    var dateFromMillis by remember { mutableStateOf<Long?>(null) }
+    var dateUntilMillis by remember { mutableStateOf<Long?>(null) }
+
+    val dateFormatter = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
+
+
+    // ... (playMoveSound, pieceAtFen, isCapture - остаются без изменений) ...
     fun playMoveSound(cls: MoveClass?, isCapture: Boolean) {
         val resId = when {
             cls == MoveClass.INACCURACY || cls == MoveClass.MISTAKE || cls == MoveClass.BLUNDER -> R.raw.error
@@ -212,36 +237,42 @@ fun GamesListScreen(
         Log.d(TAG, "loadFromLocal: ${analyzed.size} games have cached analysis")
     }
 
-    suspend fun syncWithRemote() {
+    // --- НОВАЯ ФУНКЦИЯ: Дельта-загрузка (только новые) ---
+    suspend fun deltaSyncWithRemote() {
         try {
-            Log.d(TAG, "syncWithRemote: starting...")
+            Log.d(TAG, "deltaSyncWithRemote: starting...")
             var addedCount = 0
 
             if (profile.lichessUsername.isNotEmpty()) {
-                Log.d(TAG, "Fetching Lichess games for: ${profile.lichessUsername}")
+                // 1. Узнаем время последней игры Lichess в БД
+                val since = repo.getNewestGameTimestamp(Provider.LICHESS)
+                Log.d(TAG, "Fetching Lichess games since: $since")
                 val lichessList = com.github.movesense.GameLoaders.loadLichess(
                     profile.lichessUsername,
-                    max = 50
+                    since = since,
+                    max = null // Загружаем ВСЕ новые
                 )
-                Log.d(TAG, "Lichess returned ${lichessList.size} games")
+                Log.d(TAG, "Lichess returned ${lichessList.size} new games")
                 val added = repo.mergeExternal(Provider.LICHESS, lichessList)
                 addedCount += added
-                Log.d(TAG, "Added $added new Lichess games")
             }
 
             if (profile.chessUsername.isNotEmpty()) {
-                Log.d(TAG, "Fetching Chess.com games for: ${profile.chessUsername}")
+                // 2. Узнаем время последней игры Chess.com в БД
+                val since = repo.getNewestGameTimestamp(Provider.CHESSCOM)
+                Log.d(TAG, "Fetching Chess.com games since: $since")
                 val chessList = com.github.movesense.GameLoaders.loadChessCom(
                     profile.chessUsername,
-                    max = 50
+                    since = since,
+                    max = null, // Загружаем ВСЕ новые
+                    onProgress = { /* Прогресс не показываем, т.к. должно быть быстро */ }
                 )
-                Log.d(TAG, "Chess.com returned ${chessList.size} games")
+                Log.d(TAG, "Chess.com returned ${chessList.size} new games")
                 val added = repo.mergeExternal(Provider.CHESSCOM, chessList)
                 addedCount += added
-                Log.d(TAG, "Added $added new Chess.com games")
             }
 
-            Log.d(TAG, "syncWithRemote: total added = $addedCount")
+            Log.d(TAG, "deltaSyncWithRemote: total added = $addedCount")
 
             if (addedCount > 0) {
                 Toast.makeText(
@@ -251,7 +282,7 @@ fun GamesListScreen(
                 ).show()
             }
         } catch (e: Throwable) {
-            Log.e(TAG, "syncWithRemote failed: ${e.message}", e)
+            Log.e(TAG, "deltaSyncWithRemote failed: ${e.message}", e)
             Toast.makeText(
                 context,
                 context.getString(R.string.sync_error, e.message ?: ""),
@@ -260,15 +291,84 @@ fun GamesListScreen(
         }
     }
 
+    // --- НОВАЯ ФУНКЦИЯ: Полная загрузка (с прогрессом) ---
+    suspend fun fullSyncWithRemote(since: Long?, until: Long?) {
+        try {
+            isFullSyncing = true
+            fullSyncProgress = null
+            fullSyncMessage = context.getString(R.string.loading_lichess)
+            Log.d(TAG, "fullSyncWithRemote: starting (since=$since, until=$until)")
+            var addedCount = 0
+
+            if (profile.lichessUsername.isNotEmpty()) {
+                val lichessList = com.github.movesense.GameLoaders.loadLichess(
+                    profile.lichessUsername,
+                    since = since,
+                    until = until,
+                    max = null // Загружаем ВСЕ в диапазоне
+                )
+                Log.d(TAG, "Lichess returned ${lichessList.size} games")
+                val added = repo.mergeExternal(Provider.LICHESS, lichessList)
+                addedCount += added
+            }
+
+            fullSyncMessage = context.getString(R.string.loading_chesscom)
+            fullSyncProgress = 0f
+            if (profile.chessUsername.isNotEmpty()) {
+                val chessList = com.github.movesense.GameLoaders.loadChessCom(
+                    profile.chessUsername,
+                    since = since,
+                    until = until,
+                    max = null, // Загружаем ВСЕ в диапазоне
+                    onProgress = { progress ->
+                        fullSyncProgress = progress
+                    }
+                )
+                Log.d(TAG, "Chess.com returned ${chessList.size} games")
+                val added = repo.mergeExternal(Provider.CHESSCOM, chessList)
+                addedCount += added
+            }
+
+            Log.d(TAG, "fullSyncWithRemote: total added = $addedCount")
+            Toast.makeText(
+                context,
+                context.getString(R.string.games_added, addedCount),
+                Toast.LENGTH_SHORT
+            ).show()
+
+        } catch (e: Throwable) {
+            Log.e(TAG, "fullSyncWithRemote failed: ${e.message}", e)
+            Toast.makeText(
+                context,
+                context.getString(R.string.sync_error, e.message ?: ""),
+                Toast.LENGTH_SHORT
+            ).show()
+        } finally {
+            isFullSyncing = false
+            fullSyncProgress = null
+            showSettingsDialog = false // Закрываем диалог
+            if (isFirstLoad) onFirstLoadComplete() // Отмечаем, что первая загрузка завершена
+        }
+    }
+
+    // --- УДАЛЕНА старая `syncWithRemote()` ---
+
+    // --- ОБНОВЛЕННЫЙ LaunchedEffect ---
     LaunchedEffect(profile, isFirstLoad) {
         if (isFirstLoad) {
-            Log.d(TAG, "🔄 First load detected, syncing with remote...")
-            isLoading = true
+            Log.d(TAG, "🔄 First load detected, loading from cache...")
+            isDeltaSyncing = true
             loadFromLocal()
-            syncWithRemote()
-            loadFromLocal()
-            isLoading = false
-            onFirstLoadComplete()
+            isDeltaSyncing = false
+            if (items.isEmpty()) {
+                // Если кэш пуст, принудительно показываем диалог загрузки
+                Log.d(TAG, "Cache is empty, showing settings dialog to load games.")
+                showSettingsDialog = true
+            } else {
+                // Если кэш не пуст, просто завершаем "первую загрузку"
+                // Пользователь сам обновит список (delta) или нажмет "Загрузить" (full)
+                onFirstLoadComplete()
+            }
         } else {
             Log.d(TAG, "✓ Not first load, loading from cache only")
             loadFromLocal()
@@ -280,6 +380,7 @@ fun GamesListScreen(
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
+        // ... (остается без изменений) ...
         if (uri != null) {
             scope.launch {
                 runCatching {
@@ -301,6 +402,9 @@ fun GamesListScreen(
         }
     }
 
+    // ... (LaunchedEffect(showAnalysis...), formatEta - остаются без изменений) ...
+
+    // --- ИСПРАВЛЕНИЕ ЛОГИКИ ОБНОВЛЕНИЯ liveFen ---
     fun startAnalysis(fullPgn: String, depth: Int, multiPv: Int) {
         if (showAnalysis) return
         scope.launch {
@@ -403,9 +507,14 @@ fun GamesListScreen(
 
                     prevFenForSound = newFen ?: prevFenForSound
 
-                    liveFen = newFen ?: liveFen
-                    liveUciMove = newUci ?: liveUciMove
-                    liveMoveClass = snap.currentClass ?: liveMoveClass
+                    // --- ‼️‼️ ИСПРАВЛЕНИЕ ЗДЕСЬ ‼️‼️ ---
+                    // Вернули "как было" - прямое присваивание.
+                    // Логика с `?:` (Элвис-оператором) приводила к тому, что
+                    // liveFen оставался null, если первый снэпшот был null.
+                    liveFen = newFen
+                    liveUciMove = newUci
+                    liveMoveClass = snap.currentClass
+                    // --- ‼️‼️ КОНЕЦ ИСПРАВЛЕНИЯ ‼️‼️ ---
 
                     if (snap.done > 0) {
                         currentPlyForEval = snap.done - 1
@@ -455,7 +564,6 @@ fun GamesListScreen(
         }
     }
 
-    // 🔵 Каждую секунду убываем от якоря; вверх не скачем (только уменьшаем якорь в onProgress)
     LaunchedEffect(showAnalysis, etaAnchorStartMs, etaInitialMs) {
         if (!showAnalysis || etaAnchorStartMs == null || etaInitialMs == null) return@LaunchedEffect
         while (showAnalysis && etaAnchorStartMs != null && etaInitialMs != null) {
@@ -477,6 +585,8 @@ fun GamesListScreen(
             else -> String.format("%d:%02d", m, s)
         }
     }
+    // --- КОНЕЦ БЛОКА АНАЛИЗА ---
+
 
     val filteredItems = remember(items, currentFilter) {
         when (currentFilter) {
@@ -518,6 +628,7 @@ fun GamesListScreen(
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    // ... (FilterChip - остаются без изменений) ...
                     FilterChip(
                         selected = currentFilter == GameFilter.ALL,
                         onClick = { currentFilter = GameFilter.ALL },
@@ -564,26 +675,27 @@ fun GamesListScreen(
                     )
                 }
 
+                // --- ОБНОВЛЕННЫЙ PullToRefreshBox ---
                 PullToRefreshBox(
                     modifier = Modifier.fillMaxSize(),
-                    isRefreshing = isLoading,
+                    isRefreshing = isDeltaSyncing, // <-- ИЗМЕНЕНО
                     onRefresh = {
                         scope.launch {
-                            isLoading = true
-                            syncWithRemote()
+                            isDeltaSyncing = true
+                            deltaSyncWithRemote() // <-- ИЗМЕНЕНО
                             loadFromLocal()
-                            isLoading = false
+                            isDeltaSyncing = false
                         }
                     },
                     state = pullState
                 ) {
                     when {
-                        isLoading && items.isEmpty() -> {
+                        isDeltaSyncing && items.isEmpty() -> { // <-- ИЗМЕНЕНО
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator()
                             }
                         }
-                        filteredItems.isEmpty() && !isLoading -> {
+                        filteredItems.isEmpty() && !isDeltaSyncing -> { // <-- ИЗМЕНЕНО
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 Text(
                                     stringResource(R.string.no_games),
@@ -601,7 +713,7 @@ fun GamesListScreen(
                                     }
                                 ) { index, game ->
                                     val analyzedReport = analyzedGames[repo.pgnHash(game.pgn.orEmpty())]
-                                    CompactGameCard(
+                                    CompactGameCard( // <-- ОН ОБНОВЛЕН
                                         game = game,
                                         profile = profile,
                                         analyzedReport = analyzedReport,
@@ -645,10 +757,14 @@ fun GamesListScreen(
                 }
             }
 
+            // ... (if (showAnalysis) { ... } - остается без изменений) ...
+
+            // --- zIndex(10f) из прошлого шага ОСТАЕТСЯ ---
             if (showAnalysis) {
                 Box(
                     Modifier
                         .fillMaxSize()
+                        .zIndex(10f) // <-- ЭТО ОСТАЕТСЯ
                         .background(Color.Black.copy(alpha = 0.75f)),
                     contentAlignment = Alignment.Center
                 ) {
@@ -783,12 +899,14 @@ fun GamesListScreen(
         }
     }
 
+    // --- ОБНОВЛЕННЫЙ Диалог Настроек (С ИСПРАВЛЕНИЕМ КРЕША) ---
     if (showSettingsDialog) {
         AlertDialog(
-            onDismissRequest = { showSettingsDialog = false },
+            onDismissRequest = { if (!isFullSyncing) showSettingsDialog = false },
             title = { Text(stringResource(R.string.settings)) },
             text = {
-                Column {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    // 1. Старая настройка Eval Bar
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -808,16 +926,114 @@ fun GamesListScreen(
                             style = MaterialTheme.typography.bodyLarge
                         )
                     }
+
+                    Divider(modifier = Modifier.padding(vertical = 12.dp))
+
+                    // 2. Новая секция "Загрузить Партии"
+                    Text(
+                        stringResource(R.string.load_games_title),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(Modifier.height(12.dp))
+
+                    if (isFullSyncing) {
+                        // --- UI Во время загрузки ---
+                        Text(fullSyncMessage, style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.height(16.dp))
+
+                        // --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+                        // Условие изменено: `> 0f` убрано, чтобы показывать 0%
+                        if (fullSyncProgress != null) {
+                            // --- UI для ОПРЕДЕЛЕННОГО прогресса ---
+                            LinearProgressIndicator(
+                                // ИСПРАВЛЕНО: убран `!!`
+                                progress = { fullSyncProgress ?: 0f },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text(
+                                // ИСПРАВЛЕНО: убран `!!`
+                                "${((fullSyncProgress ?: 0f) * 100).toInt()}%",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        } else {
+                            // --- UI для НЕОПРЕДЕЛЕННОГО прогресса ---
+                            // (Lichess или самое начало Chess.com)
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                        // --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+
+                    } else {
+                        // --- UI Выбора загрузки ---
+                        Text(
+                            stringResource(R.string.load_games_desc),
+                            style = MaterialTheme.typography.bodyMedium,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(Modifier.height(16.dp))
+
+                        // Date Pickers
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceAround
+                        ) {
+                            Button(onClick = { showDatePickerFrom = true }) {
+                                Text(dateFromMillis?.let { dateFormatter.format(Date(it)) }
+                                    ?: stringResource(R.string.date_from))
+                            }
+                            Button(onClick = { showDatePickerUntil = true }) {
+                                Text(dateUntilMillis?.let { dateFormatter.format(Date(it)) }
+                                    ?: stringResource(R.string.date_until))
+                            }
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    fullSyncWithRemote(dateFromMillis, dateUntilMillis)
+                                    // Переносим loadFromLocal сюда, чтобы он запускался
+                                    // только после завершения
+                                    loadFromLocal()
+                                }
+                            },
+                            enabled = dateFromMillis != null || dateUntilMillis != null
+                        ) {
+                            Text(stringResource(R.string.load_date_range))
+                        }
+
+                        Spacer(Modifier.height(12.dp))
+                        Divider()
+                        Spacer(Modifier.height(12.dp))
+
+                        Button(onClick = {
+                            scope.launch {
+                                fullSyncWithRemote(null, null) // null, null = все
+                                // И сюда тоже
+                                loadFromLocal()
+                            }
+                        }) {
+                            Text(stringResource(R.string.load_all_games))
+                        }
+                    }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showSettingsDialog = false }) {
+                TextButton(
+                    onClick = {
+                        if (!isFullSyncing) {
+                            showSettingsDialog = false
+                            if (isFirstLoad) onFirstLoadComplete() // Отмечаем, что юзер закрыл диалог
+                        }
+                    },
+                    enabled = !isFullSyncing
+                ) {
                     Text(stringResource(R.string.close))
                 }
             }
         )
     }
-
     if (showAddDialog) {
         AlertDialog(
             onDismissRequest = { showAddDialog = false },
@@ -880,6 +1096,7 @@ fun GamesListScreen(
         )
     }
 
+    // ... (if (showReAnalyzeSheet) { ... } - остается без изменений) ...
     if (showReAnalyzeSheet) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
@@ -934,8 +1151,50 @@ fun GamesListScreen(
             }
         }
     }
+
+    // --- НОВЫЕ Date Pickers ---
+    if (showDatePickerFrom) {
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = dateFromMillis ?: System.currentTimeMillis()
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDatePickerFrom = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    dateFromMillis = datePickerState.selectedDateMillis
+                    showDatePickerFrom = false
+                }) { Text(stringResource(R.string.ok)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePickerFrom = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        ) { DatePicker(state = datePickerState) }
+    }
+
+    if (showDatePickerUntil) {
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = dateUntilMillis ?: System.currentTimeMillis()
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDatePickerUntil = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    dateUntilMillis = datePickerState.selectedDateMillis
+                    showDatePickerUntil = false
+                }) { Text(stringResource(R.string.ok)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePickerUntil = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        ) { DatePicker(state = datePickerState) }
+    }
 }
 
+// ... (MiniEvalBar, parseGameEnd, formatGameEndText - остаются без изменений) ...
 @Composable
 private fun MiniEvalBar(
     positions: List<PositionEval>,
@@ -1002,7 +1261,6 @@ private fun MiniEvalBar(
     }
 }
 
-// УЛУЧШЕННАЯ ФУНКЦИЯ: Определение способа завершения партии
 private fun parseGameEnd(pgn: String?, result: String?): GameEndInfo {
     if (pgn.isNullOrBlank()) return GameEndInfo(GameTermination.UNKNOWN, null)
 
@@ -1055,7 +1313,6 @@ private fun parseGameEnd(pgn: String?, result: String?): GameEndInfo {
     return GameEndInfo(termination, winner)
 }
 
-// УЛУЧШЕННАЯ ФУНКЦИЯ: Форматирование текста завершения партии с локализацией
 @Composable
 private fun formatGameEndText(endInfo: GameEndInfo, game: GameHeader): String {
     val context = LocalContext.current
@@ -1093,6 +1350,74 @@ private fun formatGameEndText(endInfo: GameEndInfo, game: GameHeader): String {
     }
 }
 
+
+// --- НОВЫЕ ХЕЛПЕРЫ для ТИТУЛОВ ---
+
+// НОВАЯ функция парсинга имени и титула
+private fun parsePlayerInfo(name: String?, pgn: String?, isWhite: Boolean): PlayerInfo {
+    val base = name.orEmpty()
+    if (pgn.isNullOrBlank()) return PlayerInfo(base, null)
+    val tag = if (isWhite) """\[WhiteTitle\s+"([^"]+)"]""" else """\[BlackTitle\s+"([^"]+)"]"""
+    val rx = Regex(tag)
+    val title = rx.find(pgn)?.groupValues?.getOrNull(1)?.uppercase()
+    return PlayerInfo(base, if (title.isNullOrBlank() || title == "NONE") null else title)
+}
+
+// НОВАЯ функция для определения титула самого пользователя
+private fun getUserTitle(profile: UserProfile, whiteInfo: PlayerInfo, blackInfo: PlayerInfo): String? {
+    val me = listOf(profile.nickname.trim(), profile.lichessUsername.trim(), profile.chessUsername.trim())
+        .filter { it.isNotBlank() }.map { it.lowercase() }
+    val w = whiteInfo.name.trim().lowercase()
+    val b = blackInfo.name.trim().lowercase()
+
+    return when {
+        w.isNotBlank() && me.any { it == w } -> whiteInfo.title
+        b.isNotBlank() && me.any { it == b } -> blackInfo.title
+        else -> null
+    }
+}
+
+// --- ОБНОВЛЕННЫЙ Composable для красивого отображения имени ---
+@Composable
+private fun PlayerName(
+    info: PlayerInfo,
+    modifier: Modifier = Modifier,
+    textAlign: TextAlign? = null,
+    maxLines: Int = 1,
+    overflow: TextOverflow = TextOverflow.Ellipsis
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+    ) {
+        if (info.title != null) {
+            Text(
+                text = info.title.uppercase(Locale.getDefault()), // <-- ИЗМЕНЕНО: .uppercase()
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White // <-- ИЗМЕНЕНО: Белый шрифт
+                ),
+                modifier = Modifier
+                    .background(
+                        Color(0xFFD32F2F), // <-- ИЗМЕНЕНО: Красный фон
+                        RoundedCornerShape(4.dp)
+                    )
+                    .padding(horizontal = 4.dp, vertical = 2.dp) // <-- ИЗМЕНЕНО: vertical = 2.dp
+            )
+            Spacer(Modifier.width(4.dp))
+        }
+        Text(
+            text = info.name,
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+            maxLines = maxLines,
+            overflow = overflow,
+            textAlign = textAlign
+        )
+    }
+}
+
+// --- ОБНОВЛЕННАЯ CompactGameCard (С КОРОНОЙ) ---
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CompactGameCard(
@@ -1123,19 +1448,36 @@ private fun CompactGameCard(
         label = "scale"
     )
 
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = when {
-                userWon -> Color(0xFFDFF0D8)
-                userLost -> Color(0xFFF2DEDE)
-                else -> MaterialTheme.colorScheme.surface
-            }
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    // --- НОВАЯ ЛОГИКА ТИТУЛОВ ---
+    val whiteInfo = remember(game.white, game.pgn) { parsePlayerInfo(game.white, game.pgn, isWhite = true) }
+    val blackInfo = remember(game.black, game.pgn) { parsePlayerInfo(game.black, game.pgn, isWhite = false) }
+
+    val userTitle = remember(profile, whiteInfo, blackInfo) { getUserTitle(profile, whiteInfo, blackInfo) }
+    val opponentTitle = when (mySide) {
+        true -> blackInfo.title
+        false -> whiteInfo.title
+        null -> null
+    }
+
+    // Победа против титулованного, если у самого пользователя титула нет
+    val isWinVsTitled = userWon && (userTitle == null) && (opponentTitle != null)
+    // --- КОНЕЦ НОВОЙ ЛОГИКИ ---
+
+    // --- ИЗМЕНЕНО: Card обернут в Box для размещения короны ---
+    Box(
+        contentAlignment = Alignment.TopCenter,
         modifier = Modifier
             .fillMaxWidth()
-            .height(if (endText.isNotBlank()) 168.dp else 148.dp)
-            .padding(horizontal = 12.dp, vertical = 4.dp)
+            // Отступы для элемента списка.
+            // Динамический верхний отступ, чтобы корона не налезала на элемент выше
+            // --- ИСПРАВЛЕНИЕ (из прошлого шага) ---
+            .padding(
+                start = 12.dp,
+                end = 12.dp,
+                top = if (isWinVsTitled) 18.dp else 4.dp, // 14dp для короны + 4dp отступ
+                bottom = 4.dp
+            )
+            // --- КОНЕЦ ИСПРАВЛЕНИЯ ---
             .scale(scale)
             .combinedClickable(
                 enabled = !isAnalyzing,
@@ -1143,156 +1485,185 @@ private fun CompactGameCard(
                 onLongClick = { if (isAnalyzed) onLongPress() }
             )
     ) {
-        val siteName = when (game.site) {
-            Provider.LICHESS -> stringResource(R.string.filter_lichess)
-            Provider.CHESSCOM -> stringResource(R.string.filter_chesscom)
-            Provider.MANUAL, Provider.BOT -> stringResource(R.string.filter_manual)
-            null -> ""
-        }
-        val (modeLabel, openingLine) = deriveModeAndOpening(game, context)
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = when {
+                    userWon -> Color(0xFFDFF0D8)
+                    userLost -> Color(0xFFF2DEDE)
+                    else -> MaterialTheme.colorScheme.surface
+                }
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            // НОВОЕ СВОЙСТВО: золотая рамка (как в вашем коде)
+            border = if (isWinVsTitled) BorderStroke(2.dp, Color(0xFFFFD700)) else null,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(if (endText.isNotBlank()) 168.dp else 148.dp)
+            // Модификаторы .scale и .combinedClickable ПЕРЕНЕСЕНЫ на Box
+        ) {
+            val siteName = when (game.site) {
+                Provider.LICHESS -> stringResource(R.string.filter_lichess)
+                Provider.CHESSCOM -> stringResource(R.string.filter_chesscom)
+                Provider.MANUAL, Provider.BOT -> stringResource(R.string.filter_manual)
+                null -> ""
+            }
+            val (modeLabel, openingLine) = deriveModeAndOpening(game, context)
 
-        Column(Modifier.padding(10.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    buildAnnotatedString {
-                        withStyle(SpanStyle(fontWeight = FontWeight.Medium, fontSize = 11.sp)) { append(siteName) }
-                        if (!game.date.isNullOrBlank()) { append(" • "); append(game.date!!) }
-                        if (modeLabel.isNotBlank()) { append(" • "); append(modeLabel) }
-                    },
-                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (isAnalyzed) {
-                    Badge(containerColor = Color(0xFF4CAF50), contentColor = Color.White) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Default.CheckCircle,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(12.dp)
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                stringResource(R.string.analyzed),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
+            Column(Modifier.padding(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        buildAnnotatedString {
+                            withStyle(SpanStyle(fontWeight = FontWeight.Medium, fontSize = 11.sp)) { append(siteName) }
+                            if (!game.date.isNullOrBlank()) { append(" • "); append(game.date!!) }
+                            if (modeLabel.isNotBlank()) { append(" • "); append(modeLabel) }
+                        },
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (isAnalyzed) {
+                        Badge(containerColor = Color(0xFF4CAF50), contentColor = Color.White) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    stringResource(R.string.analyzed),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                         }
                     }
                 }
-            }
 
-            Spacer(Modifier.height(6.dp))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    UserBubble(name = game.white ?: "W", size = 22.dp)
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = playerWithTitle(game.white, game.pgn, isWhite = true),
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Text(
-                    game.result.orEmpty(),
-                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold, fontSize = 12.sp),
-                    modifier = Modifier.padding(horizontal = 8.dp)
-                )
+                Spacer(Modifier.height(6.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.End
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        text = playerWithTitle(game.black, game.pgn, isWhite = false),
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.End
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    UserBubble(name = game.black ?: "B", size = 22.dp)
-                }
-            }
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        UserBubble(name = game.white ?: "W", size = 22.dp)
+                        Spacer(Modifier.width(6.dp))
 
-            // Отображение способа завершения партии
-            if (endText.isNotBlank()) {
-                Spacer(Modifier.height(6.dp))
-                Surface(
-                    color = when (gameEndInfo.termination) {
-                        GameTermination.CHECKMATE -> Color(0xFFFFE0B2).copy(alpha = 0.6f)
-                        GameTermination.TIMEOUT -> Color(0xFFFFCDD2).copy(alpha = 0.6f)
-                        GameTermination.RESIGNATION -> Color(0xFFE0E0E0).copy(alpha = 0.6f)
-                        else -> Color(0xFFB3E5FC).copy(alpha = 0.6f)
-                    },
-                    shape = RoundedCornerShape(6.dp)
-                ) {
+                        // ИСПОЛЬЗУЕМ ОБНОВЛЕННЫЙ PlayerName
+                        PlayerName(info = whiteInfo, modifier = Modifier.weight(1f, fill = false))
+                    }
                     Text(
-                        text = endText,
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, fontWeight = FontWeight.Medium),
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        game.result.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold, fontSize = 12.sp),
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+
+                        // ИСПОЛЬЗУЕМ ОБНОВЛЕННЫЙ PlayerName
+                        PlayerName(
+                            info = blackInfo,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        UserBubble(name = game.black ?: "B", size = 22.dp)
+                    }
+                }
+
+                // ... (Отображение способа завершения, openingLine, StatColumn - остаются без изменений) ...
+                if (endText.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Surface(
+                        color = when (gameEndInfo.termination) {
+                            GameTermination.CHECKMATE -> Color(0xFFFFE0B2).copy(alpha = 0.6f)
+                            GameTermination.TIMEOUT -> Color(0xFFFFCDD2).copy(alpha = 0.6f)
+                            GameTermination.RESIGNATION -> Color(0xFFE0E0E0).copy(alpha = 0.6f)
+                            else -> Color(0xFFB3E5FC).copy(alpha = 0.6f)
+                        },
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text(
+                            text = endText,
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, fontWeight = FontWeight.Medium),
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                if (openingLine.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        openingLine,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-            }
 
-            if (openingLine.isNotBlank()) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    openingLine,
-                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            Spacer(Modifier.height(6.dp))
-            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(8.dp)) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    StatColumn(
-                        accuracy = analyzedReport?.accuracy?.whiteMovesAcc?.itera,
-                        performance = analyzedReport?.estimatedElo?.whiteEst
-                    )
-                    Box(
+                Spacer(Modifier.height(6.dp))
+                Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(8.dp)) {
+                    Row(
                         modifier = Modifier
-                            .width(1.dp)
-                            .height(24.dp)
-                            .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
-                    )
-                    StatColumn(
-                        accuracy = analyzedReport?.accuracy?.blackMovesAcc?.itera,
-                        performance = analyzedReport?.estimatedElo?.blackEst
-                    )
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        StatColumn(
+                            accuracy = analyzedReport?.accuracy?.whiteMovesAcc?.itera,
+                            performance = analyzedReport?.estimatedElo?.whiteEst
+                        )
+                        Box(
+                            modifier = Modifier
+                                .width(1.dp)
+                                .height(24.dp)
+                                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+                        )
+                        StatColumn(
+                            accuracy = analyzedReport?.accuracy?.blackMovesAcc?.itera,
+                            performance = analyzedReport?.estimatedElo?.blackEst
+                        )
+                    }
                 }
             }
         }
+
+        // --- НОВОЕ: Отображение иконки короны ---
+        if (isWinVsTitled) {
+            Image(
+                painter = painterResource(id = R.drawable.icon_crown), // Убедитесь, что файл есть
+                contentDescription = stringResource(id = R.string.victory_vs_titled),
+                modifier = Modifier
+                    .zIndex(1f) // Поверх Card
+                    .size(28.dp)
+                    .align(Alignment.TopCenter) // К верхнему краю Box
+                    .offset(y = (-14).dp)     // Сдвиг вверх на половину высоты
+            )
+        }
+        // --- КОНЕЦ: Отображение иконки короны ---
     }
 }
 
+// ... (StatColumn, getAccuracyColor, UserBubble, guessMySide - остаются без изменений) ...
 @Composable
 private fun StatColumn(accuracy: Double?, performance: Int?) {
     val accText = if (accuracy != null) "%.1f%%".format(accuracy) else "—"
@@ -1355,15 +1726,11 @@ private fun guessMySide(profile: UserProfile, game: GameHeader): Boolean? {
     }
 }
 
-private fun playerWithTitle(name: String?, pgn: String?, isWhite: Boolean): String {
-    val base = name.orEmpty()
-    if (pgn.isNullOrBlank()) return base
-    val tag = if (isWhite) """\[WhiteTitle\s+"([^"]+)"]""" else """\[BlackTitle\s+"([^"]+)"]"""
-    val rx = Regex(tag)
-    val title = rx.find(pgn)?.groupValues?.getOrNull(1)
-    return if (!title.isNullOrBlank()) "$base (${title.uppercase()})" else base
-}
 
+// --- УДАЛЕНА старая `playerWithTitle()` ---
+
+
+// ... (deriveModeAndOpening, mapTimeControlToMode, addManualGame, parseTags - остаются без изменений) ...
 private fun deriveModeAndOpening(game: GameHeader, context: Context): Pair<String, String> {
     val pgn = game.pgn
     var mode = ""

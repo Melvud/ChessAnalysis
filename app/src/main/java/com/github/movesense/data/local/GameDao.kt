@@ -95,4 +95,8 @@ interface GameDao {
         """
     )
     suspend fun getAllForListByGameTime(): List<ListRow>
+
+    // 🌟 НОВЫЙ МЕТОД ДЛЯ ДЕЛЬТА-ЗАГРУЗКИ 🌟
+    @Query("SELECT MAX(gameTimestamp) FROM external_games WHERE provider = :provider")
+    suspend fun getNewestGameTimestamp(provider: String): Long?
 }

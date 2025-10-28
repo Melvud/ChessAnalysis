@@ -13,6 +13,7 @@ import java.net.ConnectException
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.TimeUnit
@@ -30,7 +31,7 @@ object GameLoaders {
     private object Ipv4OnlyDns : Dns {
         override fun lookup(hostname: String): List<InetAddress> {
             val all = Dns.SYSTEM.lookup(hostname)
-            val only4 = all.filterIsInstance<Inet4Address>()
+            val only4 = all.filterIsInstance<InetAddress>()
             return if (only4.isNotEmpty()) only4 else all
         }
     }
@@ -172,13 +173,30 @@ object GameLoaders {
         return@withContext src
     }
 
-    // --------------------- LICHESS: теперь берём самые новые ---------------------
-    suspend fun loadLichess(username: String, max: Int = 50): List<GameHeader> =
+    // --------------------- LICHESS: поддержка since, until, max=null ---------------------
+    suspend fun loadLichess(
+        username: String,
+        since: Long? = null,
+        until: Long? = null,
+        max: Int? = 50 // 🌟 max теперь nullable
+    ): List<GameHeader> =
         withContext(Dispatchers.IO) {
-            Log.d(TAG, "🔄 Loading Lichess games for user: $username (max=$max)")
+            Log.d(TAG, "🔄 Loading Lichess games for user: $username (max=$max, since=$since, until=$until)")
 
-            val ndUrl =
-                "https://lichess.org/api/games/user/${username.trim()}?max=$max&perfType=blitz,bullet,rapid,classical&analysed=false&clocks=true&evals=false&opening=true&pgnInJson=true"
+            // 🌟 Динамически строим параметры
+            val params = mutableListOf<String>()
+            params.add("perfType=blitz,bullet,rapid,classical")
+            params.add("clocks=true")
+            params.add("evals=false")
+            params.add("opening=true")
+            params.add("pgnInJson=true")
+            max?.let { params.add("max=$it") }
+            since?.let { params.add("since=$it") }
+            until?.let { params.add("until=$it") }
+
+            val ndUrl = "https://lichess.org/api/games/user/${username.trim()}?${params.joinToString("&")}"
+            Log.d(TAG, "Lichess URL: $ndUrl")
+
             val ndReq = Request.Builder()
                 .url(ndUrl)
                 .header("Accept", "application/x-ndjson")
@@ -214,23 +232,33 @@ object GameLoaders {
                     }
                 }
 
-                // ВАЖНО: сортируем по времени партии и берём самые новые
+                // ВАЖНО: сортируем по времени партии
                 val sorted = list.sortedByDescending { gh ->
                     parseGameTimestamp(gh.pgn ?: "", gh.date)
-                }.take(max)
+                }
 
-                Log.d(TAG, "✅ Lichess: loaded ${sorted.size} (newest first)")
-                return@withContext sorted
+                // 🌟 Применяем max только если он был задан (для "Load All" max=null)
+                val result = if (max != null) sorted.take(max) else sorted
+
+                Log.d(TAG, "✅ Lichess: loaded ${result.size} (newest first)")
+                return@withContext result
             }
 
             Log.w(TAG, "⚠ Lichess returned 0 games")
             emptyList()
         }
 
-    // --------------------- CHESS.COM: теперь берём самые новые ---------------------
-    suspend fun loadChessCom(username: String, max: Int = 50): List<GameHeader> =
+    // --------------------- CHESS.COM: поддержка since, until, max=null и onProgress ---------------------
+    suspend fun loadChessCom(
+        username: String,
+        since: Long? = null,
+        until: Long? = null,
+        max: Int? = 50, // 🌟 max nullable
+        onProgress: (Float) -> Unit = {} // 🌟 Progress callback
+    ): List<GameHeader> =
         withContext(Dispatchers.IO) {
-            Log.d(TAG, "🔄 Loading Chess.com games for user: $username (max=$max)")
+            Log.d(TAG, "🔄 Loading Chess.com games for user: $username (max=$max, since=$since, until=$until)")
+            onProgress(0f)
 
             val archReq = Request.Builder()
                 .url("https://api.chess.com/pub/player/${username.trim().lowercase()}/games/archives")
@@ -248,11 +276,45 @@ object GameLoaders {
                 return@withContext emptyList()
             }
 
-            // Берём последние 3 месяца, но позже всё равно отсортируем по времени и усечём
-            val lastArchives = archiveUrls.takeLast(3)
+            // 🌟 Фильтрация архивов по дате
+            val calSince = since?.let { Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply { timeInMillis = it } }
+            val calUntil = until?.let { Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply { timeInMillis = it } }
+
+            val filteredArchiveUrls = archiveUrls.filter { url ->
+                val match = Regex(""".*/(\d{4})/(\d{2})$""").find(url) ?: return@filter true
+                val year = match.groupValues[1].toIntOrNull() ?: 0
+                val month = match.groupValues[2].toIntOrNull() ?: 0
+
+                if (calSince != null) {
+                    val sinceYear = calSince.get(Calendar.YEAR)
+                    val sinceMonth = calSince.get(Calendar.MONTH) + 1 // Calendar.MONTH 0-based
+                    if (year < sinceYear || (year == sinceYear && month < sinceMonth)) return@filter false
+                }
+                if (calUntil != null) {
+                    val untilYear = calUntil.get(Calendar.YEAR)
+                    val untilMonth = calUntil.get(Calendar.MONTH) + 1 // Calendar.MONTH 0-based
+                    if (year > untilYear || (year == untilYear && month > untilMonth)) return@filter false
+                }
+                true
+            }
+
+            // 🌟 Если max задан (загрузка по умолчанию) и нет дат, берем 3 мес.
+            //    Иначе (Load All или по датам) - берем ВСЕ отфильтрованные.
+            val archivesToFetch = if (max != null && since == null && until == null) {
+                filteredArchiveUrls.takeLast(3)
+            } else {
+                filteredArchiveUrls
+            }.reversed() // Качаем с новых
+
+            if (archivesToFetch.isEmpty()) {
+                Log.w(TAG, "No archives found to fetch for $username with given filters.")
+                onProgress(1f)
+                return@withContext emptyList()
+            }
+
             val allGames = mutableListOf<GameHeader>()
 
-            for (archiveUrl in lastArchives.reversed()) {
+            for ((index, archiveUrl) in archivesToFetch.withIndex()) {
                 val monthReq = Request.Builder().url(archiveUrl).header("User-Agent", UA).build()
                 val month = execWithIpv6SafeClient(monthReq) ?: continue
 
@@ -263,12 +325,17 @@ object GameLoaders {
                         allGames += PgnChess.headerFromPgn(pgn).copy(site = Provider.CHESSCOM, pgn = pgn)
                     }
                 }
+                // 🌟 Обновляем прогресс
+                onProgress((index + 1).toFloat() / archivesToFetch.size)
             }
 
-            // Ключевое изменение: сортируем по времени партии и берём самые новые
-            val result = allGames.sortedByDescending { gh ->
+            // Ключевое изменение: сортируем по времени партии
+            val sortedGames = allGames.sortedByDescending { gh ->
                 parseGameTimestamp(gh.pgn ?: "", gh.date)
-            }.take(max)
+            }
+
+            // 🌟 Применяем max только если он был задан
+            val result = if (max != null) sortedGames.take(max) else sortedGames
 
             Log.d(TAG, "✅ Chess.com: loaded ${result.size} (newest first)")
             result

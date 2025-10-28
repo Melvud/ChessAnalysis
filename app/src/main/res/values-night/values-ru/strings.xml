@@ -171,4 +171,15 @@
     <!-- GamesListScreen -->
     <string name="remaining_time">Осталось: %1$s</string>
     <string name="select_language">Выберите язык</string>
+
+    <string name="loading_lichess">Загрузка партий Lichess…</string>
+    <string name="loading_chesscom">Загрузка партий Chess.com…</string>
+    <string name="load_games_title">Загрузить партии</string>
+    <string name="load_games_desc">Выберите диапазон дат или загрузите все партии с ваших аккаунтов.</string>
+    <string name="date_from">С</string>
+    <string name="date_until">До</string>
+    <string name="load_date_range">Загрузить диапазон</string>
+    <string name="load_all_games">Загрузить все</string>
+
+    <string name="victory_vs_titled">Победа над титулованным игроком</string>
 </resources>

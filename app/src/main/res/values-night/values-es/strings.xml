@@ -172,4 +172,15 @@
     <!-- GamesListScreen -->
     <string name="remaining_time">Tiempo restante: %1$s</string>
     <string name="select_language">Seleccionar idioma</string>
+
+    <string name="loading_lichess">Loading Lichess games…</string>
+    <string name="loading_chesscom">Loading Chess.com games…</string>
+    <string name="load_games_title">Load Games</string>
+    <string name="load_games_desc">Select a date range or load all games from your accounts.</string>
+    <string name="date_from">From</string>
+    <string name="date_until">Until</string>
+    <string name="load_date_range">Load Range</string>
+    <string name="load_all_games">Load All Games</string>
+
+    <string name="victory_vs_titled">Victory vs. Titled Player</string>
 </resources>

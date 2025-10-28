@@ -129,6 +129,11 @@ class GameRepository(
         return added
     }
 
+    // 🌟 НОВЫЙ МЕТОД 🌟
+    suspend fun getNewestGameTimestamp(provider: Provider): Long? {
+        return db.gameDao().getNewestGameTimestamp(provider.name)
+    }
+
     suspend fun updateExternalPgn(provider: Provider, gh: GameHeader, fullPgn: String) {
         val key = headerKeyFor(provider, gh)
         db.gameDao().updateExternalPgnByKey(key, fullPgn)
