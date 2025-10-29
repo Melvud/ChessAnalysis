@@ -418,14 +418,10 @@ fun GameReportScreen(
                         fen = positionFen,
                         depth = depth,
                         multiPv = targetMultiPv,
-                        onLineUpdate = { lineDto ->
-                            // Обновляем коллекцию линий
-                            val existing = collectedLines.indexOfFirst { it.multiPv == lineDto.multiPv }
-                            if (existing >= 0) {
-                                collectedLines[existing] = lineDto
-                            } else {
-                                collectedLines.add(lineDto)
-                            }
+                        onUpdate = { linesList ->
+                            // Обновляем коллекцию линий полностью
+                            collectedLines.clear()
+                            collectedLines.addAll(linesList)
                         }
                     )
 
