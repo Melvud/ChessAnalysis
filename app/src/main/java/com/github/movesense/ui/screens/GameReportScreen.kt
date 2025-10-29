@@ -49,7 +49,6 @@ import com.github.movesense.R
 
 private const val TAG = "GameReportScreen"
 
-// Настройки пользователя
 private data class ViewSettings(
     val showEvalBar: Boolean = true,
     val evalBarPosition: EvalBarPosition = EvalBarPosition.LEFT,
@@ -200,7 +199,7 @@ fun GameReportScreen(
 
     val linesStateMap = remember { mutableStateMapOf<String, PositionLinesState>() }
 
-    // ИСПРАВЛЕНИЕ: Стабильное отображение линий
+    // ИСПРАВЛЕНИЕ: Стабильное отображение линий с сортировкой
     var displayedLines by remember { mutableStateOf<List<LineEval>>(emptyList()) }
     var isAnalysisRunning by remember { mutableStateOf(false) }
 
@@ -216,6 +215,9 @@ fun GameReportScreen(
 
     var analysisJob by remember { mutableStateOf<Job?>(null) }
     var analysisVersion by remember { mutableStateOf(0) }
+
+    // НОВОЕ: Хранение последних валидных линий для предотвращения мигания
+    val lastValidLines = remember { mutableStateMapOf<String, List<LineEval>>() }
 
     var viewSettings by remember {
         mutableStateOf(ViewSettings(
@@ -258,22 +260,38 @@ fun GameReportScreen(
         }
     }
 
+    // НОВОЕ: Функция сортировки линий по качеству (лучшая линия сверху)
+    fun sortLinesByQuality(lines: List<LineEval>): List<LineEval> {
+        return lines.sortedWith(compareByDescending<LineEval> { line ->
+            // Приоритет: мат лучше материала
+            when {
+                line.mate != null && line.mate!! > 0 -> 100000 + line.mate!! // Мат белыми
+                line.mate != null && line.mate!! < 0 -> -100000 + line.mate!! // Мат чёрными
+                line.cp != null -> line.cp!! // Материальная оценка
+                else -> 0
+            }
+        })
+    }
+
     LaunchedEffect(report) {
         Log.d(TAG, "🔄 Initializing lines from report...")
         report.positions.forEachIndexed { index, posEval ->
             if (posEval.lines.isNotEmpty()) {
                 val key = "${posEval.fen}-${posEval.lines.firstOrNull()?.depth ?: defaultDepth}-${posEval.lines.size}"
+                val sortedLines = sortLinesByQuality(posEval.lines)
                 linesStateMap[key] = PositionLinesState(
-                    lines = posEval.lines,
+                    lines = sortedLines,
                     isAnalyzing = false,
                     depth = posEval.lines.firstOrNull()?.depth ?: defaultDepth,
                     multiPv = posEval.lines.size,
                     isFromReport = true
                 )
+                // Сохраняем как последние валидные
+                lastValidLines[posEval.fen] = sortedLines
             }
         }
 
-        val initialLines = report.positions.getOrNull(0)?.lines ?: emptyList()
+        val initialLines = sortLinesByQuality(report.positions.getOrNull(0)?.lines ?: emptyList())
         displayedLines = initialLines.take(viewSettings.numberOfLines)
         Log.d(TAG, "✅ Set initial displayed lines: ${initialLines.size}")
     }
@@ -318,7 +336,7 @@ fun GameReportScreen(
         }
     }
 
-    // ИСПРАВЛЕНИЕ: Немедленное отображение линий из отчета
+    // ИСПРАВЛЕНИЕ: Немедленное отображение линий из отчета с правильной оценкой
     LaunchedEffect(currentPlyIndex, variationActive) {
         if (!variationActive) {
             val saved = positionSettings[currentPlyIndex]
@@ -330,16 +348,17 @@ fun GameReportScreen(
                 targetMultiPv = viewSettings.numberOfLines
             }
 
-            // КРИТИЧНО: Немедленно показываем линии из отчета
-            val reportLines = report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList()
+            // КРИТИЧНО: Немедленно показываем отсортированные линии из отчета
+            val reportLines = sortLinesByQuality(report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList())
             if (reportLines.isNotEmpty()) {
                 displayedLines = reportLines.take(viewSettings.numberOfLines)
+                lastValidLines[currentFen] = reportLines
                 Log.d(TAG, "📋 Instantly displayed ${reportLines.size} lines from report for ply $currentPlyIndex")
             }
         }
     }
 
-    // ИСПРАВЛЕНИЕ: Улучшенная функция автоматического увеличения глубины
+    // ИСПРАВЛЕНИЕ: СТАБИЛЬНЫЕ линии БЕЗ мигания - обновляем ТОЛЬКО когда получены ПОЛНЫЕ данные
     fun startAutoDepthAnalysis(fen: String, startDepth: Int, maxDepth: Int, multiPv: Int) {
         if (fen.isBlank()) return
 
@@ -347,11 +366,17 @@ fun GameReportScreen(
         isAnalysisRunning = true
         currentDepth = startDepth
 
+        // КРИТИЧНО: Сохраняем текущие отображаемые линии - они НЕ изменятся пока не получим полные новые
+        val stableLines = displayedLines.toList()
+
+        // Используем последние валидные линии для этой позиции (если есть)
+        val initialLines = lastValidLines[fen]
+        if (initialLines != null && initialLines.isNotEmpty()) {
+            displayedLines = initialLines.take(multiPv)
+        }
+
         analysisJob = scope.launch {
             try {
-                // Сохраняем текущие линии как базовые
-                val baseLines = displayedLines.toList()
-
                 for (depth in startDepth..maxDepth) {
                     if (!isActive) break
 
@@ -386,13 +411,14 @@ fun GameReportScreen(
                             }
                         }
 
-                        // ИСПРАВЛЕНИЕ: Всегда берем только нужное количество линий
-                        displayedLines = linesToShow.take(multiPv)
+                        val sortedLines = sortLinesByQuality(linesToShow)
+                        displayedLines = sortedLines.take(multiPv)
+                        lastValidLines[fen] = sortedLines
                         continue
                     }
 
-                    // ИСПРАВЛЕНИЕ: Сохраняем последние валидные линии перед каждым обновлением
-                    var lastValidLines = displayedLines.toList()
+                    // КРИТИЧНО: НЕ обновляем displayedLines во время стриминга - только в конце!
+                    var pendingLines: List<LineEval>? = null
 
                     val finalResult = evaluateFenDetailedStreaming(
                         fen = fen,
@@ -400,11 +426,12 @@ fun GameReportScreen(
                         multiPv = multiPv,
                         skillLevel = null
                     ) { linesDto ->
+                        // Собираем данные, но НЕ обновляем UI
                         val validLines = linesDto.filter { l ->
-                            l.pv.isNotEmpty() && (l.cp != null || l.mate != null)
+                            l.pv.isNotEmpty() && l.pv.size >= 3 && (l.cp != null || l.mate != null)
                         }
 
-                        if (validLines.isNotEmpty() && validLines.size >= multiPv) {
+                        if (validLines.size >= multiPv) {
                             val normalizedLines = normalizeLinesToWhitePOV(validLines, fen)
 
                             val newLines = normalizedLines.map { l ->
@@ -416,21 +443,20 @@ fun GameReportScreen(
                                     depth = l.depth,
                                     multiPv = l.multiPv
                                 )
-                            }.take(multiPv)
+                            }
 
-                            // ИСПРАВЛЕНИЕ: Обновляем только если получили полный набор линий
                             if (newLines.size == multiPv) {
-                                lastValidLines = newLines
-                                displayedLines = newLines
+                                pendingLines = sortLinesByQuality(newLines)
                             }
                         }
                     }
 
+                    // Обработка финального результата
                     val finalValidLines = finalResult.lines.filter { l ->
-                        l.pv.isNotEmpty() && (l.cp != null || l.mate != null)
+                        l.pv.isNotEmpty() && l.pv.size >= 3 && (l.cp != null || l.mate != null)
                     }
 
-                    if (finalValidLines.isNotEmpty() && finalValidLines.size >= multiPv) {
+                    if (finalValidLines.size >= multiPv) {
                         val normalizedFinalLines = normalizeLinesToWhitePOV(finalValidLines, fen)
 
                         val finalLines = normalizedFinalLines.map { l ->
@@ -442,26 +468,37 @@ fun GameReportScreen(
                                 depth = l.depth,
                                 multiPv = l.multiPv
                             )
-                        }.take(multiPv)
+                        }
 
-                        displayedLines = finalLines
-                        lastValidLines = finalLines
+                        val sortedFinalLines = sortLinesByQuality(finalLines)
+
+                        // КРИТИЧНО: Обновляем UI ТОЛЬКО ОДИН РАЗ с полными данными
+                        displayedLines = sortedFinalLines.take(multiPv)
+                        lastValidLines[fen] = sortedFinalLines
 
                         linesStateMap[stateKey] = PositionLinesState(
-                            lines = finalLines,
+                            lines = sortedFinalLines,
                             isAnalyzing = false,
                             depth = depth,
                             multiPv = multiPv,
                             isFromReport = false
                         )
-                    } else if (lastValidLines.isNotEmpty()) {
-                        // ИСПРАВЛЕНИЕ: Если финальный результат некорректен, восстанавливаем последние валидные
-                        displayedLines = lastValidLines
+                    } else if (pendingLines != null && pendingLines!!.size == multiPv) {
+                        // Используем последние валидные промежуточные данные
+                        displayedLines = pendingLines!!.take(multiPv)
+                        lastValidLines[fen] = pendingLines!!
                     }
+                    // Иначе: линии остаются прежними (stableLines)
                 }
             } catch (e: Exception) {
                 if (e !is CancellationException) {
                     Log.e(TAG, "❌ Analysis error: ${e.message}", e)
+                }
+                // Восстанавливаем последние валидные линии при ошибке
+                lastValidLines[fen]?.let {
+                    if (it.isNotEmpty()) {
+                        displayedLines = it.take(multiPv)
+                    }
                 }
             } finally {
                 isAnalysisRunning = false
@@ -684,7 +721,7 @@ fun GameReportScreen(
         selectedSquare = null
         legalTargets = emptySet()
 
-        val reportLines = report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList()
+        val reportLines = sortLinesByQuality(report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList())
         if (reportLines.isNotEmpty()) {
             displayedLines = reportLines.take(viewSettings.numberOfLines)
         }
@@ -721,7 +758,6 @@ fun GameReportScreen(
                     }
                 },
                 actions = {
-                    // Кнопка глубины
                     IconButton(onClick = { showDepthDialog = true }) {
                         Badge(
                             containerColor = MaterialTheme.colorScheme.primary,
@@ -735,7 +771,6 @@ fun GameReportScreen(
                         }
                     }
 
-                    // Кнопка настроек
                     IconButton(onClick = { showSettingsDialog = true }) {
                         Icon(
                             Icons.Default.Settings,
@@ -744,7 +779,6 @@ fun GameReportScreen(
                         )
                     }
 
-                    // Кнопка поворота
                     IconButton(
                         onClick = { if (!isAnalyzing) isWhiteBottom = !isWhiteBottom },
                         enabled = !isAnalyzing
@@ -762,7 +796,6 @@ fun GameReportScreen(
             )
         }
     ) { padding ->
-        // ИСПРАВЛЕНИЕ: Убираем скролл и фиксируем размер экрана
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -789,7 +822,7 @@ fun GameReportScreen(
                 (currentPlyIndex % 2 == 0 && topIsWhite) || (currentPlyIndex % 2 == 1 && !topIsWhite)
             } else false
 
-            // ИСПРАВЛЕНИЕ: Eval bar сверху (если выбрано) - над линиями движка
+            // ИСПРАВЛЕНИЕ: Тонкий Eval bar сверху (если выбрано)
             if (viewSettings.showEvalBar && viewSettings.evalBarPosition == EvalBarPosition.TOP) {
                 val evalPositions: List<PositionEval>
                 val evalIndex: Int
@@ -811,22 +844,21 @@ fun GameReportScreen(
                     isWhiteBottom = isWhiteBottom,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(32.dp) // ИСПРАВЛЕНИЕ: Увеличили толщину
+                        .height(24.dp) // ИСПРАВЛЕНИЕ: Тонкий eval bar
                 )
             }
 
-            // ИСПРАВЛЕНИЕ: Линии движка над карточкой верхнего игрока
+            // ИСПРАВЛЕНИЕ: Фиксированная высота для линий движка
             if (viewSettings.showEngineLines && displayedLines.isNotEmpty()) {
-                // ИСПРАВЛЕНИЕ: Фиксированная высота для стабильности
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(
                             when (viewSettings.numberOfLines) {
-                                1 -> 40.dp
-                                2 -> 72.dp
-                                3 -> 104.dp
-                                else -> 72.dp
+                                1 -> 36.dp
+                                2 -> 68.dp
+                                3 -> 100.dp
+                                else -> 68.dp
                             }
                         )
                         .background(cardColor)
@@ -854,11 +886,11 @@ fun GameReportScreen(
                     .padding(horizontal = 12.dp, vertical = 4.dp)
             )
 
-            // ИСПРАВЛЕНИЕ: Доска с правильным отображением
+            // ИСПРАВЛЕНИЕ: Доска с правильным весом
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f) // Занимает оставшееся пространство
+                    .weight(1f)
             ) {
                 when (viewSettings.evalBarPosition) {
                     EvalBarPosition.LEFT -> {
@@ -884,7 +916,7 @@ fun GameReportScreen(
                                     isWhiteBottom = isWhiteBottom,
                                     modifier = Modifier
                                         .fillMaxHeight()
-                                        .width(20.dp)
+                                        .width(16.dp) // ИСПРАВЛЕНИЕ: Тонкий eval bar
                                 )
                             }
 
@@ -913,7 +945,6 @@ fun GameReportScreen(
                     }
 
                     EvalBarPosition.TOP -> {
-                        // ИСПРАВЛЕНИЕ: Без повторного eval bar (он уже сверху)
                         Box(modifier = Modifier.fillMaxSize()) {
                             BoardWithOverlay(
                                 currentFen = currentFen,
@@ -967,40 +998,17 @@ fun GameReportScreen(
                     .padding(horizontal = 12.dp, vertical = 4.dp)
             )
 
-            // ИСПРАВЛЕНИЕ: Упрощенные кнопки навигации - только стрелки по краям
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF1E1C1A)),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = { goPrev() }, enabled = !isAnalyzing) {
-                    Icon(
-                        Icons.Default.ArrowBack,
-                        contentDescription = stringResource(R.string.previous),
-                        tint = if (isAnalyzing) Color.Gray else Color.White
-                    )
-                }
+            // ИСПРАВЛЕНИЕ: Только стрелки по краям
+            MovesCarousel(
+                report = report,
+                currentPlyIndex = currentPlyIndex,
+                onSeekTo = { if (!isAnalyzing) seekTo(it) },
+                onPrev = { if (!isAnalyzing) goPrev() },
+                onNext = { if (!isAnalyzing) goNext() },
+                modifier = Modifier.fillMaxWidth()
+            )
 
-                MovesCarousel(
-                    report = report,
-                    currentPlyIndex = currentPlyIndex,
-                    onSeekTo = { if (!isAnalyzing) seekTo(it) },
-                    onPrev = { if (!isAnalyzing) goPrev() },
-                    onNext = { if (!isAnalyzing) goNext() },
-                    modifier = Modifier.weight(1f)
-                )
-
-                IconButton(onClick = { goNext() }, enabled = !isAnalyzing) {
-                    Icon(
-                        Icons.Default.ArrowForward,
-                        contentDescription = stringResource(R.string.next),
-                        tint = if (isAnalyzing) Color.Gray else Color.White
-                    )
-                }
-            }
-
-            // ИСПРАВЛЕНИЕ: Компактная строка управления внизу
+            // ИСПРАВЛЕНИЕ: Компактная строка управления
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1107,7 +1115,6 @@ fun GameReportScreen(
         }
     }
 
-    // Диалог настроек
     if (showSettingsDialog) {
         SettingsDialog(
             viewSettings = viewSettings,
@@ -1116,8 +1123,7 @@ fun GameReportScreen(
                 viewSettings = newSettings
                 targetMultiPv = newSettings.numberOfLines
 
-                // ИСПРАВЛЕНИЕ: Обновляем отображаемые линии при изменении количества
-                val reportLines = report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList()
+                val reportLines = sortLinesByQuality(report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList())
                 if (reportLines.isNotEmpty()) {
                     displayedLines = reportLines.take(newSettings.numberOfLines)
                 }
@@ -1127,7 +1133,6 @@ fun GameReportScreen(
         )
     }
 
-    // Диалог глубины
     if (showDepthDialog) {
         DepthDialog(
             currentDepth = targetDepth,
@@ -1144,7 +1149,6 @@ fun GameReportScreen(
     }
 }
 
-// ИСПРАВЛЕНИЕ: Упрощенный Composable линий движка без заголовка
 @Composable
 private fun CompactEngineLines(
     baseFen: String,
@@ -1170,7 +1174,6 @@ private fun CompactEngineLines(
     }
 }
 
-// Composable: Компактный PV Row
 @Composable
 private fun CompactPvRow(
     baseFen: String,
@@ -1187,17 +1190,15 @@ private fun CompactPvRow(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Оценка
         CompactEvalChip(line = line)
 
         Spacer(Modifier.width(6.dp))
 
-        // Ходы с иконками
         LazyRow(
             modifier = Modifier.weight(1f),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            itemsIndexed(tokens.take(6)) { idx, token ->
+            itemsIndexed(tokens.take(10)) { idx, token ->
                 Row(
                     modifier = Modifier
                         .clickable { onClickMoveAtIndex(idx) }
@@ -1208,11 +1209,24 @@ private fun CompactPvRow(
                         .padding(horizontal = 6.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Номер хода
+                    // ИСПРАВЛЕНИЕ: Нумерация продолжается от текущего хода партии
+                    val baseFenParts = baseFen.split(" ")
+                    val fullMoveNumber = baseFenParts.getOrNull(5)?.toIntOrNull() ?: 1
+                    val isWhiteToMove = baseFenParts.getOrNull(1) == "w"
+
+                    // Вычисляем номер хода с учетом текущей позиции
                     val moveNumber = if (idx % 2 == 0) {
-                        "${idx / 2 + 1}."
+                        if (isWhiteToMove) {
+                            "$fullMoveNumber."
+                        } else {
+                            "${fullMoveNumber + idx / 2}."
+                        }
                     } else {
-                        "${idx / 2 + 1}..."
+                        if (isWhiteToMove) {
+                            "${fullMoveNumber + (idx + 1) / 2}..."
+                        } else {
+                            "${fullMoveNumber + (idx + 1) / 2}..."
+                        }
                     }
 
                     Text(
@@ -1243,7 +1257,6 @@ private fun CompactPvRow(
     }
 }
 
-// Composable: Компактный Eval Chip
 @Composable
 private fun CompactEvalChip(line: LineEval, modifier: Modifier = Modifier) {
     val txt = when {
@@ -1278,7 +1291,6 @@ private fun CompactEvalChip(line: LineEval, modifier: Modifier = Modifier) {
     }
 }
 
-// Composable: Board с оверлеями
 @Composable
 private fun BoardWithOverlay(
     currentFen: String,
@@ -1353,7 +1365,6 @@ private fun BoardWithOverlay(
     }
 }
 
-// ИСПРАВЛЕНИЕ: Улучшенный горизонтальный Eval Bar
 @Composable
 private fun HorizontalEvalBar(
     positions: List<PositionEval>,
@@ -1398,7 +1409,6 @@ private fun HorizontalEvalBar(
     }
 }
 
-// Диалог настроек
 @Composable
 private fun SettingsDialog(
     viewSettings: ViewSettings,
@@ -1412,7 +1422,6 @@ private fun SettingsDialog(
         title = { Text(stringResource(R.string.settings)) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                // Показывать eval bar
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1427,7 +1436,6 @@ private fun SettingsDialog(
                     )
                 }
 
-                // Позиция eval bar
                 if (localSettings.showEvalBar) {
                     Text(
                         stringResource(R.string.eval_bar_position),
@@ -1455,7 +1463,6 @@ private fun SettingsDialog(
 
                 HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
-                // Показывать стрелки лучших ходов
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1470,7 +1477,6 @@ private fun SettingsDialog(
                     )
                 }
 
-                // Показывать угрозы (пока не реализовано)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1488,14 +1494,13 @@ private fun SettingsDialog(
                     }
                     Switch(
                         checked = localSettings.showThreatArrows,
-                        onCheckedChange = { /* localSettings = localSettings.copy(showThreatArrows = it) */ },
+                        onCheckedChange = { },
                         enabled = false
                     )
                 }
 
                 HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
-                // Показывать линии движка
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1510,7 +1515,6 @@ private fun SettingsDialog(
                     )
                 }
 
-                // Количество линий
                 if (localSettings.showEngineLines) {
                     Text(
                         stringResource(R.string.number_of_lines),
@@ -1549,7 +1553,6 @@ private fun SettingsDialog(
     )
 }
 
-// Диалог выбора глубины
 @Composable
 private fun DepthDialog(
     currentDepth: Int,
@@ -1585,7 +1588,6 @@ private fun DepthDialog(
                             )
                         }
 
-                        // Заполнение пустых ячеек
                         repeat(3 - row.size) {
                             Spacer(Modifier.weight(1f))
                         }
@@ -1601,7 +1603,6 @@ private fun DepthDialog(
     )
 }
 
-// Вспомогательные функции
 private data class PvToken(
     val iconAsset: String,
     val toSquare: String,

@@ -197,5 +197,6 @@
     <!-- Depth Dialog -->
     <string name="select_depth">Выберите глубину</string>
     <string name="depth_description">Глубина анализа автоматически увеличивается от выбранного значения до 18. Чем выше глубина, тем точнее оценка, но медленнее расчет.</string>
-
+    <string name="display_settings">Настройки отображения</string>
+    <string name="show_best_move_arrow">Показывать стрелку лучшего хода</string>
 </resources>

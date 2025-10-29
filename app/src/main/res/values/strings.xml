@@ -198,5 +198,6 @@
     <!-- Depth Dialog -->
     <string name="select_depth">Select depth</string>
     <string name="depth_description">Analysis depth automatically increases from the selected value to 18. Higher depth means more accurate evaluation but slower calculation.</string>
-
+    <string name="display_settings">Display Settings</string>
+    <string name="show_best_move_arrow">Show Best Move Arrow</string>
 </resources>
