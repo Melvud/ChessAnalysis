@@ -211,8 +211,9 @@ fun GameReportScreen(
     }
 
     var currentDepth by remember { mutableStateOf(12) }
-    var targetDepth by remember { mutableStateOf(12) }
+    var targetDepth by remember { mutableStateOf(18) } // По умолчанию цель - 18
     var targetMultiPv by remember { mutableStateOf(2) }
+    var isManualDepth by remember { mutableStateOf(false) } // Флаг ручной установки
 
     var analysisJob by remember { mutableStateOf<Job?>(null) }
     var analysisVersion by remember { mutableStateOf(0) }
@@ -349,8 +350,11 @@ fun GameReportScreen(
             if (saved != null) {
                 targetDepth = saved.first
                 targetMultiPv = saved.second
+                isManualDepth = true
             } else {
-                targetDepth = 12
+                if (!isManualDepth) {
+                    targetDepth = 18 // Автоматическая цель - 18
+                }
                 targetMultiPv = viewSettings.numberOfLines
             }
 
@@ -367,10 +371,95 @@ fun GameReportScreen(
                 lastValidLines[positionFen] = sortedLines
                 displayedLines = linesToShow
 
+                val reportDepth = reportLines.firstOrNull()?.depth ?: 12
+                currentDepth = reportDepth
+
                 Log.d(TAG, "✅ Displayed ${linesToShow.size} lines for ply $currentPlyIndex (cp=${linesToShow.firstOrNull()?.cp}, mate=${linesToShow.firstOrNull()?.mate})")
             } else {
                 displayedLines = emptyList()
+                currentDepth = 12
                 Log.d(TAG, "⚠️ No lines in report for ply $currentPlyIndex")
+            }
+        }
+    }
+
+    // Инкрементальный анализ с автоматическим повышением глубины
+    LaunchedEffect(currentPlyIndex, targetDepth, targetMultiPv, variationActive) {
+        if (variationActive) return@LaunchedEffect
+
+        // Отменяем предыдущий анализ
+        analysisJob?.cancel()
+
+        val positionFen = report.positions.getOrNull(currentPlyIndex)?.fen ?: return@LaunchedEffect
+        val reportLines = report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList()
+        val reportDepth = reportLines.firstOrNull()?.depth ?: 12
+
+        // Если целевая глубина меньше или равна глубине из отчета, не анализируем
+        if (targetDepth <= reportDepth) {
+            Log.d(TAG, "✅ Using report depth $reportDepth, target is $targetDepth")
+            return@LaunchedEffect
+        }
+
+        Log.d(TAG, "🔄 Starting incremental analysis from depth $reportDepth to $targetDepth for ply $currentPlyIndex")
+
+        isAnalysisRunning = true
+
+        analysisJob = launch {
+            try {
+                // Инкрементальный анализ: от reportDepth+1 до targetDepth
+                for (depth in (reportDepth + 1)..targetDepth) {
+                    if (!isActive) break
+
+                    Log.d(TAG, "🔍 Analyzing depth $depth for ply $currentPlyIndex")
+
+                    val collectedLines = mutableListOf<EngineClient.LineDTO>()
+
+                    evaluateFenDetailedStreaming(
+                        fen = positionFen,
+                        depth = depth,
+                        multiPv = targetMultiPv,
+                        onLineUpdate = { lineDto ->
+                            // Обновляем коллекцию линий
+                            val existing = collectedLines.indexOfFirst { it.multiPv == lineDto.multiPv }
+                            if (existing >= 0) {
+                                collectedLines[existing] = lineDto
+                            } else {
+                                collectedLines.add(lineDto)
+                            }
+                        }
+                    )
+
+                    // Нормализуем к точке зрения белых
+                    val normalizedLines = normalizeLinesToWhitePOV(collectedLines, positionFen)
+
+                    // Конвертируем в LineEval
+                    val lineEvals = normalizedLines.map { dto ->
+                        LineEval(
+                            pv = dto.pv,
+                            cp = dto.cp,
+                            mate = dto.mate,
+                            best = dto.pv.firstOrNull(),
+                            depth = dto.depth
+                        )
+                    }
+
+                    // Сортируем и обновляем отображение
+                    val sortedLines = sortLinesByQuality(lineEvals)
+                    lastValidLines[positionFen] = sortedLines
+                    displayedLines = sortedLines.take(viewSettings.numberOfLines)
+                    currentDepth = depth
+
+                    Log.d(TAG, "✅ Updated to depth $depth with ${sortedLines.size} lines (cp=${sortedLines.firstOrNull()?.cp}, mate=${sortedLines.firstOrNull()?.mate})")
+                }
+
+                Log.d(TAG, "✅ Completed incremental analysis to depth $targetDepth")
+            } catch (e: CancellationException) {
+                Log.d(TAG, "⚠️ Analysis cancelled")
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Error during incremental analysis", e)
+            } finally {
+                isAnalysisRunning = false
             }
         }
     }
@@ -746,8 +835,7 @@ fun GameReportScreen(
                 inverted = !topIsWhite,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(cardColor)
-                    .padding(horizontal = 12.dp, vertical = 1.dp)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
             )
 
             // ДОСКА - фиксированный размер
@@ -859,8 +947,7 @@ fun GameReportScreen(
                 inverted = !bottomIsWhite,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(cardColor)
-                    .padding(horizontal = 12.dp, vertical = 1.dp)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
             )
 
             // КРИТИЧНО: Карусель ходов занимает ВСЁ оставшееся место
@@ -950,10 +1037,10 @@ fun GameReportScreen(
             onDismiss = { showDepthDialog = false },
             onDepthSelected = { depth ->
                 targetDepth = depth
+                isManualDepth = true
                 if (!variationActive) {
                     positionSettings[currentPlyIndex] = Pair(depth, targetMultiPv)
                 }
-                analysisVersion++
                 showDepthDialog = false
             }
         )
@@ -1381,13 +1468,13 @@ private fun DepthDialog(
     onDismiss: () -> Unit,
     onDepthSelected: (Int) -> Unit
 ) {
-    val depths = listOf(8, 10, 12, 14, 16, 18, 20, 22, 24)
+    val depths = listOf(8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30)
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.select_depth)) },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     stringResource(R.string.depth_description),
                     style = MaterialTheme.typography.bodyMedium,
@@ -1475,8 +1562,9 @@ private fun PlayerCard(
     )
     Row(
         modifier = modifier
-            .background(Color(0xFF1E1C1A), RoundedCornerShape(8.dp))
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .background(Color(0xFF2A2825), RoundedCornerShape(10.dp))
+            .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
