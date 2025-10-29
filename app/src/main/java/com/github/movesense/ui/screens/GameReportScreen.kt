@@ -51,11 +51,11 @@ private const val TAG = "GameReportScreen"
 
 private data class ViewSettings(
     val showEvalBar: Boolean = true,
-    val evalBarPosition: EvalBarPosition = EvalBarPosition.LEFT,
+    val evalBarPosition: EvalBarPosition = EvalBarPosition.TOP,
     val showBestMoveArrow: Boolean = true,
     val showThreatArrows: Boolean = false,
     val showEngineLines: Boolean = true,
-    val numberOfLines: Int = 2
+    val numberOfLines: Int = 1
 )
 
 private enum class EvalBarPosition { LEFT, TOP }
@@ -351,9 +351,17 @@ fun GameReportScreen(
             // КРИТИЧНО: Немедленно показываем отсортированные линии из отчета
             val reportLines = sortLinesByQuality(report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList())
             if (reportLines.isNotEmpty()) {
-                displayedLines = reportLines.take(viewSettings.numberOfLines)
+                // ВАЖНО: Сохраняем линии ПЕРЕД обновлением UI для стабильности
                 lastValidLines[currentFen] = reportLines
+                displayedLines = reportLines.take(viewSettings.numberOfLines)
                 Log.d(TAG, "📋 Instantly displayed ${reportLines.size} lines from report for ply $currentPlyIndex")
+            } else {
+                // Если нет линий в отчете, используем последние валидные для этой позиции
+                val cachedLines = lastValidLines[currentFen]
+                if (cachedLines != null && cachedLines.isNotEmpty()) {
+                    displayedLines = cachedLines.take(viewSettings.numberOfLines)
+                    Log.d(TAG, "📋 Using cached lines for position")
+                }
             }
         }
     }
@@ -366,14 +374,14 @@ fun GameReportScreen(
         isAnalysisRunning = true
         currentDepth = startDepth
 
-        // КРИТИЧНО: Сохраняем текущие отображаемые линии - они НЕ изменятся пока не получим полные новые
-        val stableLines = displayedLines.toList()
-
-        // Используем последние валидные линии для этой позиции (если есть)
-        val initialLines = lastValidLines[fen]
-        if (initialLines != null && initialLines.isNotEmpty()) {
-            displayedLines = initialLines.take(multiPv)
+        // КРИТИЧНО: НЕ очищаем displayedLines! Сохраняем текущие линии до получения новых
+        // Если уже есть последние валидные линии для этой позиции, используем их
+        val cachedLines = lastValidLines[fen]
+        if (cachedLines != null && cachedLines.isNotEmpty()) {
+            displayedLines = cachedLines.take(multiPv)
+            Log.d(TAG, "🔄 Keeping stable lines from cache during analysis start")
         }
+        // Иначе: оставляем текущие displayedLines как есть
 
         analysisJob = scope.launch {
             try {
@@ -419,6 +427,7 @@ fun GameReportScreen(
 
                     // КРИТИЧНО: НЕ обновляем displayedLines во время стриминга - только в конце!
                     var pendingLines: List<LineEval>? = null
+                    var lastStreamedLines: List<LineEval>? = null
 
                     val finalResult = evaluateFenDetailedStreaming(
                         fen = fen,
@@ -428,7 +437,7 @@ fun GameReportScreen(
                     ) { linesDto ->
                         // Собираем данные, но НЕ обновляем UI
                         val validLines = linesDto.filter { l ->
-                            l.pv.isNotEmpty() && l.pv.size >= 3 && (l.cp != null || l.mate != null)
+                            l.pv.isNotEmpty() && l.pv.size >= 2 && (l.cp != null || l.mate != null)
                         }
 
                         if (validLines.size >= multiPv) {
@@ -445,15 +454,15 @@ fun GameReportScreen(
                                 )
                             }
 
-                            if (newLines.size == multiPv) {
-                                pendingLines = sortLinesByQuality(newLines)
+                            if (newLines.size >= multiPv) {
+                                lastStreamedLines = sortLinesByQuality(newLines)
                             }
                         }
                     }
 
                     // Обработка финального результата
                     val finalValidLines = finalResult.lines.filter { l ->
-                        l.pv.isNotEmpty() && l.pv.size >= 3 && (l.cp != null || l.mate != null)
+                        l.pv.isNotEmpty() && l.pv.size >= 2 && (l.cp != null || l.mate != null)
                     }
 
                     if (finalValidLines.size >= multiPv) {
@@ -483,12 +492,14 @@ fun GameReportScreen(
                             multiPv = multiPv,
                             isFromReport = false
                         )
-                    } else if (pendingLines != null && pendingLines!!.size == multiPv) {
+                        Log.d(TAG, "✅ Updated displayed lines for depth $depth with ${sortedFinalLines.size} lines")
+                    } else if (lastStreamedLines != null && lastStreamedLines!!.size >= multiPv) {
                         // Используем последние валидные промежуточные данные
-                        displayedLines = pendingLines!!.take(multiPv)
-                        lastValidLines[fen] = pendingLines!!
+                        displayedLines = lastStreamedLines!!.take(multiPv)
+                        lastValidLines[fen] = lastStreamedLines!!
+                        Log.d(TAG, "✅ Updated displayed lines from streaming data")
                     }
-                    // Иначе: линии остаются прежними (stableLines)
+                    // Иначе: линии остаются прежними (не обновляем displayedLines)
                 }
             } catch (e: Exception) {
                 if (e !is CancellationException) {
@@ -855,14 +866,14 @@ fun GameReportScreen(
                         .fillMaxWidth()
                         .height(
                             when (viewSettings.numberOfLines) {
-                                1 -> 36.dp
-                                2 -> 68.dp
-                                3 -> 100.dp
-                                else -> 68.dp
+                                1 -> 34.dp
+                                2 -> 66.dp
+                                3 -> 98.dp
+                                else -> 66.dp
                             }
                         )
                         .background(cardColor)
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     CompactEngineLines(
                         baseFen = currentFen,
@@ -883,7 +894,7 @@ fun GameReportScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(cardColor)
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .padding(horizontal = 12.dp, vertical = 2.dp)
             )
 
             // ИСПРАВЛЕНИЕ: Доска с правильным весом
@@ -995,7 +1006,7 @@ fun GameReportScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(cardColor)
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .padding(horizontal = 12.dp, vertical = 2.dp)
             )
 
             // ИСПРАВЛЕНИЕ: Только стрелки по краям
@@ -1008,24 +1019,25 @@ fun GameReportScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            // ИСПРАВЛЕНИЕ: Компактная строка управления
+            // ИСПРАВЛЕНИЕ: Компактная строка управления с увеличенными кнопками
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(cardColor)
-                    .padding(vertical = 4.dp, horizontal = 8.dp),
+                    .padding(vertical = 6.dp, horizontal = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(
                     onClick = { if (!isAnalyzing) seekTo(0) },
                     enabled = !isAnalyzing,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(48.dp)
                 ) {
                     Icon(
                         Icons.Default.SkipPrevious,
                         contentDescription = stringResource(R.string.to_start),
-                        tint = if (isAnalyzing) Color.Gray else Color.White
+                        tint = if (isAnalyzing) Color.Gray else Color.White,
+                        modifier = Modifier.size(32.dp)
                     )
                 }
 
@@ -1039,7 +1051,7 @@ fun GameReportScreen(
                     },
                     enabled = !isAnalyzing,
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(56.dp)
                         .background(
                             if (isAnalyzing) Color.Gray else MaterialTheme.colorScheme.primary,
                             CircleShape
@@ -1052,19 +1064,21 @@ fun GameReportScreen(
                         } else {
                             stringResource(R.string.play)
                         },
-                        tint = Color.White
+                        tint = Color.White,
+                        modifier = Modifier.size(32.dp)
                     )
                 }
 
                 IconButton(
                     onClick = { if (!isAnalyzing) seekTo(report.positions.lastIndex) },
                     enabled = !isAnalyzing,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(48.dp)
                 ) {
                     Icon(
                         Icons.Default.SkipNext,
                         contentDescription = stringResource(R.string.to_end),
-                        tint = if (isAnalyzing) Color.Gray else Color.White
+                        tint = if (isAnalyzing) Color.Gray else Color.White,
+                        modifier = Modifier.size(32.dp)
                     )
                 }
             }
@@ -1654,7 +1668,7 @@ private fun PlayerCard(
     Row(
         modifier = modifier
             .background(Color(0xFF1E1C1A), RoundedCornerShape(8.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
