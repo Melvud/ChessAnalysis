@@ -194,6 +194,7 @@ fun GameReportScreen(
     var variationBestUci by remember { mutableStateOf<String?>(null) }
     var variationMoveClass by remember { mutableStateOf<MoveClass?>(null) }
     var variationLastMove by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var variationHistory by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedSquare by remember { mutableStateOf<String?>(null) }
     var legalTargets by remember { mutableStateOf<Set<String>>(emptySet()) }
     var isAnalyzing by remember { mutableStateOf(false) }
@@ -349,8 +350,9 @@ fun GameReportScreen(
 
         analysisJob = scope.launch {
             try {
-                // Сохраняем текущие линии как базовые
-                val baseLines = displayedLines.toList()
+                // КРИТИЧНО: Сохраняем текущие линии как базовые для всего анализа
+                // Это гарантирует, что у нас всегда есть что показать
+                var lastValidLines = displayedLines.toList()
 
                 for (depth in startDepth..maxDepth) {
                     if (!isActive) break
@@ -388,11 +390,9 @@ fun GameReportScreen(
 
                         // ИСПРАВЛЕНИЕ: Всегда берем только нужное количество линий
                         displayedLines = linesToShow.take(multiPv)
+                        lastValidLines = displayedLines.toList()
                         continue
                     }
-
-                    // ИСПРАВЛЕНИЕ: Сохраняем последние валидные линии перед каждым обновлением
-                    var lastValidLines = displayedLines.toList()
 
                     val finalResult = evaluateFenDetailedStreaming(
                         fen = fen,
@@ -471,6 +471,14 @@ fun GameReportScreen(
 
     LaunchedEffect(currentFen, targetMultiPv, variationActive, analysisVersion) {
         if (currentFen.isNotBlank()) {
+            // КРИТИЧНО: Сначала показываем линии из отчета, чтобы не было пустых линий
+            if (!variationActive) {
+                val reportLines = report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList()
+                if (reportLines.isNotEmpty()) {
+                    displayedLines = reportLines.take(targetMultiPv)
+                }
+            }
+
             delay(100)
             startAutoDepthAnalysis(currentFen, 12, 18, targetMultiPv)
         }
@@ -568,6 +576,15 @@ fun GameReportScreen(
             }
         }
 
+        // Add to variation history
+        if (!variationActive) {
+            // Starting new variation, add the base position
+            variationHistory = listOf(boardFenNow)
+        } else {
+            // Already in variation, add current position to history
+            variationHistory = variationHistory + boardFenNow
+        }
+
         variationActive = true
         variationFen = afterFen
         variationLastMove = from to to
@@ -638,6 +655,16 @@ fun GameReportScreen(
         b.doMove(move)
         val after = b.fen
 
+        // Add to variation history
+        if (!variationActive) {
+            // Starting new variation, add the base position
+            variationHistory = listOf(fen0)
+        } else {
+            // Already in variation, add current position to history
+            val currentFen = variationFen ?: fen0
+            variationHistory = variationHistory + currentFen
+        }
+
         variationActive = true
         variationFen = after
         variationLastMove = from to to
@@ -681,6 +708,7 @@ fun GameReportScreen(
         variationBestUci = null
         variationMoveClass = null
         variationLastMove = null
+        variationHistory = emptyList()
         selectedSquare = null
         legalTargets = emptySet()
 
@@ -704,7 +732,37 @@ fun GameReportScreen(
     }
 
     fun goNext() { if (!isAnalyzing && currentPlyIndex < report.positions.lastIndex) seekTo(currentPlyIndex + 1) }
-    fun goPrev() { if (!isAnalyzing && currentPlyIndex > 0) seekTo(currentPlyIndex - 1) }
+    fun goPrev() {
+        if (isAnalyzing) return
+
+        // If in variation mode, handle variation navigation
+        if (variationActive && variationHistory.isNotEmpty()) {
+            // Go back in variation history
+            val previousFen = variationHistory.last()
+            variationHistory = variationHistory.dropLast(1)
+
+            if (variationHistory.isEmpty()) {
+                // No more history, exit variation and return to game
+                exitVariation()
+            } else {
+                // Stay in variation, update to previous position
+                variationFen = previousFen
+                variationEval = null
+                variationBestUci = null
+                variationMoveClass = null
+                variationLastMove = null
+
+                // Trigger analysis for the previous position
+                analysisVersion++
+            }
+        } else if (variationActive) {
+            // In variation but no history, exit to game
+            exitVariation()
+        } else {
+            // Normal navigation in game
+            if (currentPlyIndex > 0) seekTo(currentPlyIndex - 1)
+        }
+    }
 
     Scaffold(
         containerColor = bgColor,
@@ -967,99 +1025,15 @@ fun GameReportScreen(
                     .padding(horizontal = 12.dp, vertical = 4.dp)
             )
 
-            // ИСПРАВЛЕНИЕ: Упрощенные кнопки навигации - только стрелки по краям
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF1E1C1A)),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = { goPrev() }, enabled = !isAnalyzing) {
-                    Icon(
-                        Icons.Default.ArrowBack,
-                        contentDescription = stringResource(R.string.previous),
-                        tint = if (isAnalyzing) Color.Gray else Color.White
-                    )
-                }
-
-                MovesCarousel(
-                    report = report,
-                    currentPlyIndex = currentPlyIndex,
-                    onSeekTo = { if (!isAnalyzing) seekTo(it) },
-                    onPrev = { if (!isAnalyzing) goPrev() },
-                    onNext = { if (!isAnalyzing) goNext() },
-                    modifier = Modifier.weight(1f)
-                )
-
-                IconButton(onClick = { goNext() }, enabled = !isAnalyzing) {
-                    Icon(
-                        Icons.Default.ArrowForward,
-                        contentDescription = stringResource(R.string.next),
-                        tint = if (isAnalyzing) Color.Gray else Color.White
-                    )
-                }
-            }
-
-            // ИСПРАВЛЕНИЕ: Компактная строка управления внизу
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(cardColor)
-                    .padding(vertical = 4.dp, horizontal = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(
-                    onClick = { if (!isAnalyzing) seekTo(0) },
-                    enabled = !isAnalyzing,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        Icons.Default.SkipPrevious,
-                        contentDescription = stringResource(R.string.to_start),
-                        tint = if (isAnalyzing) Color.Gray else Color.White
-                    )
-                }
-
-                IconButton(
-                    onClick = {
-                        if (!isAnalyzing) {
-                            isAutoPlaying = !isAutoPlaying
-                            variationActive = false
-                            selectedSquare = null
-                        }
-                    },
-                    enabled = !isAnalyzing,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .background(
-                            if (isAnalyzing) Color.Gray else MaterialTheme.colorScheme.primary,
-                            CircleShape
-                        )
-                ) {
-                    Icon(
-                        if (isAutoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isAutoPlaying) {
-                            stringResource(R.string.pause)
-                        } else {
-                            stringResource(R.string.play)
-                        },
-                        tint = Color.White
-                    )
-                }
-
-                IconButton(
-                    onClick = { if (!isAnalyzing) seekTo(report.positions.lastIndex) },
-                    enabled = !isAnalyzing,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        Icons.Default.SkipNext,
-                        contentDescription = stringResource(R.string.to_end),
-                        tint = if (isAnalyzing) Color.Gray else Color.White
-                    )
-                }
-            }
+            // Moves carousel with built-in navigation arrows
+            MovesCarousel(
+                report = report,
+                currentPlyIndex = currentPlyIndex,
+                onSeekTo = { if (!isAnalyzing) seekTo(it) },
+                onPrev = { if (!isAnalyzing) goPrev() },
+                onNext = { if (!isAnalyzing) goNext() },
+                modifier = Modifier.fillMaxWidth()
+            )
 
             if (variationActive) {
                 Card(
