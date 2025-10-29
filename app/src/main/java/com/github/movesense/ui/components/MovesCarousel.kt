@@ -71,7 +71,7 @@ fun MovesCarousel(
         modifier = modifier
             .fillMaxWidth()
             .background(darkBg)
-            .padding(vertical = 10.dp),
+            .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         IconButton(
