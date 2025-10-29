@@ -1,6 +1,7 @@
 // app/src/main/java/com/example/chessanalysis/ui/components/EvalBar.kt
 package com.github.movesense.ui.components
 
+import android.util.Log
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -11,6 +12,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import com.github.movesense.PositionEval
+import kotlin.math.abs
+
+private const val TAG = "EvalBar"
 
 @Composable
 fun EvalBar(
@@ -19,23 +23,51 @@ fun EvalBar(
     isWhiteBottom: Boolean,
     modifier: Modifier = Modifier
 ) {
+    // КРИТИЧНО: Стабильная оценка без миганий
     val evaluation = remember(positions, currentPlyIndex) {
-        positions.getOrNull(currentPlyIndex)?.lines?.firstOrNull()?.let { line ->
-            when {
-                line.cp != null -> line.cp / 100.0f
-                line.mate != null -> if (line.mate > 0) 30.0f else -30.0f
-                else -> 0.0f
+        val pos = positions.getOrNull(currentPlyIndex)
+        val line = pos?.lines?.firstOrNull()
+
+        val eval = when {
+            line?.cp != null -> {
+                val cpValue = line.cp / 100.0f
+                Log.d(TAG, "📊 Vertical eval bar: ply=$currentPlyIndex, cp=${line.cp}, eval=$cpValue")
+                cpValue
             }
-        } ?: 0.0f
+            line?.mate != null -> {
+                val mateValue = if (line.mate > 0) 30.0f else -30.0f
+                Log.d(TAG, "📊 Vertical eval bar: ply=$currentPlyIndex, mate=${line.mate}, eval=$mateValue")
+                mateValue
+            }
+            else -> {
+                Log.d(TAG, "⚠️ Vertical eval bar: ply=$currentPlyIndex, no evaluation available")
+                0.0f
+            }
+        }
+
+        // Возвращаем стабильное значение
+        eval
     }
 
     val cap = 8.0f
     val clamped = evaluation.coerceIn(-cap, cap)
     val t = (clamped + cap) / (2 * cap) // 0..1, где 0 = лучше у чёрных, 1 = лучше у белых
 
+    // ИСПРАВЛЕНИЕ: Более плавная анимация с защитой от резких скачков
     val animT = remember { Animatable(t.coerceIn(0.001f, 0.999f)) }
     LaunchedEffect(t) {
-        animT.animateTo(t.coerceIn(0.001f, 0.999f), tween(350, easing = FastOutSlowInEasing))
+        val targetT = t.coerceIn(0.001f, 0.999f)
+        // Проверяем, не слишком ли большой скачок
+        val currentValue = animT.value
+        val diff = abs(targetT - currentValue)
+
+        if (diff > 0.5f) {
+            // Большой скачок - быстрая анимация
+            animT.animateTo(targetT, tween(200, easing = FastOutSlowInEasing))
+        } else {
+            // Обычная плавная анимация
+            animT.animateTo(targetT, tween(350, easing = FastOutSlowInEasing))
+        }
     }
 
     Box(modifier = modifier) {
