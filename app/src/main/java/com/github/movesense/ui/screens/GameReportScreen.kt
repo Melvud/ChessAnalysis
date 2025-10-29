@@ -226,7 +226,7 @@ fun GameReportScreen(
             showBestMoveArrow = true,
             showThreatArrows = false,
             showEngineLines = true,
-            numberOfLines = 2
+            numberOfLines = 1
         ))
     }
 
@@ -238,18 +238,33 @@ fun GameReportScreen(
     val cardColor = Color(0xFF1E1C1A)
 
     fun normalizeLinesToWhitePOV(lines: List<EngineClient.LineDTO>, fen: String): List<EngineClient.LineDTO> {
-        val whiteToPlay = fen.split(" ").getOrNull(1) == "w"
+        val fenParts = fen.split(" ")
+        val whiteToPlay = fenParts.getOrNull(1) == "w"
+
+        Log.d(TAG, "🔄 Normalizing ${lines.size} lines, FEN side to move: ${fenParts.getOrNull(1)}, whiteToPlay=$whiteToPlay")
 
         return lines.map { line ->
-            val normalizedCp = if (whiteToPlay) line.cp else line.cp?.let { -it }
+            // КРИТИЧНО: Если белые ходят, оценка уже в правильной перспективе (положительная = хорошо для белых)
+            // Если черные ходят, нужно инвертировать оценку
+            val normalizedCp = if (whiteToPlay) {
+                line.cp
+            } else {
+                line.cp?.let { -it }
+            }
+
             val normalizedMate = line.mate?.let { m ->
                 when {
-                    m == 0 && whiteToPlay -> -1
-                    m == 0 && !whiteToPlay -> 1
+                    // Мат в 0 - особый случай, обрабатываем отдельно
+                    m == 0 -> if (whiteToPlay) -1 else 1
+                    // Если белые ходят, оценка мата уже правильная
                     whiteToPlay -> m
+                    // Если черные ходят, инвертируем оценку мата
                     else -> -m
                 }
             }
+
+            Log.d(TAG, "  Line: cp=${line.cp} -> ${normalizedCp}, mate=${line.mate} -> ${normalizedMate}")
+
             EngineClient.LineDTO(
                 pv = line.pv,
                 cp = normalizedCp,
@@ -353,14 +368,19 @@ fun GameReportScreen(
             if (reportLines.isNotEmpty()) {
                 // ВАЖНО: Сохраняем линии ПЕРЕД обновлением UI для стабильности
                 lastValidLines[currentFen] = reportLines
-                displayedLines = reportLines.take(viewSettings.numberOfLines)
-                Log.d(TAG, "📋 Instantly displayed ${reportLines.size} lines from report for ply $currentPlyIndex")
+                // КРИТИЧНО: Всегда показываем линии, даже если их больше чем нужно - берем первые N
+                val linesToShow = reportLines.take(viewSettings.numberOfLines.coerceAtLeast(1))
+                displayedLines = linesToShow
+                Log.d(TAG, "📋 Instantly displayed ${linesToShow.size} lines from report for ply $currentPlyIndex (total: ${reportLines.size})")
             } else {
-                // Если нет линий в отчете, используем последние валидные для этой позиции
+                // Если нет линий в отчете, сохраняем текущие линии (не очищаем!)
                 val cachedLines = lastValidLines[currentFen]
                 if (cachedLines != null && cachedLines.isNotEmpty()) {
-                    displayedLines = cachedLines.take(viewSettings.numberOfLines)
+                    displayedLines = cachedLines.take(viewSettings.numberOfLines.coerceAtLeast(1))
                     Log.d(TAG, "📋 Using cached lines for position")
+                } else {
+                    // Только если совсем нет кэша - оставляем текущие displayedLines как есть
+                    Log.d(TAG, "⚠️ No lines in report or cache, keeping current displayed lines")
                 }
             }
         }
@@ -1386,23 +1406,51 @@ private fun HorizontalEvalBar(
     isWhiteBottom: Boolean,
     modifier: Modifier = Modifier
 ) {
+    // КРИТИЧНО: Стабильная оценка без миганий
     val evaluation = remember(positions, currentPlyIndex) {
-        positions.getOrNull(currentPlyIndex)?.lines?.firstOrNull()?.let { line ->
-            when {
-                line.cp != null -> line.cp / 100.0f
-                line.mate != null -> if (line.mate > 0) 30.0f else -30.0f
-                else -> 0.0f
+        val pos = positions.getOrNull(currentPlyIndex)
+        val line = pos?.lines?.firstOrNull()
+
+        val eval = when {
+            line?.cp != null -> {
+                val cpValue = line.cp / 100.0f
+                Log.d(TAG, "📊 Eval bar: ply=$currentPlyIndex, cp=${line.cp}, eval=$cpValue")
+                cpValue
             }
-        } ?: 0.0f
+            line?.mate != null -> {
+                val mateValue = if (line.mate > 0) 30.0f else -30.0f
+                Log.d(TAG, "📊 Eval bar: ply=$currentPlyIndex, mate=${line.mate}, eval=$mateValue")
+                mateValue
+            }
+            else -> {
+                Log.d(TAG, "⚠️ Eval bar: ply=$currentPlyIndex, no evaluation available")
+                0.0f
+            }
+        }
+
+        // Возвращаем стабильное значение
+        eval
     }
 
     val cap = 8.0f
     val clamped = evaluation.coerceIn(-cap, cap)
     val t = (clamped + cap) / (2 * cap)
 
+    // ИСПРАВЛЕНИЕ: Более плавная анимация с защитой от резких скачков
     val animT = remember { Animatable(t.coerceIn(0.001f, 0.999f)) }
     LaunchedEffect(t) {
-        animT.animateTo(t.coerceIn(0.001f, 0.999f), tween(350, easing = FastOutSlowInEasing))
+        val targetT = t.coerceIn(0.001f, 0.999f)
+        // Проверяем, не слишком ли большой скачок
+        val currentValue = animT.value
+        val diff = kotlin.math.abs(targetT - currentValue)
+
+        if (diff > 0.5f) {
+            // Большой скачок - быстрая анимация
+            animT.animateTo(targetT, tween(200, easing = FastOutSlowInEasing))
+        } else {
+            // Обычная плавная анимация
+            animT.animateTo(targetT, tween(350, easing = FastOutSlowInEasing))
+        }
     }
 
     Box(modifier = modifier) {
