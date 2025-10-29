@@ -183,4 +183,19 @@
     <string name="load_all_games">Load All Games</string>
 
     <string name="victory_vs_titled">Victory vs. Titled Player</string>
+
+    <!-- Settings Dialog -->
+    <string name="show_eval_bar">Mostrar barra de evaluación</string>
+    <string name="eval_bar_position">Posición de la barra de evaluación</string>
+    <string name="left">Izquierda</string>
+    <string name="top">Arriba</string>
+    <string name="show_best_move_arrows">Mostrar flechas de mejores jugadas</string>
+    <string name="show_threats">Mostrar amenazas</string>
+    <string name="coming_soon">Próximamente...</string>
+    <string name="show_engine_lines">Mostrar líneas del motor</string>
+    <string name="number_of_lines">Número de líneas</string>
+
+    <!-- Depth Dialog -->
+    <string name="select_depth">Seleccionar profundidad</string>
+    <string name="depth_description">La profundidad del análisis aumenta automáticamente desde el valor seleccionado hasta 18. Mayor profundidad significa evaluación más precisa pero cálculo más lento.</string>
 </resources>

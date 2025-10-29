@@ -1,30 +1,25 @@
+// app/src/main/java/com/github/movesense/ui/screens/GameReportScreen.kt
+
 package com.github.movesense.ui.screens
 
 import android.annotation.SuppressLint
 import android.media.MediaPlayer
 import android.util.Log
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -39,17 +34,11 @@ import com.github.movesense.*
 import com.github.movesense.EngineClient.analyzeMoveRealtime
 import com.github.movesense.EngineClient.evaluateFenDetailedStreaming
 import com.github.movesense.ui.components.BoardCanvas
-import com.github.movesense.ui.components.EvalBar
 import com.github.movesense.ui.components.MovesCarousel
 import com.github.bhlangonijr.chesslib.*
 import com.github.bhlangonijr.chesslib.move.Move
 import com.github.bhlangonijr.chesslib.move.MoveGenerator
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
@@ -60,20 +49,37 @@ import com.github.movesense.R
 
 private const val TAG = "GameReportScreen"
 
+// Настройки пользователя
+private data class ViewSettings(
+    val showEvalBar: Boolean = true,
+    val evalBarPosition: EvalBarPosition = EvalBarPosition.LEFT,
+    val showBestMoveArrow: Boolean = true,
+    val showThreatArrows: Boolean = false,
+    val showEngineLines: Boolean = true,
+    val numberOfLines: Int = 2
+)
+
+private enum class EvalBarPosition { LEFT, TOP }
+
 private data class PositionLinesState(
     val lines: List<LineEval>,
     val isAnalyzing: Boolean,
     val depth: Int,
     val multiPv: Int,
-    val isFromReport: Boolean = false // NEW: флаг что линии из отчета (уже нормализованы)
+    val isFromReport: Boolean = false
 )
 
-private data class PvToken(
-    val iconAsset: String,
-    val toSquare: String,
-    val capture: Boolean,
-    val promoSuffix: String = ""
-)
+@Composable
+private fun PieceAssetIcon(name: String, size: Dp) {
+    val ctx = LocalContext.current
+    val painter = rememberAsyncImagePainter(
+        ImageRequest.Builder(ctx)
+            .data("file:///android_asset/fresca/$name")
+            .decoderFactory(SvgDecoder.Factory())
+            .build()
+    )
+    Image(painter = painter, contentDescription = null, modifier = Modifier.size(size))
+}
 
 private fun pieceAssetName(p: Piece): String {
     val pref = if (p.pieceSide == Side.WHITE) "w" else "b"
@@ -86,18 +92,6 @@ private fun pieceAssetName(p: Piece): String {
         else -> "P"
     }
     return "$pref$name.svg"
-}
-
-@Composable
-private fun PieceAssetIcon(name: String, size: Dp) {
-    val ctx = LocalContext.current
-    val painter = rememberAsyncImagePainter(
-        ImageRequest.Builder(ctx)
-            .data("file:///android_asset/fresca/$name")
-            .decoderFactory(SvgDecoder.Factory())
-            .build()
-    )
-    Image(painter = painter, contentDescription = null, modifier = Modifier.size(size))
 }
 
 private fun findLegalMove(board: Board, uci: String): Move? {
@@ -117,342 +111,6 @@ private fun findLegalMove(board: Board, uci: String): Move? {
                     else -> false
                 })
     } ?: legal.firstOrNull { it.from == from && it.to == to }
-}
-
-private fun buildIconTokens(fen: String, pv: List<String>): List<PvToken> {
-    val b = Board().apply { loadFromFen(fen) }
-    val out = mutableListOf<PvToken>()
-    for (uci in pv) {
-        val legal = findLegalMove(b, uci) ?: break
-        val mover = b.getPiece(legal.from)
-        val dst   = b.getPiece(legal.to)
-        val capture = dst != Piece.NONE ||
-                (mover.pieceType == PieceType.PAWN && legal.from.file != legal.to.file)
-        val promoSuffix = when (legal.promotion?.pieceType) {
-            PieceType.QUEEN  -> "=Q"
-            PieceType.ROOK   -> "=R"
-            PieceType.BISHOP -> "=B"
-            PieceType.KNIGHT -> "=N"
-            else -> ""
-        }
-        out += PvToken(
-            iconAsset = pieceAssetName(mover),
-            toSquare = legal.to.toString().lowercase(),
-            capture = capture,
-            promoSuffix = promoSuffix
-        )
-        b.doMove(legal)
-    }
-    return out
-}
-
-@Composable
-private fun EvalChip(line: LineEval, modifier: Modifier = Modifier) {
-    val txt = when {
-        line.mate != null -> if (line.mate!! > 0) "M${abs(line.mate!!)}" else "M-${abs(line.mate!!)}"
-        line.cp != null   -> String.format("%+.2f", line.cp!! / 100f)
-        else -> "—"
-    }
-
-    val backgroundColor = when {
-        line.mate != null -> if (line.mate!! > 0) Color.White else Color(0xFF1C1C1C)
-        line.cp != null -> if (line.cp!! > 0) Color.White else Color(0xFF1C1C1C)
-        else -> Color(0xFF2F2F2F)
-    }
-
-    val textColor = when {
-        line.mate != null -> if (line.mate!! > 0) Color.Black else Color.White
-        line.cp != null -> if (line.cp!! > 0) Color.Black else Color.White
-        else -> Color.White
-    }
-
-    Box(
-        modifier = modifier
-            .background(backgroundColor, RoundedCornerShape(10.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-    ) {
-        Text(txt, color = textColor, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-    }
-}
-
-@Composable
-private fun PvRow(
-    baseFen: String,
-    line: LineEval,
-    onClickMoveAtIndex: (idx: Int) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    if (line.pv.isEmpty()) return
-
-    val tokens = remember(baseFen, line.pv) { buildIconTokens(baseFen, line.pv) }
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        EvalChip(line)
-        Spacer(Modifier.width(10.dp))
-        Row(modifier = Modifier.horizontalScroll(rememberScrollState())) {
-            tokens.forEachIndexed { i, t ->
-                Row(
-                    modifier = Modifier
-                        .clickable { onClickMoveAtIndex(i) }
-                        .padding(end = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    PieceAssetIcon(t.iconAsset, 20.dp)
-                    Spacer(Modifier.width(4.dp))
-                    val suffix = buildString {
-                        append(t.toSquare)
-                        if (t.capture) append("x")
-                        append(t.promoSuffix)
-                    }
-                    Text(suffix, color = Color.White.copy(alpha = 0.9f), fontSize = 16.sp)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AnalysisSettingsPanel(
-    targetDepth: Int,
-    onDepthChange: (Int) -> Unit,
-    targetMultiPv: Int,
-    onMultiPvChange: (Int) -> Unit,
-    isBusy: Boolean,
-    modifier: Modifier = Modifier
-) {
-    val context = LocalContext.current
-    var isExpanded by remember { mutableStateOf(false) }
-    val rotationAngle by animateFloatAsState(
-        targetValue = if (isExpanded) 180f else 0f,
-        animationSpec = tween(300),
-        label = "chevron"
-    )
-
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1C1A)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { isExpanded = !isExpanded }
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Default.Settings, contentDescription = null, tint = Color.White)
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    stringResource(R.string.analysis_settings),
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f)
-                )
-                if (isBusy) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        color = MaterialTheme.colorScheme.primary,
-                        strokeWidth = 2.dp
-                    )
-                    Spacer(Modifier.width(8.dp))
-                } else {
-                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF4CAF50))
-                    Spacer(Modifier.width(8.dp))
-                }
-                Icon(
-                    Icons.Default.KeyboardArrowDown,
-                    contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.7f),
-                    modifier = Modifier.rotate(rotationAngle)
-                )
-            }
-
-            AnimatedVisibility(
-                visible = isExpanded,
-                enter = expandVertically(),
-                exit = shrinkVertically()
-            ) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
-                ) {
-                    HorizontalDivider(color = Color.White.copy(alpha = 0.1f), thickness = 1.dp)
-                    Spacer(Modifier.height(16.dp))
-
-                    Text(
-                        context.getString(R.string.depth, targetDepth),
-                        color = Color.White.copy(alpha = 0.9f),
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 14.sp
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Slider(
-                        value = targetDepth.toFloat(),
-                        onValueChange = { onDepthChange(it.toInt().coerceIn(6, 40)) },
-                        valueRange = 6f..40f,
-                        steps = (40 - 6) - 1,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Spacer(Modifier.height(16.dp))
-
-                    Text(
-                        context.getString(R.string.multipv, targetMultiPv),
-                        color = Color.White.copy(alpha = 0.9f),
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 14.sp
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Slider(
-                        value = targetMultiPv.toFloat(),
-                        onValueChange = { onMultiPvChange(it.toInt().coerceIn(1, 5)) },
-                        valueRange = 1f..5f,
-                        steps = (5 - 1) - 1,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        stringResource(R.string.settings_note),
-                        color = Color.White.copy(alpha = 0.6f),
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun EngineLinesPanel(
-    baseFen: String,
-    lines: List<LineEval>,
-    onClickMoveInLine: (lineIdx: Int, moveIdx: Int) -> Unit,
-    isBusy: Boolean,
-    modifier: Modifier = Modifier
-) {
-    val context = LocalContext.current
-    var isExpanded by remember { mutableStateOf(true) }
-    val rotationAngle by animateFloatAsState(
-        targetValue = if (isExpanded) 180f else 0f,
-        animationSpec = tween(300),
-        label = "chevron"
-    )
-
-    val validLines = remember(lines) {
-        lines.filter { it.pv.isNotEmpty() }
-    }
-
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1C1A)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { isExpanded = !isExpanded }
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Default.Search, contentDescription = null, tint = Color.White)
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    stringResource(R.string.engine_lines),
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f)
-                )
-                if (isBusy) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        color = MaterialTheme.colorScheme.primary,
-                        strokeWidth = 2.dp
-                    )
-                    Spacer(Modifier.width(8.dp))
-                } else if (validLines.isNotEmpty()) {
-                    Badge(
-                        containerColor = Color(0xFF4CAF50).copy(alpha = 0.2f),
-                        contentColor = Color(0xFF4CAF50)
-                    ) {
-                        Text("${validLines.size}", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                    Spacer(Modifier.width(8.dp))
-                }
-                Icon(
-                    Icons.Default.KeyboardArrowDown,
-                    contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.7f),
-                    modifier = Modifier.rotate(rotationAngle)
-                )
-            }
-
-            AnimatedVisibility(
-                visible = isExpanded,
-                enter = expandVertically(),
-                exit = shrinkVertically()
-            ) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
-                ) {
-                    HorizontalDivider(color = Color.White.copy(alpha = 0.1f), thickness = 1.dp)
-                    Spacer(Modifier.height(12.dp))
-
-                    when {
-                        validLines.isNotEmpty() -> {
-                            validLines.forEachIndexed { li, line ->
-                                PvRow(
-                                    baseFen = baseFen,
-                                    line = line,
-                                    onClickMoveAtIndex = { mi -> onClickMoveInLine(li, mi) }
-                                )
-                            }
-                        }
-                        isBusy -> {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 16.dp),
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    color = MaterialTheme.colorScheme.primary,
-                                    strokeWidth = 2.dp
-                                )
-                                Spacer(Modifier.width(12.dp))
-                                Text(
-                                    stringResource(R.string.calculating),
-                                    color = Color.White.copy(alpha = 0.8f)
-                                )
-                            }
-                        }
-                        else -> {
-                            Text(
-                                stringResource(R.string.no_lines),
-                                color = Color.White.copy(alpha = 0.6f),
-                                fontSize = 14.sp,
-                                modifier = Modifier.padding(vertical = 16.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 fun extractGameId(pgn: String?): String? {
@@ -479,10 +137,8 @@ fun parseClockData(pgn: String): ClockData {
 
         if (plyIndex % 2 == 0) {
             whiteTimes.add(cs)
-            Log.d(TAG, "White ply $plyIndex: ${formatClock(cs)}")
         } else {
             blackTimes.add(cs)
-            Log.d(TAG, "Black ply $plyIndex: ${formatClock(cs)}")
         }
         plyIndex++
     }
@@ -544,28 +200,41 @@ fun GameReportScreen(
 
     val linesStateMap = remember { mutableStateMapOf<String, PositionLinesState>() }
 
+    // ИСПРАВЛЕНИЕ: Стабильное отображение линий
     var displayedLines by remember { mutableStateOf<List<LineEval>>(emptyList()) }
     var isAnalysisRunning by remember { mutableStateOf(false) }
 
     val positionSettings = remember { mutableStateMapOf<Int, Pair<Int, Int>>() }
 
     val defaultDepth = remember {
-        report.positions.firstOrNull()?.lines?.firstOrNull()?.depth ?: 16
+        report.positions.firstOrNull()?.lines?.firstOrNull()?.depth ?: 12
     }
-    val defaultMultiPv = remember { 3 }
 
-    var targetDepth by remember { mutableStateOf(defaultDepth) }
-    var targetMultiPv by remember { mutableStateOf(defaultMultiPv) }
+    var currentDepth by remember { mutableStateOf(12) }
+    var targetDepth by remember { mutableStateOf(12) }
+    var targetMultiPv by remember { mutableStateOf(2) }
 
     var analysisJob by remember { mutableStateOf<Job?>(null) }
-
     var analysisVersion by remember { mutableStateOf(0) }
+
+    var viewSettings by remember {
+        mutableStateOf(ViewSettings(
+            showEvalBar = true,
+            evalBarPosition = EvalBarPosition.LEFT,
+            showBestMoveArrow = true,
+            showThreatArrows = false,
+            showEngineLines = true,
+            numberOfLines = 2
+        ))
+    }
+
+    var showSettingsDialog by remember { mutableStateOf(false) }
+    var showDepthDialog by remember { mutableStateOf(false) }
 
     val bgColor = Color(0xFF161512)
     val surfaceColor = Color(0xFF262522)
     val cardColor = Color(0xFF1E1C1A)
 
-    // Функция нормализации линий к белой перспективе (только для НОВЫХ линий от движка)
     fun normalizeLinesToWhitePOV(lines: List<EngineClient.LineDTO>, fen: String): List<EngineClient.LineDTO> {
         val whiteToPlay = fen.split(" ").getOrNull(1) == "w"
 
@@ -593,20 +262,19 @@ fun GameReportScreen(
         Log.d(TAG, "🔄 Initializing lines from report...")
         report.positions.forEachIndexed { index, posEval ->
             if (posEval.lines.isNotEmpty()) {
-                val key = "${posEval.fen}-${posEval.lines.firstOrNull()?.depth ?: defaultDepth}-${report.positions.firstOrNull()?.lines?.size ?: defaultMultiPv}"
+                val key = "${posEval.fen}-${posEval.lines.firstOrNull()?.depth ?: defaultDepth}-${posEval.lines.size}"
                 linesStateMap[key] = PositionLinesState(
                     lines = posEval.lines,
                     isAnalyzing = false,
                     depth = posEval.lines.firstOrNull()?.depth ?: defaultDepth,
                     multiPv = posEval.lines.size,
-                    isFromReport = true // ПОМЕЧАЕМ что линии из отчета
+                    isFromReport = true
                 )
-                Log.d(TAG, "✅ Initialized position $index with ${posEval.lines.size} lines (from report, already normalized)")
             }
         }
 
         val initialLines = report.positions.getOrNull(0)?.lines ?: emptyList()
-        displayedLines = initialLines
+        displayedLines = initialLines.take(viewSettings.numberOfLines)
         Log.d(TAG, "✅ Set initial displayed lines: ${initialLines.size}")
     }
 
@@ -615,38 +283,30 @@ fun GameReportScreen(
 
         if (report.clockData != null &&
             (report.clockData!!.white.isNotEmpty() || report.clockData!!.black.isNotEmpty())) {
-            Log.d(TAG, "✅ Using clocks from report: white=${report.clockData!!.white.size}, black=${report.clockData!!.black.size}")
+            Log.d(TAG, "✅ Using clocks from report")
             clockData = report.clockData
             return@LaunchedEffect
         }
 
         val pgn = report.header.pgn
         if (pgn.isNullOrBlank()) {
-            Log.w(TAG, "⚠ No PGN in report, can't extract clocks")
+            Log.w(TAG, "⚠ No PGN in report")
             return@LaunchedEffect
         }
 
-        Log.d(TAG, "🔍 Trying to parse clocks from PGN...")
         val parsed = parseClockData(pgn)
 
         if (parsed.white.isNotEmpty() || parsed.black.isNotEmpty()) {
-            Log.d(TAG, "✅ Parsed clocks from PGN: white=${parsed.white.size}, black=${parsed.black.size}")
             clockData = parsed
             return@LaunchedEffect
         }
 
         val gameId = extractGameId(pgn)
         if (gameId != null && report.header.site == Provider.LICHESS) {
-            Log.d(TAG, "🔍 Trying to fetch clocks from Lichess API for game: $gameId")
             val fetched = fetchLichessClocks(gameId)
-            if (fetched != null && (fetched.white.isNotEmpty() || fetched.black.isNotEmpty())) {
-                Log.d(TAG, "✅ Fetched clocks from Lichess API: white=${fetched.white.size}, black=${fetched.black.size}")
+            if (fetched != null) {
                 clockData = fetched
-            } else {
-                Log.w(TAG, "⚠ Failed to fetch clocks from Lichess API")
             }
-        } else {
-            Log.d(TAG, "ℹ Not a Lichess game or no gameId found")
         }
     }
 
@@ -658,8 +318,7 @@ fun GameReportScreen(
         }
     }
 
-    val baseFenForPanel by derivedStateOf { currentFen }
-
+    // ИСПРАВЛЕНИЕ: Немедленное отображение линий из отчета
     LaunchedEffect(currentPlyIndex, variationActive) {
         if (!variationActive) {
             val saved = positionSettings[currentPlyIndex]
@@ -667,89 +326,114 @@ fun GameReportScreen(
                 targetDepth = saved.first
                 targetMultiPv = saved.second
             } else {
-                targetDepth = defaultDepth
-                targetMultiPv = defaultMultiPv
+                targetDepth = 12
+                targetMultiPv = viewSettings.numberOfLines
             }
 
-            // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: НЕ нормализуем линии из отчета - они УЖЕ нормализованы
+            // КРИТИЧНО: Немедленно показываем линии из отчета
             val reportLines = report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList()
             if (reportLines.isNotEmpty()) {
-                displayedLines = reportLines
-                Log.d(TAG, "📋 Instantly displayed ${reportLines.size} lines from report for ply $currentPlyIndex (already normalized)")
+                displayedLines = reportLines.take(viewSettings.numberOfLines)
+                Log.d(TAG, "📋 Instantly displayed ${reportLines.size} lines from report for ply $currentPlyIndex")
             }
         }
     }
 
-    fun startAnalysis(fen: String, depth: Int, multiPv: Int) {
-        if (fen.isBlank()) {
-            Log.w(TAG, "⚠ Cannot analyze: empty FEN")
-            return
-        }
-
-        val stateKey = "$fen-$depth-$multiPv"
-
-        val cached = linesStateMap[stateKey]
-        if (cached != null && !cached.isAnalyzing) {
-            // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: если линии из отчета - НЕ нормализуем их снова!
-            if (cached.isFromReport) {
-                displayedLines = cached.lines
-                isAnalysisRunning = false
-                Log.d(TAG, "✅ Using cached analysis from report: ${cached.lines.size} lines (already normalized)")
-                return
-            } else {
-                // Линии от нового анализа - нормализуем
-                val normalizedLines = normalizeLinesToWhitePOV(cached.lines.map { lineEval ->
-                    EngineClient.LineDTO(
-                        pv = lineEval.pv,
-                        cp = lineEval.cp,
-                        mate = lineEval.mate,
-                        depth = lineEval.depth,
-                        multiPv = lineEval.multiPv ?: 1
-                    )
-                }, fen)
-
-                displayedLines = normalizedLines.map { dto ->
-                    LineEval(
-                        pv = dto.pv,
-                        cp = dto.cp,
-                        mate = dto.mate,
-                        depth = dto.depth,
-                        best = dto.pv.firstOrNull(),
-                        multiPv = dto.multiPv
-                    )
-                }
-
-                isAnalysisRunning = false
-                Log.d(TAG, "✅ Using cached analysis (new): ${cached.lines.size} lines (normalized)")
-                return
-            }
-        }
+    // ИСПРАВЛЕНИЕ: Улучшенная функция автоматического увеличения глубины
+    fun startAutoDepthAnalysis(fen: String, startDepth: Int, maxDepth: Int, multiPv: Int) {
+        if (fen.isBlank()) return
 
         analysisJob?.cancel()
-
         isAnalysisRunning = true
-        Log.d(TAG, "🔍 Starting analysis for: $stateKey")
+        currentDepth = startDepth
 
         analysisJob = scope.launch {
             try {
+                // Сохраняем текущие линии как базовые
                 val baseLines = displayedLines.toList()
-                var hasUpdates = false
 
-                val finalResult = evaluateFenDetailedStreaming(
-                    fen = fen,
-                    depth = depth,
-                    multiPv = multiPv,
-                    skillLevel = null
-                ) { linesDto ->
-                    val validLines = linesDto.filter { l ->
+                for (depth in startDepth..maxDepth) {
+                    if (!isActive) break
+
+                    currentDepth = depth
+                    val stateKey = "$fen-$depth-$multiPv"
+
+                    // Проверяем кэш
+                    val cached = linesStateMap[stateKey]
+                    if (cached != null && !cached.isAnalyzing) {
+                        val linesToShow = if (cached.isFromReport) {
+                            cached.lines
+                        } else {
+                            val normalizedLines = normalizeLinesToWhitePOV(cached.lines.map { lineEval ->
+                                EngineClient.LineDTO(
+                                    pv = lineEval.pv,
+                                    cp = lineEval.cp,
+                                    mate = lineEval.mate,
+                                    depth = lineEval.depth,
+                                    multiPv = lineEval.multiPv ?: 1
+                                )
+                            }, fen)
+
+                            normalizedLines.map { dto ->
+                                LineEval(
+                                    pv = dto.pv,
+                                    cp = dto.cp,
+                                    mate = dto.mate,
+                                    depth = dto.depth,
+                                    best = dto.pv.firstOrNull(),
+                                    multiPv = dto.multiPv
+                                )
+                            }
+                        }
+
+                        // ИСПРАВЛЕНИЕ: Всегда берем только нужное количество линий
+                        displayedLines = linesToShow.take(multiPv)
+                        continue
+                    }
+
+                    // ИСПРАВЛЕНИЕ: Сохраняем последние валидные линии перед каждым обновлением
+                    var lastValidLines = displayedLines.toList()
+
+                    val finalResult = evaluateFenDetailedStreaming(
+                        fen = fen,
+                        depth = depth,
+                        multiPv = multiPv,
+                        skillLevel = null
+                    ) { linesDto ->
+                        val validLines = linesDto.filter { l ->
+                            l.pv.isNotEmpty() && (l.cp != null || l.mate != null)
+                        }
+
+                        if (validLines.isNotEmpty() && validLines.size >= multiPv) {
+                            val normalizedLines = normalizeLinesToWhitePOV(validLines, fen)
+
+                            val newLines = normalizedLines.map { l ->
+                                LineEval(
+                                    pv = l.pv,
+                                    cp = l.cp,
+                                    mate = l.mate,
+                                    best = l.pv.firstOrNull(),
+                                    depth = l.depth,
+                                    multiPv = l.multiPv
+                                )
+                            }.take(multiPv)
+
+                            // ИСПРАВЛЕНИЕ: Обновляем только если получили полный набор линий
+                            if (newLines.size == multiPv) {
+                                lastValidLines = newLines
+                                displayedLines = newLines
+                            }
+                        }
+                    }
+
+                    val finalValidLines = finalResult.lines.filter { l ->
                         l.pv.isNotEmpty() && (l.cp != null || l.mate != null)
                     }
 
-                    if (validLines.isNotEmpty()) {
-                        // НОВЫЕ линии от движка - нормализуем
-                        val normalizedLines = normalizeLinesToWhitePOV(validLines, fen)
+                    if (finalValidLines.isNotEmpty() && finalValidLines.size >= multiPv) {
+                        val normalizedFinalLines = normalizeLinesToWhitePOV(finalValidLines, fen)
 
-                        val newLines = normalizedLines.map { l ->
+                        val finalLines = normalizedFinalLines.map { l ->
                             LineEval(
                                 pv = l.pv,
                                 cp = l.cp,
@@ -760,54 +444,24 @@ fun GameReportScreen(
                             )
                         }.take(multiPv)
 
-                        if (newLines != displayedLines) {
-                            displayedLines = newLines
-                            hasUpdates = true
-                            Log.d(TAG, "📊 Updated lines (normalized): ${newLines.size}, depth=${validLines.firstOrNull()?.depth}")
-                        }
+                        displayedLines = finalLines
+                        lastValidLines = finalLines
+
+                        linesStateMap[stateKey] = PositionLinesState(
+                            lines = finalLines,
+                            isAnalyzing = false,
+                            depth = depth,
+                            multiPv = multiPv,
+                            isFromReport = false
+                        )
+                    } else if (lastValidLines.isNotEmpty()) {
+                        // ИСПРАВЛЕНИЕ: Если финальный результат некорректен, восстанавливаем последние валидные
+                        displayedLines = lastValidLines
                     }
                 }
-
-                val finalValidLines = finalResult.lines.filter { l ->
-                    l.pv.isNotEmpty() && (l.cp != null || l.mate != null)
-                }
-
-                if (finalValidLines.isNotEmpty()) {
-                    // НОВЫЕ финальные линии - нормализуем
-                    val normalizedFinalLines = normalizeLinesToWhitePOV(finalValidLines, fen)
-
-                    val finalLines = normalizedFinalLines.map { l ->
-                        LineEval(
-                            pv = l.pv,
-                            cp = l.cp,
-                            mate = l.mate,
-                            best = l.pv.firstOrNull(),
-                            depth = l.depth,
-                            multiPv = l.multiPv
-                        )
-                    }.take(multiPv)
-
-                    displayedLines = finalLines
-
-                    linesStateMap[stateKey] = PositionLinesState(
-                        lines = finalLines,
-                        isAnalyzing = false,
-                        depth = depth,
-                        multiPv = multiPv,
-                        isFromReport = false // Это новый анализ, не из отчета
-                    )
-
-                    Log.d(TAG, "✅ Analysis complete: ${finalLines.size} lines cached (normalized)")
-                } else if (!hasUpdates) {
-                    displayedLines = baseLines
-                    Log.w(TAG, "⚠ No updates, restored base lines: ${baseLines.size}")
-                }
-
             } catch (e: Exception) {
                 if (e !is CancellationException) {
                     Log.e(TAG, "❌ Analysis error: ${e.message}", e)
-                } else {
-                    Log.d(TAG, "🚫 Analysis cancelled")
                 }
             } finally {
                 isAnalysisRunning = false
@@ -815,10 +469,10 @@ fun GameReportScreen(
         }
     }
 
-    LaunchedEffect(currentFen, targetDepth, targetMultiPv, variationActive, analysisVersion) {
+    LaunchedEffect(currentFen, targetMultiPv, variationActive, analysisVersion) {
         if (currentFen.isNotBlank()) {
             delay(100)
-            startAnalysis(currentFen, targetDepth, targetMultiPv)
+            startAutoDepthAnalysis(currentFen, 12, 18, targetMultiPv)
         }
     }
 
@@ -928,15 +582,13 @@ fun GameReportScreen(
                     beforeFen = beforeFen,
                     afterFen = afterFen,
                     uciMove = uciMove,
-                    depth = targetDepth,
+                    depth = currentDepth,
                     multiPv = targetMultiPv
                 )
                 variationEval = newEval
                 variationMoveClass = moveClass
                 variationBestUci = bestMove
                 playMoveSound(moveClass, captured)
-
-                Log.d(TAG, "✓ Move analyzed, variation active")
 
                 analysisVersion++
 
@@ -1000,15 +652,13 @@ fun GameReportScreen(
                     beforeFen = before,
                     afterFen = after,
                     uciMove = uci,
-                    depth = targetDepth,
+                    depth = currentDepth,
                     multiPv = targetMultiPv
                 )
                 variationEval = newEval
                 variationMoveClass = moveClass
                 variationBestUci = bestMove
                 playMoveSound(moveClass, captured)
-
-                Log.d(TAG, "✓ PV move analyzed")
 
                 analysisVersion++
 
@@ -1034,14 +684,10 @@ fun GameReportScreen(
         selectedSquare = null
         legalTargets = emptySet()
 
-        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: НЕ нормализуем линии из отчета
         val reportLines = report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList()
         if (reportLines.isNotEmpty()) {
-            displayedLines = reportLines
-            Log.d(TAG, "✓ Restored ${reportLines.size} lines from report (already normalized)")
+            displayedLines = reportLines.take(viewSettings.numberOfLines)
         }
-
-        Log.d(TAG, "✓ Exited variation")
     }
 
     fun seekTo(index: Int) {
@@ -1075,6 +721,30 @@ fun GameReportScreen(
                     }
                 },
                 actions = {
+                    // Кнопка глубины
+                    IconButton(onClick = { showDepthDialog = true }) {
+                        Badge(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = Color.White
+                        ) {
+                            Text(
+                                "$currentDepth",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    // Кнопка настроек
+                    IconButton(onClick = { showSettingsDialog = true }) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = stringResource(R.string.settings),
+                            tint = Color.White
+                        )
+                    }
+
+                    // Кнопка поворота
                     IconButton(
                         onClick = { if (!isAnalyzing) isWhiteBottom = !isWhiteBottom },
                         enabled = !isAnalyzing
@@ -1085,20 +755,19 @@ fun GameReportScreen(
                             tint = if (isAnalyzing) Color.Gray else Color.White
                         )
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
+                },colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = surfaceColor,
                     titleContentColor = Color.White
                 )
             )
         }
     ) { padding ->
+        // ИСПРАВЛЕНИЕ: Убираем скролл и фиксируем размер экрана
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .background(bgColor)
-                .verticalScroll(rememberScrollState())
         ) {
             val topIsWhite = !isWhiteBottom
             val topName = if (topIsWhite) {
@@ -1120,23 +789,8 @@ fun GameReportScreen(
                 (currentPlyIndex % 2 == 0 && topIsWhite) || (currentPlyIndex % 2 == 1 && !topIsWhite)
             } else false
 
-            PlayerCard(
-                name = topName,
-                rating = topElo,
-                clock = topClock,
-                isActive = topActive,
-                inverted = !topIsWhite,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(cardColor)
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
-            )
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-            ) {
+            // ИСПРАВЛЕНИЕ: Eval bar сверху (если выбрано) - над линиями движка
+            if (viewSettings.showEvalBar && viewSettings.evalBarPosition == EvalBarPosition.TOP) {
                 val evalPositions: List<PositionEval>
                 val evalIndex: Int
                 if (variationActive && variationEval != null) {
@@ -1151,74 +805,130 @@ fun GameReportScreen(
                     evalIndex = currentPlyIndex
                 }
 
-                EvalBar(
+                HorizontalEvalBar(
                     positions = evalPositions,
                     currentPlyIndex = evalIndex,
                     isWhiteBottom = isWhiteBottom,
                     modifier = Modifier
-                        .fillMaxHeight()
-                        .width(20.dp)
+                        .fillMaxWidth()
+                        .height(32.dp) // ИСПРАВЛЕНИЕ: Увеличили толщину
                 )
+            }
 
+            // ИСПРАВЛЕНИЕ: Линии движка над карточкой верхнего игрока
+            if (viewSettings.showEngineLines && displayedLines.isNotEmpty()) {
+                // ИСПРАВЛЕНИЕ: Фиксированная высота для стабильности
                 Box(
                     modifier = Modifier
-                        .fillMaxHeight()
-                        .weight(1f)
-                ) {
-                    val currentPosition = report.positions.getOrNull(currentPlyIndex)
-
-                    val lastMovePairActual = if (currentPlyIndex > 0 && !variationActive) {
-                        val uci = report.moves[currentPlyIndex - 1].uci
-                        if (uci.length >= 4) uci.substring(0, 2) to uci.substring(2, 4) else null
-                    } else null
-
-                    val lastMoveClassActual = if (!variationActive) {
-                        report.moves.getOrNull(currentPlyIndex - 1)?.classification
-                    } else null
-
-                    val bestUciActual: String? = if (!variationActive) {
-                        report.positions
-                            .getOrNull(max(0, currentPlyIndex - 1))
-                            ?.lines?.firstOrNull()
-                            ?.pv?.firstOrNull()
-                    } else null
-
-                    val boardFen = if (variationActive) variationFen else currentPosition?.fen
-                    val lastMovePair = if (variationActive) variationLastMove else lastMovePairActual
-                    val moveClass = if (variationActive) variationMoveClass else lastMoveClassActual
-                    val bestUci = if (variationActive) variationBestUci else bestUciActual
-
-                    val showBestArrow = when (moveClass) {
-                        MoveClass.INACCURACY, MoveClass.MISTAKE, MoveClass.BLUNDER -> true
-                        else -> false
-                    }
-
-                    boardFen?.let { fen ->
-                        BoardCanvas(
-                            fen = fen,
-                            lastMove = lastMovePair,
-                            moveClass = moveClass,
-                            bestMoveUci = bestUci,
-                            showBestArrow = showBestArrow,
-                            isWhiteBottom = isWhiteBottom,
-                            selectedSquare = selectedSquare,
-                            legalMoves = legalTargets,
-                            onSquareClick = { handleSquareClick(it) },
-                            modifier = Modifier.fillMaxSize()
+                        .fillMaxWidth()
+                        .height(
+                            when (viewSettings.numberOfLines) {
+                                1 -> 40.dp
+                                2 -> 72.dp
+                                3 -> 104.dp
+                                else -> 72.dp
+                            }
                         )
+                        .background(cardColor)
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    CompactEngineLines(
+                        baseFen = currentFen,
+                        lines = displayedLines,
+                        onClickMoveInLine = ::onClickPvMove,
+                        isAnalyzing = isAnalysisRunning,
+                        currentDepth = currentDepth
+                    )
+                }
+            }
+
+            PlayerCard(
+                name = topName,
+                rating = topElo,
+                clock = topClock,
+                isActive = topActive,
+                inverted = !topIsWhite,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(cardColor)
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            )
+
+            // ИСПРАВЛЕНИЕ: Доска с правильным отображением
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f) // Занимает оставшееся пространство
+            ) {
+                when (viewSettings.evalBarPosition) {
+                    EvalBarPosition.LEFT -> {
+                        Row(modifier = Modifier.fillMaxSize()) {
+                            if (viewSettings.showEvalBar) {
+                                val evalPositions: List<PositionEval>
+                                val evalIndex: Int
+                                if (variationActive && variationEval != null) {
+                                    val evalCp = (variationEval!! * 100).toInt()
+                                    val fakeLine = LineEval(pv = emptyList(), cp = evalCp, mate = null, best = null)
+                                    val baseFen = variationFen ?: report.positions.getOrNull(currentPlyIndex)?.fen.orEmpty()
+                                    val fakePos = PositionEval(fen = baseFen, idx = 0, lines = listOf(fakeLine))
+                                    evalPositions = listOf(fakePos)
+                                    evalIndex = 0
+                                } else {
+                                    evalPositions = report.positions
+                                    evalIndex = currentPlyIndex
+                                }
+
+                                com.github.movesense.ui.components.EvalBar(
+                                    positions = evalPositions,
+                                    currentPlyIndex = evalIndex,
+                                    isWhiteBottom = isWhiteBottom,
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .width(20.dp)
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .weight(1f)
+                            ) {
+                                BoardWithOverlay(
+                                    currentFen = currentFen,
+                                    report = report,
+                                    currentPlyIndex = currentPlyIndex,
+                                    variationActive = variationActive,
+                                    variationLastMove = variationLastMove,
+                                    variationMoveClass = variationMoveClass,
+                                    variationBestUci = variationBestUci,
+                                    isWhiteBottom = isWhiteBottom,
+                                    selectedSquare = selectedSquare,
+                                    legalTargets = legalTargets,
+                                    isAnalyzing = isAnalyzing,
+                                    viewSettings = viewSettings,
+                                    onSquareClick = ::handleSquareClick
+                                )
+                            }
+                        }
                     }
 
-                    if (isAnalyzing) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.3f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(48.dp),
-                                color = MaterialTheme.colorScheme.primary,
-                                strokeWidth = 3.dp
+                    EvalBarPosition.TOP -> {
+                        // ИСПРАВЛЕНИЕ: Без повторного eval bar (он уже сверху)
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            BoardWithOverlay(
+                                currentFen = currentFen,
+                                report = report,
+                                currentPlyIndex = currentPlyIndex,
+                                variationActive = variationActive,
+                                variationLastMove = variationLastMove,
+                                variationMoveClass = variationMoveClass,
+                                variationBestUci = variationBestUci,
+                                isWhiteBottom = isWhiteBottom,
+                                selectedSquare = selectedSquare,
+                                legalTargets = legalTargets,
+                                isAnalyzing = isAnalyzing,
+                                viewSettings = viewSettings,
+                                onSquareClick = ::handleSquareClick
                             )
                         }
                     }
@@ -1257,30 +967,13 @@ fun GameReportScreen(
                     .padding(horizontal = 12.dp, vertical = 4.dp)
             )
 
-            MovesCarousel(
-                report = report,
-                currentPlyIndex = currentPlyIndex,
-                onSeekTo = { if (!isAnalyzing) seekTo(it) },
-                onPrev = { if (!isAnalyzing) goPrev() },
-                onNext = { if (!isAnalyzing) goNext() },
-                modifier = Modifier.fillMaxWidth()
-            )
-
+            // ИСПРАВЛЕНИЕ: Упрощенные кнопки навигации - только стрелки по краям
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(cardColor)
-                    .padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
+                    .background(Color(0xFF1E1C1A)),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { if (!isAnalyzing) seekTo(0) }, enabled = !isAnalyzing) {
-                    Icon(
-                        Icons.Default.SkipPrevious,
-                        contentDescription = stringResource(R.string.to_start),
-                        tint = if (isAnalyzing) Color.Gray else Color.White
-                    )
-                }
                 IconButton(onClick = { goPrev() }, enabled = !isAnalyzing) {
                     Icon(
                         Icons.Default.ArrowBack,
@@ -1288,6 +981,46 @@ fun GameReportScreen(
                         tint = if (isAnalyzing) Color.Gray else Color.White
                     )
                 }
+
+                MovesCarousel(
+                    report = report,
+                    currentPlyIndex = currentPlyIndex,
+                    onSeekTo = { if (!isAnalyzing) seekTo(it) },
+                    onPrev = { if (!isAnalyzing) goPrev() },
+                    onNext = { if (!isAnalyzing) goNext() },
+                    modifier = Modifier.weight(1f)
+                )
+
+                IconButton(onClick = { goNext() }, enabled = !isAnalyzing) {
+                    Icon(
+                        Icons.Default.ArrowForward,
+                        contentDescription = stringResource(R.string.next),
+                        tint = if (isAnalyzing) Color.Gray else Color.White
+                    )
+                }
+            }
+
+            // ИСПРАВЛЕНИЕ: Компактная строка управления внизу
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(cardColor)
+                    .padding(vertical = 4.dp, horizontal = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = { if (!isAnalyzing) seekTo(0) },
+                    enabled = !isAnalyzing,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        Icons.Default.SkipPrevious,
+                        contentDescription = stringResource(R.string.to_start),
+                        tint = if (isAnalyzing) Color.Gray else Color.White
+                    )
+                }
+
                 IconButton(
                     onClick = {
                         if (!isAnalyzing) {
@@ -1298,7 +1031,7 @@ fun GameReportScreen(
                     },
                     enabled = !isAnalyzing,
                     modifier = Modifier
-                        .size(56.dp)
+                        .size(48.dp)
                         .background(
                             if (isAnalyzing) Color.Gray else MaterialTheme.colorScheme.primary,
                             CircleShape
@@ -1314,16 +1047,11 @@ fun GameReportScreen(
                         tint = Color.White
                     )
                 }
-                IconButton(onClick = { goNext() }, enabled = !isAnalyzing) {
-                    Icon(
-                        Icons.Default.ArrowForward,
-                        contentDescription = stringResource(R.string.next),
-                        tint = if (isAnalyzing) Color.Gray else Color.White
-                    )
-                }
+
                 IconButton(
                     onClick = { if (!isAnalyzing) seekTo(report.positions.lastIndex) },
-                    enabled = !isAnalyzing
+                    enabled = !isAnalyzing,
+                    modifier = Modifier.size(40.dp)
                 ) {
                     Icon(
                         Icons.Default.SkipNext,
@@ -1337,14 +1065,14 @@ fun GameReportScreen(
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
                     colors = CardDefaults.cardColors(containerColor = Color(0xFFFF9800).copy(alpha = 0.2f)),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(8.dp)
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -1353,62 +1081,22 @@ fun GameReportScreen(
                                 text = stringResource(R.string.variation_mode),
                                 color = Color(0xFFFF9800),
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
-                            )
-                            Text(
-                                text = stringResource(R.string.variation_hint),
-                                color = Color.White.copy(alpha = 0.7f),
                                 fontSize = 12.sp
                             )
                         }
-                        Spacer(Modifier.width(12.dp))
                         OutlinedButton(
                             onClick = { if (!isAnalyzing) exitVariation() },
                             enabled = !isAnalyzing,
                             colors = ButtonDefaults.outlinedButtonColors(
                                 contentColor = Color(0xFFFF9800)
-                            )
+                            ),
+                            modifier = Modifier.height(32.dp)
                         ) {
-                            Text(stringResource(R.string.exit_variation))
+                            Text(stringResource(R.string.exit_variation), fontSize = 12.sp)
                         }
                     }
                 }
             }
-
-            EngineLinesPanel(
-                baseFen = baseFenForPanel,
-                lines = displayedLines,
-                onClickMoveInLine = ::onClickPvMove,
-                isBusy = isAnalysisRunning,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-            )
-
-            AnalysisSettingsPanel(
-                targetDepth = targetDepth,
-                onDepthChange = {
-                    targetDepth = it
-                    if (!variationActive) {
-                        positionSettings[currentPlyIndex] = Pair(targetDepth, targetMultiPv)
-                    }
-                    analysisVersion++
-                },
-                targetMultiPv = targetMultiPv,
-                onMultiPvChange = {
-                    targetMultiPv = it
-                    if (!variationActive) {
-                        positionSettings[currentPlyIndex] = Pair(targetDepth, targetMultiPv)
-                    }
-                    analysisVersion++
-                },
-                isBusy = isAnalysisRunning,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-            )
-
-            Spacer(Modifier.height(64.dp))
 
             LaunchedEffect(isAutoPlaying, currentPlyIndex, isAnalyzing) {
                 if (isAutoPlaying && !isAnalyzing) {
@@ -1418,6 +1106,534 @@ fun GameReportScreen(
             }
         }
     }
+
+    // Диалог настроек
+    if (showSettingsDialog) {
+        SettingsDialog(
+            viewSettings = viewSettings,
+            onDismiss = { showSettingsDialog = false },
+            onSettingsChange = { newSettings ->
+                viewSettings = newSettings
+                targetMultiPv = newSettings.numberOfLines
+
+                // ИСПРАВЛЕНИЕ: Обновляем отображаемые линии при изменении количества
+                val reportLines = report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList()
+                if (reportLines.isNotEmpty()) {
+                    displayedLines = reportLines.take(newSettings.numberOfLines)
+                }
+
+                analysisVersion++
+            }
+        )
+    }
+
+    // Диалог глубины
+    if (showDepthDialog) {
+        DepthDialog(
+            currentDepth = targetDepth,
+            onDismiss = { showDepthDialog = false },
+            onDepthSelected = { depth ->
+                targetDepth = depth
+                if (!variationActive) {
+                    positionSettings[currentPlyIndex] = Pair(depth, targetMultiPv)
+                }
+                analysisVersion++
+                showDepthDialog = false
+            }
+        )
+    }
+}
+
+// ИСПРАВЛЕНИЕ: Упрощенный Composable линий движка без заголовка
+@Composable
+private fun CompactEngineLines(
+    baseFen: String,
+    lines: List<LineEval>,
+    onClickMoveInLine: (lineIdx: Int, moveIdx: Int) -> Unit,
+    isAnalyzing: Boolean,
+    currentDepth: Int,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier) {
+        lines.forEachIndexed { lineIdx, line ->
+            CompactPvRow(
+                baseFen = baseFen,
+                line = line,
+                lineNumber = lineIdx + 1,
+                onClickMoveAtIndex = { moveIdx -> onClickMoveInLine(lineIdx, moveIdx) },
+                modifier = Modifier.fillMaxWidth()
+            )
+            if (lineIdx < lines.lastIndex) {
+                Spacer(Modifier.height(4.dp))
+            }
+        }
+    }
+}
+
+// Composable: Компактный PV Row
+@Composable
+private fun CompactPvRow(
+    baseFen: String,
+    line: LineEval,
+    lineNumber: Int,
+    onClickMoveAtIndex: (idx: Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (line.pv.isEmpty()) return
+
+    val tokens = remember(baseFen, line.pv) { buildIconTokens(baseFen, line.pv) }
+
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Оценка
+        CompactEvalChip(line = line)
+
+        Spacer(Modifier.width(6.dp))
+
+        // Ходы с иконками
+        LazyRow(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            itemsIndexed(tokens.take(6)) { idx, token ->
+                Row(
+                    modifier = Modifier
+                        .clickable { onClickMoveAtIndex(idx) }
+                        .background(
+                            Color.White.copy(alpha = 0.05f),
+                            RoundedCornerShape(4.dp)
+                        )
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Номер хода
+                    val moveNumber = if (idx % 2 == 0) {
+                        "${idx / 2 + 1}."
+                    } else {
+                        "${idx / 2 + 1}..."
+                    }
+
+                    Text(
+                        moveNumber,
+                        color = Color.White.copy(alpha = 0.4f),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+
+                    Spacer(Modifier.width(3.dp))
+
+                    PieceAssetIcon(token.iconAsset, 14.dp)
+                    Spacer(Modifier.width(2.dp))
+
+                    val suffix = buildString {
+                        append(token.toSquare)
+                        if (token.capture) append("x")
+                        append(token.promoSuffix)
+                    }
+                    Text(
+                        suffix,
+                        color = Color.White.copy(alpha = 0.85f),
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+// Composable: Компактный Eval Chip
+@Composable
+private fun CompactEvalChip(line: LineEval, modifier: Modifier = Modifier) {
+    val txt = when {
+        line.mate != null -> if (line.mate!! > 0) "M${abs(line.mate!!)}" else "M-${abs(line.mate!!)}"
+        line.cp != null   -> String.format("%+.1f", line.cp!! / 100f)
+        else -> "—"
+    }
+
+    val backgroundColor = when {
+        line.mate != null -> if (line.mate!! > 0) Color.White else Color(0xFF1C1C1C)
+        line.cp != null -> if (line.cp!! > 0) Color.White else Color(0xFF1C1C1C)
+        else -> Color(0xFF2F2F2F)
+    }
+
+    val textColor = when {
+        line.mate != null -> if (line.mate!! > 0) Color.Black else Color.White
+        line.cp != null -> if (line.cp!! > 0) Color.Black else Color.White
+        else -> Color.White
+    }
+
+    Box(
+        modifier = modifier
+            .background(backgroundColor, RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Text(
+            txt,
+            color = textColor,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+// Composable: Board с оверлеями
+@Composable
+private fun BoardWithOverlay(
+    currentFen: String,
+    report: FullReport,
+    currentPlyIndex: Int,
+    variationActive: Boolean,
+    variationLastMove: Pair<String, String>?,
+    variationMoveClass: MoveClass?,
+    variationBestUci: String?,
+    isWhiteBottom: Boolean,
+    selectedSquare: String?,
+    legalTargets: Set<String>,
+    isAnalyzing: Boolean,
+    viewSettings: ViewSettings,
+    onSquareClick: (String) -> Unit
+) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        val currentPosition = report.positions.getOrNull(currentPlyIndex)
+
+        val lastMovePairActual = if (currentPlyIndex > 0 && !variationActive) {
+            val uci = report.moves[currentPlyIndex - 1].uci
+            if (uci.length >= 4) uci.substring(0, 2) to uci.substring(2, 4) else null
+        } else null
+
+        val lastMoveClassActual = if (!variationActive) {
+            report.moves.getOrNull(currentPlyIndex - 1)?.classification
+        } else null
+
+        val bestUciActual: String? = if (!variationActive) {
+            report.positions
+                .getOrNull(max(0, currentPlyIndex - 1))
+                ?.lines?.firstOrNull()
+                ?.pv?.firstOrNull()
+        } else null
+
+        val lastMovePair = if (variationActive) variationLastMove else lastMovePairActual
+        val moveClass = if (variationActive) variationMoveClass else lastMoveClassActual
+        val bestUci = if (variationActive) variationBestUci else bestUciActual
+
+        val showBestArrow = viewSettings.showBestMoveArrow && when (moveClass) {
+            MoveClass.INACCURACY, MoveClass.MISTAKE, MoveClass.BLUNDER -> true
+            else -> false
+        }
+
+        BoardCanvas(
+            fen = currentFen,
+            lastMove = lastMovePair,
+            moveClass = moveClass,
+            bestMoveUci = if (showBestArrow) bestUci else null,
+            showBestArrow = showBestArrow,
+            isWhiteBottom = isWhiteBottom,
+            selectedSquare = selectedSquare,
+            legalMoves = legalTargets,
+            onSquareClick = { onSquareClick(it) },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        if (isAnalyzing) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.3f)),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(48.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    strokeWidth = 3.dp
+                )
+            }
+        }
+    }
+}
+
+// ИСПРАВЛЕНИЕ: Улучшенный горизонтальный Eval Bar
+@Composable
+private fun HorizontalEvalBar(
+    positions: List<PositionEval>,
+    currentPlyIndex: Int,
+    isWhiteBottom: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val evaluation = remember(positions, currentPlyIndex) {
+        positions.getOrNull(currentPlyIndex)?.lines?.firstOrNull()?.let { line ->
+            when {
+                line.cp != null -> line.cp / 100.0f
+                line.mate != null -> if (line.mate > 0) 30.0f else -30.0f
+                else -> 0.0f
+            }
+        } ?: 0.0f
+    }
+
+    val cap = 8.0f
+    val clamped = evaluation.coerceIn(-cap, cap)
+    val t = (clamped + cap) / (2 * cap)
+
+    val animT = remember { Animatable(t.coerceIn(0.001f, 0.999f)) }
+    LaunchedEffect(t) {
+        animT.animateTo(t.coerceIn(0.001f, 0.999f), tween(350, easing = FastOutSlowInEasing))
+    }
+
+    Box(modifier = modifier) {
+        Row(Modifier.fillMaxSize()) {
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .weight(1f - animT.value)
+                    .background(Color.Black)
+            )
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .weight(animT.value)
+                    .background(Color.White)
+            )
+        }
+    }
+}
+
+// Диалог настроек
+@Composable
+private fun SettingsDialog(
+    viewSettings: ViewSettings,
+    onDismiss: () -> Unit,
+    onSettingsChange: (ViewSettings) -> Unit
+) {
+    var localSettings by remember { mutableStateOf(viewSettings) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings)) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                // Показывать eval bar
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(stringResource(R.string.show_eval_bar))
+                    Switch(
+                        checked = localSettings.showEvalBar,
+                        onCheckedChange = { localSettings = localSettings.copy(showEvalBar = it) }
+                    )
+                }
+
+                // Позиция eval bar
+                if (localSettings.showEvalBar) {
+                    Text(
+                        stringResource(R.string.eval_bar_position),
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = localSettings.evalBarPosition == EvalBarPosition.LEFT,
+                            onClick = { localSettings = localSettings.copy(evalBarPosition = EvalBarPosition.LEFT) },
+                            label = { Text(stringResource(R.string.left)) },
+                            modifier = Modifier.weight(1f)
+                        )
+                        FilterChip(
+                            selected = localSettings.evalBarPosition == EvalBarPosition.TOP,
+                            onClick = { localSettings = localSettings.copy(evalBarPosition = EvalBarPosition.TOP) },
+                            label = { Text(stringResource(R.string.top)) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+                // Показывать стрелки лучших ходов
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(stringResource(R.string.show_best_move_arrows))
+                    Switch(
+                        checked = localSettings.showBestMoveArrow,
+                        onCheckedChange = { localSettings = localSettings.copy(showBestMoveArrow = it) }
+                    )
+                }
+
+                // Показывать угрозы (пока не реализовано)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(stringResource(R.string.show_threats))
+                        Text(
+                            stringResource(R.string.coming_soon),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                    }
+                    Switch(
+                        checked = localSettings.showThreatArrows,
+                        onCheckedChange = { /* localSettings = localSettings.copy(showThreatArrows = it) */ },
+                        enabled = false
+                    )
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+                // Показывать линии движка
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(stringResource(R.string.show_engine_lines))
+                    Switch(
+                        checked = localSettings.showEngineLines,
+                        onCheckedChange = { localSettings = localSettings.copy(showEngineLines = it) }
+                    )
+                }
+
+                // Количество линий
+                if (localSettings.showEngineLines) {
+                    Text(
+                        stringResource(R.string.number_of_lines),
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        for (n in 1..3) {
+                            FilterChip(
+                                selected = localSettings.numberOfLines == n,
+                                onClick = { localSettings = localSettings.copy(numberOfLines = n) },
+                                label = { Text("$n") },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onSettingsChange(localSettings)
+                onDismiss()
+            }) {
+                Text(stringResource(R.string.save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
+}
+
+// Диалог выбора глубины
+@Composable
+private fun DepthDialog(
+    currentDepth: Int,
+    onDismiss: () -> Unit,
+    onDepthSelected: (Int) -> Unit
+) {
+    val depths = listOf(8, 10, 12, 14, 16, 18, 20, 22, 24)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.select_depth)) },
+        text = {
+            Column {
+                Text(
+                    stringResource(R.string.depth_description),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                depths.chunked(3).forEach { row ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        row.forEach { depth ->
+                            FilterChip(
+                                selected = currentDepth == depth,
+                                onClick = { onDepthSelected(depth) },
+                                label = { Text("$depth") },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        // Заполнение пустых ячеек
+                        repeat(3 - row.size) {
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.close))
+            }
+        }
+    )
+}
+
+// Вспомогательные функции
+private data class PvToken(
+    val iconAsset: String,
+    val toSquare: String,
+    val capture: Boolean,
+    val promoSuffix: String = ""
+)
+
+private fun buildIconTokens(fen: String, pv: List<String>): List<PvToken> {
+    val b = Board().apply { loadFromFen(fen) }
+    val out = mutableListOf<PvToken>()
+    for (uci in pv) {
+        val legal = findLegalMove(b, uci) ?: break
+        val mover = b.getPiece(legal.from)
+        val dst   = b.getPiece(legal.to)
+        val capture = dst != Piece.NONE ||
+                (mover.pieceType == PieceType.PAWN && legal.from.file != legal.to.file)
+        val promoSuffix = when (legal.promotion?.pieceType) {
+            PieceType.QUEEN  -> "=Q"
+            PieceType.ROOK   -> "=R"
+            PieceType.BISHOP -> "=B"
+            PieceType.KNIGHT -> "=N"
+            else -> ""
+        }
+        out += PvToken(
+            iconAsset = pieceAssetName(mover),
+            toSquare = legal.to.toString().lowercase(),
+            capture = capture,
+            promoSuffix = promoSuffix
+        )
+        b.doMove(legal)
+    }
+    return out
 }
 
 @Composable

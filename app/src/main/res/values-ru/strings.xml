@@ -182,4 +182,20 @@
     <string name="load_all_games">Загрузить все</string>
 
     <string name="victory_vs_titled">Победа над титулованным игроком</string>
+
+    <!-- Settings Dialog -->
+    <string name="show_eval_bar">Показывать шкалу оценки</string>
+    <string name="eval_bar_position">Позиция шкалы оценки</string>
+    <string name="left">Слева</string>
+    <string name="top">Сверху</string>
+    <string name="show_best_move_arrows">Показывать стрелки лучших ходов</string>
+    <string name="show_threats">Показывать угрозы</string>
+    <string name="coming_soon">Скоро...</string>
+    <string name="show_engine_lines">Показывать линии движка</string>
+    <string name="number_of_lines">Количество линий</string>
+
+    <!-- Depth Dialog -->
+    <string name="select_depth">Выберите глубину</string>
+    <string name="depth_description">Глубина анализа автоматически увеличивается от выбранного значения до 18. Чем выше глубина, тем точнее оценка, но медленнее расчет.</string>
+
 </resources>

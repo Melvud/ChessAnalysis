@@ -183,4 +183,20 @@
     <string name="load_all_games">Load All Games</string>
 
     <string name="victory_vs_titled">Victory vs. Titled Player</string>
+
+    <!-- Settings Dialog -->
+    <string name="show_eval_bar">Show evaluation bar</string>
+    <string name="eval_bar_position">Evaluation bar position</string>
+    <string name="left">Left</string>
+    <string name="top">Top</string>
+    <string name="show_best_move_arrows">Show best move arrows</string>
+    <string name="show_threats">Show threats</string>
+    <string name="coming_soon">Coming soon...</string>
+    <string name="show_engine_lines">Show engine lines</string>
+    <string name="number_of_lines">Number of lines</string>
+
+    <!-- Depth Dialog -->
+    <string name="select_depth">Select depth</string>
+    <string name="depth_description">Analysis depth automatically increases from the selected value to 18. Higher depth means more accurate evaluation but slower calculation.</string>
+
 </resources>
