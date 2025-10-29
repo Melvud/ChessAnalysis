@@ -71,14 +71,18 @@ fun MovesCarousel(
         modifier = modifier
             .fillMaxWidth()
             .background(darkBg)
-            .padding(vertical = 8.dp),
+            .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        IconButton(onClick = onPrev) {
+        IconButton(
+            onClick = onPrev,
+            modifier = Modifier.size(48.dp)
+        ) {
             Icon(
                 Icons.Filled.KeyboardArrowLeft,
                 contentDescription = "Назад",
-                tint = Color.White
+                tint = Color.White,
+                modifier = Modifier.size(32.dp)
             )
         }
 
@@ -119,19 +123,19 @@ fun MovesCarousel(
 
                 Surface(
                     color = bgColor,
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.clickable { onSeekTo(tileIndex) }
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         // Номер хода
                         Text(
                             text = moveNumber,
                             color = Color.White.copy(alpha = 0.6f),
-                            fontSize = 12.sp,
+                            fontSize = 14.sp,
                             fontWeight = FontWeight.Medium
                         )
 
@@ -139,7 +143,7 @@ fun MovesCarousel(
                         Text(
                             text = move.san,
                             color = Color.White,
-                            fontSize = 14.sp,
+                            fontSize = 16.sp,
                             fontWeight = FontWeight.Bold
                         )
 
@@ -148,18 +152,22 @@ fun MovesCarousel(
                             painter = painterResource(badge.iconRes),
                             contentDescription = null,
                             tint = Color.Unspecified,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
             }
         }
 
-        IconButton(onClick = onNext) {
+        IconButton(
+            onClick = onNext,
+            modifier = Modifier.size(48.dp)
+        ) {
             Icon(
                 Icons.Filled.KeyboardArrowRight,
                 contentDescription = "Вперёд",
-                tint = Color.White
+                tint = Color.White,
+                modifier = Modifier.size(32.dp)
             )
         }
     }
