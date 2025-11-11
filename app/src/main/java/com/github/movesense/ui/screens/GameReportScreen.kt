@@ -259,35 +259,33 @@ fun GameReportScreen(
         Log.d(TAG, "✅ Initialized ${updatedLines.size} positions from report")
     }
 
-    // ИСПРАВЛЕНИЕ: Синхронное обновление линий через derivedStateOf
-    // Линии ВСЕГДА сортируются так, чтобы лучшая была первой
-    val displayedLines by remember {
-        derivedStateOf {
-            if (variationActive) {
-                emptyList()
-            } else {
-                // КРИТИЧНО: Всегда берем из updatedLines (уже заполненного из report)
-                val lines = updatedLines[currentPlyIndex] ?: emptyList()
+    // ИСПРАВЛЕНИЕ: Стабильное отображение линий без мерцания
+    // Линии сортируются и кешируются, обновляются только при реальных изменениях
+    val displayedLines = remember(currentPlyIndex, variationActive, viewSettings.numberOfLines, updatedLines[currentPlyIndex]) {
+        if (variationActive) {
+            emptyList()
+        } else {
+            // КРИТИЧНО: Всегда берем из updatedLines (уже заполненного из report)
+            val lines = updatedLines[currentPlyIndex] ?: emptyList()
 
-                // КРИТИЧНО: Сортировка - лучшая линия ВСЕГДА первая!
-                val sortedLines = lines.sortedByDescending { line ->
-                    when {
-                        line.mate != null && line.mate!! > 0 -> 100000.0 + line.mate!!
-                        line.mate != null && line.mate!! < 0 -> -100000.0 + line.mate!!
-                        line.cp != null -> line.cp!!.toDouble()
-                        else -> 0.0
-                    }
+            // КРИТИЧНО: Сортировка - лучшая линия ВСЕГДА первая!
+            val sortedLines = lines.sortedByDescending { line ->
+                when {
+                    line.mate != null && line.mate!! > 0 -> 100000.0 + line.mate!!
+                    line.mate != null && line.mate!! < 0 -> -100000.0 + line.mate!!
+                    line.cp != null -> line.cp!!.toDouble()
+                    else -> 0.0
                 }
-
-                val limitedLines = sortedLines.take(viewSettings.numberOfLines.coerceAtLeast(1))
-
-                // Логируем только если есть изменения
-                if (limitedLines.isNotEmpty()) {
-                    Log.d(TAG, "✅ STABLE: Displayed ${limitedLines.size} lines for ply $currentPlyIndex, BEST line cp=${limitedLines.firstOrNull()?.cp}, mate=${limitedLines.firstOrNull()?.mate}")
-                }
-
-                limitedLines
             }
+
+            val limitedLines = sortedLines.take(viewSettings.numberOfLines.coerceAtLeast(1))
+
+            // Логируем только если есть изменения
+            if (limitedLines.isNotEmpty()) {
+                Log.d(TAG, "✅ STABLE: Displayed ${limitedLines.size} lines for ply $currentPlyIndex, BEST line cp=${limitedLines.firstOrNull()?.cp}, mate=${limitedLines.firstOrNull()?.mate}, depth=${limitedLines.firstOrNull()?.depth}")
+            }
+
+            limitedLines
         }
     }
 
@@ -317,9 +315,15 @@ fun GameReportScreen(
 
         val positionFen = report.positions.getOrNull(currentPlyIndex)?.fen ?: return@LaunchedEffect
 
-        // Получаем текущие линии (из updatedLines или report)
-        val currentLines = updatedLines[currentPlyIndex]
-            ?: report.positions.getOrNull(currentPlyIndex)?.lines
+        // ИСПРАВЛЕНО: СНАЧАЛА проверяем updatedLines, затем report
+        // Это гарантирует, что мы используем уже проанализированные данные
+        val currentLines = updatedLines[currentPlyIndex] 
+            ?: report.positions.getOrNull(currentPlyIndex)?.lines?.also { reportLines ->
+                // Если берем из report и там есть линии, сохраняем их в updatedLines
+                if (reportLines.isNotEmpty()) {
+                    updatedLines[currentPlyIndex] = reportLines
+                }
+            }
             ?: emptyList()
 
         val currentDepthValue = currentLines.firstOrNull()?.depth ?: 12
@@ -350,22 +354,31 @@ fun GameReportScreen(
                 // Обновляем глубину в реальном времени
                 currentDepth = depth
 
-                val collectedLines = mutableListOf<EngineClient.LineDTO>()
+                // ИСПРАВЛЕНО: Не используем collectedLines - берем результат напрямую из функции
+                var finalLines: List<EngineClient.LineDTO> = emptyList()
 
                 evaluateFenDetailedStreaming(
                     fen = positionFen,
                     depth = depth,
                     multiPv = viewSettings.numberOfLines.coerceAtLeast(1),
                     onUpdate = { linesList: List<EngineClient.LineDTO> ->
-                        collectedLines.clear()
-                        collectedLines.addAll(linesList)
+                        // Сохраняем только финальный результат с правильной глубиной
+                        if (linesList.isNotEmpty() && linesList.first().depth == depth) {
+                            finalLines = linesList
+                        }
                     }
                 )
 
-                // Нормализуем к точке зрения белых
-                val normalizedLines = normalizeLinesToWhitePOV(collectedLines, positionFen)
+                // Используем finalLines только если они не пустые и имеют правильную глубину
+                if (finalLines.isEmpty()) {
+                    Log.w(TAG, "⚠️ No lines received for depth $depth at position $currentPlyIndex")
+                    continue
+                }
 
-                // Конвертируем в LineEval и обновляем позицию в report
+                // Нормализуем к точке зрения белых
+                val normalizedLines = normalizeLinesToWhitePOV(finalLines, positionFen)
+
+                // Конвертируем в LineEval и обновляем позицию
                 val lineEvals = normalizedLines.map { dto: EngineClient.LineDTO ->
                     LineEval(
                         pv = dto.pv,
@@ -376,8 +389,8 @@ fun GameReportScreen(
                     )
                 }
 
-                // КРИТИЧНО: Обновляем только если lineEvals не пустой
-                if (lineEvals.isNotEmpty()) {
+                // КРИТИЧНО: Обновляем только если lineEvals не пустой И имеет правильную глубину
+                if (lineEvals.isNotEmpty() && lineEvals.first().depth == depth) {
                     updatedLines[currentPlyIndex] = lineEvals
                     Log.d(TAG, "✅ Updated position $currentPlyIndex to depth $depth with ${lineEvals.size} lines, BEST cp=${lineEvals.firstOrNull()?.cp}")
                 }
@@ -385,8 +398,8 @@ fun GameReportScreen(
 
             Log.d(TAG, "✅ Completed incremental analysis to depth $targetDepth for position $currentPlyIndex")
         } catch (e: CancellationException) {
-            Log.d(TAG, "⚠️ Analysis cancelled for position $currentPlyIndex")
-            throw e
+            Log.d(TAG, "⚠️ Analysis cancelled for position $currentPlyIndex at depth $currentDepth")
+            // НЕ выбрасываем исключение - сохраняем прогресс
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error during incremental analysis for position $currentPlyIndex", e)
         } finally {
