@@ -1,5 +1,5 @@
 // app/src/main/java/com/github/movesense/ui/screens/GameReportScreen.kt
-// ИСПРАВЛЕНО: Стабильные линии без мигания + правильный layout
+// ИСПРАВЛЕНО: Синхронное обновление линий без задержек + Preview
 
 package com.github.movesense.ui.screens
 
@@ -37,6 +37,7 @@ import com.github.movesense.EngineClient.analyzeMoveRealtime
 import com.github.movesense.EngineClient.evaluateFenDetailedStreaming
 import com.github.movesense.ui.components.BoardCanvas
 import com.github.movesense.ui.components.MovesCarousel
+import com.github.movesense.ui.components.HorizontalEvalBar
 import com.github.bhlangonijr.chesslib.*
 import com.github.bhlangonijr.chesslib.move.Move
 import com.github.bhlangonijr.chesslib.move.MoveGenerator
@@ -173,6 +174,36 @@ private suspend fun fetchLichessClocks(gameId: String): ClockData? = withContext
     }
 }
 
+// Нормализация линий к точке зрения белых
+private fun normalizeLinesToWhitePOV(lines: List<EngineClient.LineDTO>, fen: String): List<EngineClient.LineDTO> {
+    val fenParts = fen.split(" ")
+    val whiteToPlay = fenParts.getOrNull(1) == "w"
+
+    return lines.map { line ->
+        val normalizedCp = if (whiteToPlay) {
+            line.cp
+        } else {
+            line.cp?.let { -it }
+        }
+
+        val normalizedMate = line.mate?.let { m ->
+            when {
+                m == 0 -> if (whiteToPlay) -1 else 1
+                whiteToPlay -> m
+                else -> -m
+            }
+        }
+
+        EngineClient.LineDTO(
+            pv = line.pv,
+            cp = normalizedCp,
+            mate = normalizedMate,
+            depth = line.depth,
+            multiPv = line.multiPv
+        )
+    }
+}
+
 @SuppressLint("UnrememberedMutableState")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -199,29 +230,7 @@ fun GameReportScreen(
     var legalTargets by remember { mutableStateOf<Set<String>>(emptySet()) }
     var isAnalyzing by remember { mutableStateOf(false) }
 
-    val linesStateMap = remember { mutableStateMapOf<String, PositionLinesState>() }
-
-    // ИСПРАВЛЕНИЕ: Стабильное отображение линий
-    var displayedLines by remember { mutableStateOf<List<LineEval>>(emptyList()) }
-    var isAnalysisRunning by remember { mutableStateOf(false) }
-
-    val positionSettings = remember { mutableStateMapOf<Int, Pair<Int, Int>>() }
-
-    val defaultDepth = remember {
-        report.positions.firstOrNull()?.lines?.firstOrNull()?.depth ?: 12
-    }
-
-    var currentDepth by remember { mutableStateOf(12) }
-    var targetDepth by remember { mutableStateOf(18) } // По умолчанию цель - 18
-    var targetMultiPv by remember { mutableStateOf(2) }
-    var isManualDepth by remember { mutableStateOf(false) } // Флаг ручной установки
-
-    var analysisJob by remember { mutableStateOf<Job?>(null) }
-    var analysisVersion by remember { mutableStateOf(0) }
-
-    // Хранение последних валидных линий
-    val lastValidLines = remember { mutableStateMapOf<String, List<LineEval>>() }
-
+    // ВАЖНО: viewSettings должен быть объявлен ДО derivedStateOf
     var viewSettings by remember {
         mutableStateOf(ViewSettings(
             showEvalBar = true,
@@ -233,6 +242,60 @@ fun GameReportScreen(
         ))
     }
 
+    // Состояние для динамической глубины
+    var currentDepth by remember { mutableStateOf(12) }
+    var isAnalysisRunning by remember { mutableStateOf(false) }
+
+    // Хранилище для динамически обновлённых линий (ключ = plyIndex)
+    val updatedLines = remember { mutableStateMapOf<Int, List<LineEval>>() }
+
+    // ИНИЦИАЛИЗАЦИЯ: Заполняем updatedLines из report при первом запуске
+    LaunchedEffect(Unit) {
+        report.positions.forEachIndexed { index, posEval ->
+            if (posEval.lines.isNotEmpty()) {
+                updatedLines[index] = posEval.lines
+            }
+        }
+        Log.d(TAG, "✅ Initialized ${updatedLines.size} positions from report")
+    }
+
+    // ИСПРАВЛЕНИЕ: Синхронное обновление линий через derivedStateOf
+    // Линии ВСЕГДА сортируются так, чтобы лучшая была первой
+    val displayedLines by remember {
+        derivedStateOf {
+            if (variationActive) {
+                emptyList()
+            } else {
+                // КРИТИЧНО: Всегда берем из updatedLines (уже заполненного из report)
+                val lines = updatedLines[currentPlyIndex] ?: emptyList()
+
+                // КРИТИЧНО: Сортировка - лучшая линия ВСЕГДА первая!
+                val sortedLines = lines.sortedByDescending { line ->
+                    when {
+                        line.mate != null && line.mate!! > 0 -> 100000.0 + line.mate!!
+                        line.mate != null && line.mate!! < 0 -> -100000.0 + line.mate!!
+                        line.cp != null -> line.cp!!.toDouble()
+                        else -> 0.0
+                    }
+                }
+
+                val limitedLines = sortedLines.take(viewSettings.numberOfLines.coerceAtLeast(1))
+
+                // Логируем только если есть изменения
+                if (limitedLines.isNotEmpty()) {
+                    Log.d(TAG, "✅ STABLE: Displayed ${limitedLines.size} lines for ply $currentPlyIndex, BEST line cp=${limitedLines.firstOrNull()?.cp}, mate=${limitedLines.firstOrNull()?.mate}")
+                }
+
+                limitedLines
+            }
+        }
+    }
+
+    val positionSettings = remember { mutableStateMapOf<Int, Pair<Int, Int>>() }
+
+    var analysisJob by remember { mutableStateOf<Job?>(null) }
+    var analysisVersion by remember { mutableStateOf(0) }
+
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showDepthDialog by remember { mutableStateOf(false) }
 
@@ -240,7 +303,6 @@ fun GameReportScreen(
     val surfaceColor = Color(0xFF262522)
     val cardColor = Color(0xFF1E1C1A)
 
-    // ИСПРАВЛЕНИЕ: Функция вместо derivedStateOf
     fun getCurrentFen(): String {
         return if (variationActive) {
             variationFen ?: report.positions.getOrNull(currentPlyIndex)?.fen ?: ""
@@ -249,67 +311,87 @@ fun GameReportScreen(
         }
     }
 
-    fun normalizeLinesToWhitePOV(lines: List<EngineClient.LineDTO>, fen: String): List<EngineClient.LineDTO> {
-        val fenParts = fen.split(" ")
-        val whiteToPlay = fenParts.getOrNull(1) == "w"
+    // ДИНАМИЧЕСКАЯ ГЛУБИНА: Автоматическое углубление анализа от 12 до 18
+    LaunchedEffect(currentPlyIndex, variationActive, positionSettings[currentPlyIndex], analysisVersion) {
+        if (variationActive) return@LaunchedEffect
 
-        return lines.map { line ->
-            val normalizedCp = if (whiteToPlay) {
-                line.cp
-            } else {
-                line.cp?.let { -it }
-            }
+        val positionFen = report.positions.getOrNull(currentPlyIndex)?.fen ?: return@LaunchedEffect
 
-            val normalizedMate = line.mate?.let { m ->
-                when {
-                    m == 0 -> if (whiteToPlay) -1 else 1
-                    whiteToPlay -> m
-                    else -> -m
+        // Получаем текущие линии (из updatedLines или report)
+        val currentLines = updatedLines[currentPlyIndex]
+            ?: report.positions.getOrNull(currentPlyIndex)?.lines
+            ?: emptyList()
+
+        val currentDepthValue = currentLines.firstOrNull()?.depth ?: 12
+
+        // Проверяем, есть ли сохранённая настройка глубины для этой позиции
+        val savedDepth = positionSettings[currentPlyIndex]?.first
+        val targetDepth = savedDepth ?: 18 // По умолчанию углубляем до 18
+
+        // Устанавливаем начальную глубину
+        currentDepth = currentDepthValue
+
+        // Если целевая глубина достигнута - выходим
+        if (currentDepthValue >= targetDepth) {
+            Log.d(TAG, "✅ Position $currentPlyIndex already analyzed to depth $currentDepthValue (target: $targetDepth)")
+            return@LaunchedEffect
+        }
+
+        Log.d(TAG, "🔄 Starting incremental analysis from depth $currentDepthValue to $targetDepth for ply $currentPlyIndex")
+        isAnalysisRunning = true
+
+        try {
+            // Инкрементальный анализ: от currentDepth+1 до targetDepth
+            for (depth in (currentDepthValue + 1)..targetDepth) {
+                if (!isActive) break
+
+                Log.d(TAG, "🔍 Analyzing depth $depth for ply $currentPlyIndex")
+
+                // Обновляем глубину в реальном времени
+                currentDepth = depth
+
+                val collectedLines = mutableListOf<EngineClient.LineDTO>()
+
+                evaluateFenDetailedStreaming(
+                    fen = positionFen,
+                    depth = depth,
+                    multiPv = viewSettings.numberOfLines.coerceAtLeast(1),
+                    onUpdate = { linesList: List<EngineClient.LineDTO> ->
+                        collectedLines.clear()
+                        collectedLines.addAll(linesList)
+                    }
+                )
+
+                // Нормализуем к точке зрения белых
+                val normalizedLines = normalizeLinesToWhitePOV(collectedLines, positionFen)
+
+                // Конвертируем в LineEval и обновляем позицию в report
+                val lineEvals = normalizedLines.map { dto: EngineClient.LineDTO ->
+                    LineEval(
+                        pv = dto.pv,
+                        cp = dto.cp,
+                        mate = dto.mate,
+                        best = dto.pv.firstOrNull(),
+                        depth = dto.depth
+                    )
+                }
+
+                // КРИТИЧНО: Обновляем только если lineEvals не пустой
+                if (lineEvals.isNotEmpty()) {
+                    updatedLines[currentPlyIndex] = lineEvals
+                    Log.d(TAG, "✅ Updated position $currentPlyIndex to depth $depth with ${lineEvals.size} lines, BEST cp=${lineEvals.firstOrNull()?.cp}")
                 }
             }
 
-            EngineClient.LineDTO(
-                pv = line.pv,
-                cp = normalizedCp,
-                mate = normalizedMate,
-                depth = line.depth,
-                multiPv = line.multiPv
-            )
+            Log.d(TAG, "✅ Completed incremental analysis to depth $targetDepth for position $currentPlyIndex")
+        } catch (e: CancellationException) {
+            Log.d(TAG, "⚠️ Analysis cancelled for position $currentPlyIndex")
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error during incremental analysis for position $currentPlyIndex", e)
+        } finally {
+            isAnalysisRunning = false
         }
-    }
-
-    // Функция сортировки линий
-    fun sortLinesByQuality(lines: List<LineEval>): List<LineEval> {
-        return lines.sortedWith(compareByDescending<LineEval> { line ->
-            when {
-                line.mate != null && line.mate!! > 0 -> 100000 + line.mate!!
-                line.mate != null && line.mate!! < 0 -> -100000 + line.mate!!
-                line.cp != null -> line.cp!!
-                else -> 0
-            }
-        })
-    }
-
-    LaunchedEffect(report) {
-        Log.d(TAG, "🔄 Initializing lines from report...")
-        report.positions.forEachIndexed { index, posEval ->
-            if (posEval.lines.isNotEmpty()) {
-                val key = "${posEval.fen}-${posEval.lines.firstOrNull()?.depth ?: defaultDepth}-${posEval.lines.size}"
-                val sortedLines = sortLinesByQuality(posEval.lines)
-                linesStateMap[key] = PositionLinesState(
-                    lines = sortedLines,
-                    isAnalyzing = false,
-                    depth = posEval.lines.firstOrNull()?.depth ?: defaultDepth,
-                    multiPv = posEval.lines.size,
-                    isFromReport = true
-                )
-                lastValidLines[posEval.fen] = sortedLines
-            }
-        }
-
-        val initialLines = sortLinesByQuality(report.positions.getOrNull(0)?.lines ?: emptyList())
-        displayedLines = initialLines.take(viewSettings.numberOfLines)
-        Log.d(TAG, "✅ Set initial displayed lines: ${initialLines.size}")
     }
 
     LaunchedEffect(report) {
@@ -340,123 +422,6 @@ fun GameReportScreen(
             val fetched = fetchLichessClocks(gameId)
             if (fetched != null) {
                 clockData = fetched
-            }
-        }
-    }
-
-    // КРИТИЧНО: Стабильное отображение линий при смене позиции
-    LaunchedEffect(currentPlyIndex, variationActive, viewSettings.numberOfLines) {
-        if (!variationActive) {
-            val saved = positionSettings[currentPlyIndex]
-            if (saved != null) {
-                targetDepth = saved.first
-                targetMultiPv = saved.second
-                isManualDepth = true
-            } else {
-                if (!isManualDepth) {
-                    targetDepth = 18 // Автоматическая цель - 18
-                }
-                targetMultiPv = viewSettings.numberOfLines
-            }
-
-            // КРИТИЧНО: FEN напрямую из отчета
-            val positionFen = report.positions.getOrNull(currentPlyIndex)?.fen ?: ""
-
-            // Линии из отчета УЖЕ нормализованы
-            val reportLines = report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList()
-            if (reportLines.isNotEmpty()) {
-                val sortedLines = sortLinesByQuality(reportLines)
-                val linesToShow = sortedLines.take(viewSettings.numberOfLines.coerceAtLeast(1))
-
-                // Атомарное обновление
-                lastValidLines[positionFen] = sortedLines
-                displayedLines = linesToShow
-
-                val reportDepth = reportLines.firstOrNull()?.depth ?: 12
-                currentDepth = reportDepth
-
-                Log.d(TAG, "✅ Displayed ${linesToShow.size} lines for ply $currentPlyIndex (cp=${linesToShow.firstOrNull()?.cp}, mate=${linesToShow.firstOrNull()?.mate})")
-            } else {
-                displayedLines = emptyList()
-                currentDepth = 12
-                Log.d(TAG, "⚠️ No lines in report for ply $currentPlyIndex")
-            }
-        }
-    }
-
-    // Инкрементальный анализ с автоматическим повышением глубины
-    LaunchedEffect(currentPlyIndex, targetDepth, targetMultiPv, variationActive) {
-        if (variationActive) return@LaunchedEffect
-
-        // Отменяем предыдущий анализ
-        analysisJob?.cancel()
-
-        val positionFen = report.positions.getOrNull(currentPlyIndex)?.fen ?: return@LaunchedEffect
-        val reportLines = report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList()
-        val reportDepth = reportLines.firstOrNull()?.depth ?: 12
-
-        // Если целевая глубина меньше или равна глубине из отчета, не анализируем
-        if (targetDepth <= reportDepth) {
-            Log.d(TAG, "✅ Using report depth $reportDepth, target is $targetDepth")
-            return@LaunchedEffect
-        }
-
-        Log.d(TAG, "🔄 Starting incremental analysis from depth $reportDepth to $targetDepth for ply $currentPlyIndex")
-
-        isAnalysisRunning = true
-
-        analysisJob = launch {
-            try {
-                // Инкрементальный анализ: от reportDepth+1 до targetDepth
-                for (depth in (reportDepth + 1)..targetDepth) {
-                    if (!isActive) break
-
-                    Log.d(TAG, "🔍 Analyzing depth $depth for ply $currentPlyIndex")
-
-                    val collectedLines = mutableListOf<EngineClient.LineDTO>()
-
-                    evaluateFenDetailedStreaming(
-                        fen = positionFen,
-                        depth = depth,
-                        multiPv = targetMultiPv,
-                        onUpdate = { linesList ->
-                            // Обновляем коллекцию линий полностью
-                            collectedLines.clear()
-                            collectedLines.addAll(linesList)
-                        }
-                    )
-
-                    // Нормализуем к точке зрения белых
-                    val normalizedLines = normalizeLinesToWhitePOV(collectedLines, positionFen)
-
-                    // Конвертируем в LineEval
-                    val lineEvals = normalizedLines.map { dto ->
-                        LineEval(
-                            pv = dto.pv,
-                            cp = dto.cp,
-                            mate = dto.mate,
-                            best = dto.pv.firstOrNull(),
-                            depth = dto.depth
-                        )
-                    }
-
-                    // Сортируем и обновляем отображение
-                    val sortedLines = sortLinesByQuality(lineEvals)
-                    lastValidLines[positionFen] = sortedLines
-                    displayedLines = sortedLines.take(viewSettings.numberOfLines)
-                    currentDepth = depth
-
-                    Log.d(TAG, "✅ Updated to depth $depth with ${sortedLines.size} lines (cp=${sortedLines.firstOrNull()?.cp}, mate=${sortedLines.firstOrNull()?.mate})")
-                }
-
-                Log.d(TAG, "✅ Completed incremental analysis to depth $targetDepth")
-            } catch (e: CancellationException) {
-                Log.d(TAG, "⚠️ Analysis cancelled")
-                throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "❌ Error during incremental analysis", e)
-            } finally {
-                isAnalysisRunning = false
             }
         }
     }
@@ -668,11 +633,6 @@ fun GameReportScreen(
         variationLastMove = null
         selectedSquare = null
         legalTargets = emptySet()
-
-        val reportLines = sortLinesByQuality(report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList())
-        if (reportLines.isNotEmpty()) {
-            displayedLines = reportLines.take(viewSettings.numberOfLines)
-        }
     }
 
     fun seekTo(index: Int) {
@@ -691,7 +651,6 @@ fun GameReportScreen(
     fun goNext() { if (!isAnalyzing && currentPlyIndex < report.positions.lastIndex) seekTo(currentPlyIndex + 1) }
     fun goPrev() { if (!isAnalyzing && currentPlyIndex > 0) seekTo(currentPlyIndex - 1) }
 
-    // ИСПРАВЛЕНИЕ: Правильный layout
     Scaffold(
         containerColor = bgColor,
         topBar = {
@@ -738,7 +697,8 @@ fun GameReportScreen(
                             tint = if (isAnalyzing) Color.Gray else Color.White
                         )
                     }
-                },colors = TopAppBarDefaults.topAppBarColors(
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = surfaceColor,
                     titleContentColor = Color.White
                 )
@@ -951,7 +911,7 @@ fun GameReportScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f) // Занимает все оставшееся пространство
+                    .weight(1f)
             ) {
                 MovesCarousel(
                     report = report,
@@ -1016,13 +976,7 @@ fun GameReportScreen(
             onDismiss = { showSettingsDialog = false },
             onSettingsChange = { newSettings ->
                 viewSettings = newSettings
-                targetMultiPv = newSettings.numberOfLines
-
-                val reportLines = sortLinesByQuality(report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList())
-                if (reportLines.isNotEmpty()) {
-                    displayedLines = reportLines.take(newSettings.numberOfLines)
-                }
-
+                // При изменении настроек увеличиваем версию для перезапуска анализа
                 analysisVersion++
             }
         )
@@ -1030,23 +984,22 @@ fun GameReportScreen(
 
     if (showDepthDialog) {
         DepthDialog(
-            currentDepth = targetDepth,
+            currentDepth = currentDepth, // Показываем ТЕКУЩУЮ глубину анализа
             onDismiss = { showDepthDialog = false },
             onDepthSelected = { depth ->
-                targetDepth = depth
-                isManualDepth = true
+                // Сохраняем глубину ТОЛЬКО для текущей позиции
                 if (!variationActive) {
-                    positionSettings[currentPlyIndex] = Pair(depth, targetMultiPv)
+                    positionSettings[currentPlyIndex] = Pair(depth, viewSettings.numberOfLines)
+                    Log.d(TAG, "💾 Saved depth $depth for position $currentPlyIndex")
+
+                    // Принудительно перезапускаем анализ для этой позиции
+                    // LaunchedEffect сам подхватит изменение через positionSettings
                 }
                 showDepthDialog = false
             }
         )
     }
 }
-
-// Остальные компоненты остаются без изменений...
-// (CompactEngineLines, CompactPvRow, CompactEvalChip, BoardWithOverlay, HorizontalEvalBar,
-//  SettingsDialog, DepthDialog, PlayerCard, InitialAvatar, buildIconTokens, PvToken, formatClock)
 
 @Composable
 private fun CompactEngineLines(
@@ -1081,6 +1034,7 @@ private fun CompactPvRow(
     onClickMoveAtIndex: (idx: Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // ИСПРАВЛЕНИЕ: Всегда показываем все доступные ходы из PV
     if (line.pv.isEmpty()) return
 
     val tokens = remember(baseFen, line.pv) { buildIconTokens(baseFen, line.pv) }
@@ -1097,7 +1051,8 @@ private fun CompactPvRow(
             modifier = Modifier.weight(1f),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            itemsIndexed(tokens.take(10)) { idx, token ->
+            // ИСПРАВЛЕНИЕ: Показываем ВСЕ токены, а не только первые 10
+            itemsIndexed(tokens) { idx, token ->
                 Row(
                     modifier = Modifier
                         .clickable { onClickMoveAtIndex(idx) }
@@ -1263,59 +1218,6 @@ private fun BoardWithOverlay(
 }
 
 @Composable
-private fun HorizontalEvalBar(
-    positions: List<PositionEval>,
-    currentPlyIndex: Int,
-    isWhiteBottom: Boolean,
-    modifier: Modifier = Modifier
-) {
-    val evaluation = remember(positions, currentPlyIndex) {
-        val pos = positions.getOrNull(currentPlyIndex)
-        val line = pos?.lines?.firstOrNull()
-
-        when {
-            line?.cp != null -> line.cp / 100.0f
-            line?.mate != null -> if (line.mate > 0) 30.0f else -30.0f
-            else -> 0.0f
-        }
-    }
-
-    val cap = 8.0f
-    val clamped = evaluation.coerceIn(-cap, cap)
-    val t = (clamped + cap) / (2 * cap)
-
-    val animT = remember { Animatable(t.coerceIn(0.001f, 0.999f)) }
-    LaunchedEffect(t) {
-        val targetT = t.coerceIn(0.001f, 0.999f)
-        val currentValue = animT.value
-        val diff = kotlin.math.abs(targetT - currentValue)
-
-        if (diff > 0.5f) {
-            animT.animateTo(targetT, tween(200, easing = FastOutSlowInEasing))
-        } else {
-            animT.animateTo(targetT, tween(350, easing = FastOutSlowInEasing))
-        }
-    }
-
-    Box(modifier = modifier) {
-        Row(Modifier.fillMaxSize()) {
-            Box(
-                Modifier
-                    .fillMaxHeight()
-                    .weight(1f - animT.value)
-                    .background(Color.Black)
-            )
-            Box(
-                Modifier
-                    .fillMaxHeight()
-                    .weight(animT.value)
-                    .background(Color.White)
-            )
-        }
-    }
-}
-
-@Composable
 private fun SettingsDialog(
     viewSettings: ViewSettings,
     onDismiss: () -> Unit,
@@ -1380,28 +1282,6 @@ private fun SettingsDialog(
                     Switch(
                         checked = localSettings.showBestMoveArrow,
                         onCheckedChange = { localSettings = localSettings.copy(showBestMoveArrow = it) }
-                    )
-                }
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.show_threats))
-                        Text(
-                            stringResource(R.string.coming_soon),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.Gray
-                        )
-                    }
-                    Switch(
-                        checked = localSettings.showThreatArrows,
-                        onCheckedChange = { },
-                        enabled = false
                     )
                 }
 
@@ -1637,3 +1517,4 @@ private fun InitialAvatar(
         )
     }
 }
+
