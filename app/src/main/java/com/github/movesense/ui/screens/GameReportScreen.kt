@@ -261,7 +261,7 @@ fun GameReportScreen(
 
     // ИСПРАВЛЕНИЕ: Стабильное отображение линий без мерцания
     // Линии сортируются и кешируются, обновляются только при реальных изменениях
-    val displayedLines = remember(currentPlyIndex, variationActive, viewSettings.numberOfLines) {
+    val displayedLines = remember(currentPlyIndex, variationActive, viewSettings.numberOfLines, updatedLines[currentPlyIndex]) {
         if (variationActive) {
             emptyList()
         } else {
