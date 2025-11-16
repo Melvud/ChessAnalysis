@@ -1,0 +1,27 @@
+# fly.toml app configuration file
+app = "chess-analysis-backend"
+primary_region = "arn"
+
+[build]
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+
+[env]
+  NODE_ENV = "production"
+  PORT = "8080"
+  HOST = "0.0.0.0"
+  ENGINE_PATH = "./engines/stockfish"
+  ENGINE_THREADS = "2"
+  ENGINE_HASH = "128"
+  ENGINE_POOL_SIZE = "1"

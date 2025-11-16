@@ -13,3 +13,10 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Backend server
+chesskit-server/node_modules/
+chesskit-server/dist/
+chesskit-server/.env
+chesskit-server/engines/stockfish.exe
+chesskit-server/*.log
