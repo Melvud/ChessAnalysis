@@ -191,29 +191,53 @@ fun ProfileScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Server Mode (DISABLED)
+                    // Server Mode
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .clickable(enabled = !isSaving) {
+                                scope.launch {
+                                    try {
+                                        EngineClient.setAndroidContext(context.applicationContext)
+                                        EngineClient.setEngineMode(EngineClient.EngineMode.SERVER)
+                                    } catch (e: Exception) {
+                                        errorMessage = context.getString(
+                                            R.string.switch_error,
+                                            e.message ?: ""
+                                        )
+                                    }
+                                }
+                            }
                             .padding(vertical = 8.dp)
                     ) {
                         RadioButton(
                             selected = engineMode == EngineClient.EngineMode.SERVER,
-                            onClick = null,
-                            enabled = false
+                            onClick = {
+                                scope.launch {
+                                    try {
+                                        EngineClient.setAndroidContext(context.applicationContext)
+                                        EngineClient.setEngineMode(EngineClient.EngineMode.SERVER)
+                                    } catch (e: Exception) {
+                                        errorMessage = context.getString(
+                                            R.string.switch_error,
+                                            e.message ?: ""
+                                        )
+                                    }
+                                }
+                            },
+                            enabled = !isSaving
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
                             Text(
                                 text = stringResource(R.string.engine_server),
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                style = MaterialTheme.typography.bodyLarge
                             )
                             Text(
                                 text = stringResource(R.string.engine_server_desc),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }

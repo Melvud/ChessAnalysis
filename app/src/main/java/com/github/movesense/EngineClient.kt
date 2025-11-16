@@ -35,7 +35,7 @@ object EngineClient {
 
     enum class EngineMode { SERVER, LOCAL }
 
-    private val _engineMode = MutableStateFlow(EngineMode.SERVER)
+    private val _engineMode = MutableStateFlow(EngineMode.LOCAL)
     val engineMode: StateFlow<EngineMode> = _engineMode
 
     private const val PREFS_NAME = "engine_prefs"
@@ -84,8 +84,8 @@ object EngineClient {
 
     object ServerConfig {
         private const val EMULATOR_URL = "http://10.0.2.2:8080"
-        private const val PRODUCTION_URL = "https://your-chess-backend.com"
-        private const val IS_PRODUCTION = false
+        private const val PRODUCTION_URL = "https://chess-analysis-backend.fly.dev"
+        private const val IS_PRODUCTION = true
         val BASE_URL: String get() = if (IS_PRODUCTION) PRODUCTION_URL else EMULATOR_URL
     }
 
@@ -478,10 +478,23 @@ object EngineClient {
                     MoveEvalDTO(lines = pos.lines, bestMove = pos.bestMove, moveClassification = null)
                 }
 
+            // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Нормализация оценок к POV белых
+            val whiteToPlayAfter = afterFen.split(" ").getOrNull(1) == "w"
             val top = parsed.lines.firstOrNull()
             val evalAfter: Float = when {
-                top?.mate != null -> if (top.mate!! > 0) 30f else -30f
-                top?.cp != null -> top.cp!! / 100f
+                top?.mate != null -> {
+                    val normalizedMate = when {
+                        top.mate!! == 0 && whiteToPlayAfter -> -1
+                        top.mate!! == 0 && !whiteToPlayAfter -> 1
+                        whiteToPlayAfter -> top.mate!!
+                        else -> -top.mate!!
+                    }
+                    if (normalizedMate > 0) 30f else -30f
+                }
+                top?.cp != null -> {
+                    val normalizedCp = if (whiteToPlayAfter) top.cp!! else -top.cp!!
+                    normalizedCp / 100f
+                }
                 else -> 0f
             }
 
