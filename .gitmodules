@@ -2,3 +2,6 @@
 	path = app/src/main/cpp/stockfish
 	url = https://github.com/official-stockfish/Stockfish.git
 	branch = master
+[submodule "backend"]
+	path = backend
+	url = https://github.com/Melvud/chess-backend
