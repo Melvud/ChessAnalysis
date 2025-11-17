@@ -56,12 +56,10 @@ object EngineClient {
                 else -> EngineMode.LOCAL
             }
             _engineMode.value = saved
-            if (saved == EngineMode.LOCAL) {
-                runCatching { LocalEngine.ensureStarted() }
-                    .onFailure { e -> Log.e(TAG, "Failed to start local engine on restore", e) }
-            } else {
-                LocalEngine.stop()
-            }
+            // ✅ ИСПРАВЛЕНИЕ: ВСЕГДА запускаем движок при старте для мгновенной готовности!
+            Log.d(TAG, "🚀 Starting engine immediately for instant readiness")
+            runCatching { LocalEngine.ensureStarted() }
+                .onFailure { e -> Log.e(TAG, "Failed to start local engine on restore", e) }
         }
     }
 
@@ -1007,8 +1005,8 @@ object EngineClient {
 
             engineScope.launch {
                 var attempts = 0
-                // ✅ ИСПРАВЛЕНИЕ: Сократили таймаут до 3 секунд (60 * 50ms) для быстрого старта
-                while (!engineReady.get() && attempts < 60) {
+                // ✅ ИСПРАВЛЕНИЕ: Увеличили количество попыток до 100 для надёжности (100 * 50ms = 5000ms)
+                while (!engineReady.get() && attempts < 100) {
                     delay(50)  // Проверка каждые 50ms
                     attempts++
                 }
@@ -1062,7 +1060,7 @@ object EngineClient {
             }
         }
 
-        private suspend fun waitForReady(timeoutMs: Long = 3000): Boolean {
+        private suspend fun waitForReady(timeoutMs: Long = 5000): Boolean {
             val startTime = System.currentTimeMillis()
             while (!engineReady.get()) {
                 if (System.currentTimeMillis() - startTime > timeoutMs) {
@@ -1165,29 +1163,29 @@ object EngineClient {
 
                 try {
                     send("stop")
-                    delay(50)  // ✅ Уменьшили с 150ms до 50ms
+                    delay(20)  // ✅ Уменьшили до минимума для скорости
 
-                    sendAndWaitReady("isready")
+                    sendAndWaitReady("isready", 2000)
 
                     send("ucinewgame")
-                    delay(30)  // ✅ Уменьшили с 100ms до 30ms
+                    delay(10)  // ✅ Уменьшили до минимума
 
-                    sendAndWaitReady("isready")
+                    sendAndWaitReady("isready", 2000)
 
                     if (skillLevel != null) {
                         send("setoption name Skill Level value $skillLevel")
-                        delay(20)  // ✅ Уменьшили с 50ms до 20ms
+                        delay(10)  // ✅ Уменьшили до минимума
                     }
 
                     if (multiPv > 1) {
                         send("setoption name MultiPV value $multiPv")
-                        delay(20)  // ✅ Уменьшили с 50ms до 20ms
+                        delay(10)  // ✅ Уменьшили до минимума
                     }
 
-                    sendAndWaitReady("isready")
+                    sendAndWaitReady("isready", 2000)
 
                     send("position fen $fen")
-                    delay(30)  // ✅ Уменьшили с 100ms до 30ms
+                    delay(10)  // ✅ Уменьшили до минимума
 
                     send("go depth $depth")
 
@@ -1331,27 +1329,27 @@ object EngineClient {
 
                         try {
                             send("stop")
-                            delay(50)  // ✅ Уменьшили с 150ms до 50ms
+                            delay(20)  // ✅ Уменьшили до минимума
 
-                            sendAndWaitReady("isready")
+                            sendAndWaitReady("isready", 2000)
 
                             send("ucinewgame")
-                            delay(30)  // ✅ Уменьшили с 100ms до 30ms
+                            delay(10)  // ✅ Уменьшили до минимума
 
-                            sendAndWaitReady("isready")
+                            sendAndWaitReady("isready", 2000)
 
                             if (skillLevel != null) {
                                 send("setoption name Skill Level value $skillLevel")
-                                delay(20)  // ✅ Уменьшили с 50ms до 20ms
+                                delay(10)  // ✅ Уменьшили до минимума
                             }
 
                             send("setoption name MultiPV value ${multiPv.coerceAtLeast(1)}")
-                            delay(20)  // ✅ Уменьшили с 50ms до 20ms
+                            delay(10)  // ✅ Уменьшили до минимума
 
-                            sendAndWaitReady("isready")
+                            sendAndWaitReady("isready", 2000)
 
                             send("position fen $fen")
-                            delay(30)  // ✅ Уменьшили с 100ms до 30ms
+                            delay(10)  // ✅ Уменьшили до минимума
 
                             send("go depth $depth")
 
