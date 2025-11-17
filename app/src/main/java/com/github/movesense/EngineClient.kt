@@ -1165,29 +1165,29 @@ object EngineClient {
 
                 try {
                     send("stop")
-                    delay(150)
+                    delay(50)  // ✅ Уменьшили с 150ms до 50ms
 
                     sendAndWaitReady("isready")
 
                     send("ucinewgame")
-                    delay(100)
+                    delay(30)  // ✅ Уменьшили с 100ms до 30ms
 
                     sendAndWaitReady("isready")
 
                     if (skillLevel != null) {
                         send("setoption name Skill Level value $skillLevel")
-                        delay(50)
+                        delay(20)  // ✅ Уменьшили с 50ms до 20ms
                     }
 
                     if (multiPv > 1) {
                         send("setoption name MultiPV value $multiPv")
-                        delay(50)
+                        delay(20)  // ✅ Уменьшили с 50ms до 20ms
                     }
 
                     sendAndWaitReady("isready")
 
                     send("position fen $fen")
-                    delay(100)
+                    delay(30)  // ✅ Уменьшили с 100ms до 30ms
 
                     send("go depth $depth")
 
@@ -1331,27 +1331,27 @@ object EngineClient {
 
                         try {
                             send("stop")
-                            delay(150)
+                            delay(50)  // ✅ Уменьшили с 150ms до 50ms
 
                             sendAndWaitReady("isready")
 
                             send("ucinewgame")
-                            delay(100)
+                            delay(30)  // ✅ Уменьшили с 100ms до 30ms
 
                             sendAndWaitReady("isready")
 
                             if (skillLevel != null) {
                                 send("setoption name Skill Level value $skillLevel")
-                                delay(50)
+                                delay(20)  // ✅ Уменьшили с 50ms до 20ms
                             }
 
                             send("setoption name MultiPV value ${multiPv.coerceAtLeast(1)}")
-                            delay(50)
+                            delay(20)  // ✅ Уменьшили с 50ms до 20ms
 
                             sendAndWaitReady("isready")
 
                             send("position fen $fen")
-                            delay(100)
+                            delay(30)  // ✅ Уменьшили с 100ms до 30ms
 
                             send("go depth $depth")
 
