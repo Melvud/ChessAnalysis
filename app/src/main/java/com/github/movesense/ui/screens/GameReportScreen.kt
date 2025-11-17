@@ -33,7 +33,7 @@ import coil.compose.rememberAsyncImagePainter
 import coil.decode.SvgDecoder
 import coil.request.ImageRequest
 import com.github.movesense.*
-import com.github.movesense.EngineClient.analyzeMoveRealtime
+import com.github.movesense.EngineClient.analyzeMoveRealtimeForcedLocal
 import com.github.movesense.EngineClient.evaluateFenDetailedStreaming
 import com.github.movesense.ui.components.BoardCanvas
 import com.github.movesense.ui.components.MovesCarousel
@@ -259,33 +259,34 @@ fun GameReportScreen(
         Log.d(TAG, "✅ Initialized ${updatedLines.size} positions from report")
     }
 
-    // ИСПРАВЛЕНИЕ: Стабильное отображение линий без мерцания
-    // Линии сортируются и кешируются, обновляются только при реальных изменениях
-    val displayedLines = remember(currentPlyIndex, variationActive, viewSettings.numberOfLines, updatedLines[currentPlyIndex]) {
-        if (variationActive) {
-            emptyList()
-        } else {
-            // КРИТИЧНО: Всегда берем из updatedLines (уже заполненного из report)
-            val lines = updatedLines[currentPlyIndex] ?: emptyList()
+    // ✅ ИСПРАВЛЕНИЕ: Используем derivedStateOf для автоматического отслеживания изменений в updatedLines
+    val displayedLines by remember {
+        derivedStateOf {
+            if (variationActive) {
+                emptyList()
+            } else {
+                // КРИТИЧНО: Всегда берем из updatedLines (уже заполненного из report)
+                val lines = updatedLines[currentPlyIndex] ?: emptyList()
 
-            // КРИТИЧНО: Сортировка - лучшая линия ВСЕГДА первая!
-            val sortedLines = lines.sortedByDescending { line ->
-                when {
-                    line.mate != null && line.mate!! > 0 -> 100000.0 + line.mate!!
-                    line.mate != null && line.mate!! < 0 -> -100000.0 + line.mate!!
-                    line.cp != null -> line.cp!!.toDouble()
-                    else -> 0.0
+                // КРИТИЧНО: Сортировка - лучшая линия ВСЕГДА первая!
+                val sortedLines = lines.sortedByDescending { line ->
+                    when {
+                        line.mate != null && line.mate!! > 0 -> 100000.0 + line.mate!!
+                        line.mate != null && line.mate!! < 0 -> -100000.0 + line.mate!!
+                        line.cp != null -> line.cp!!.toDouble()
+                        else -> 0.0
+                    }
                 }
+
+                val limitedLines = sortedLines.take(viewSettings.numberOfLines.coerceAtLeast(1))
+
+                // Логируем только если есть изменения
+                if (limitedLines.isNotEmpty()) {
+                    Log.d(TAG, "✅ STABLE: Displayed ${limitedLines.size} lines for ply $currentPlyIndex, BEST line cp=${limitedLines.firstOrNull()?.cp}, mate=${limitedLines.firstOrNull()?.mate}, depth=${limitedLines.firstOrNull()?.depth}")
+                }
+
+                limitedLines
             }
-
-            val limitedLines = sortedLines.take(viewSettings.numberOfLines.coerceAtLeast(1))
-
-            // Логируем только если есть изменения
-            if (limitedLines.isNotEmpty()) {
-                Log.d(TAG, "✅ STABLE: Displayed ${limitedLines.size} lines for ply $currentPlyIndex, BEST line cp=${limitedLines.firstOrNull()?.cp}, mate=${limitedLines.firstOrNull()?.mate}, depth=${limitedLines.firstOrNull()?.depth}")
-            }
-
-            limitedLines
         }
     }
 
@@ -542,7 +543,8 @@ fun GameReportScreen(
 
         scope.launch {
             try {
-                val (newEval, moveClass, bestMove) = analyzeMoveRealtime(
+                // ✅ КРИТИЧНО: Используем форсированную локальную версию
+                val (newEval, moveClass, bestMove) = analyzeMoveRealtimeForcedLocal(
                     beforeFen = beforeFen,
                     afterFen = afterFen,
                     uciMove = uciMove,
@@ -612,7 +614,8 @@ fun GameReportScreen(
 
         scope.launch {
             try {
-                val (newEval, moveClass, bestMove) = analyzeMoveRealtime(
+                // ✅ КРИТИЧНО: Используем форсированную локальную версию
+                val (newEval, moveClass, bestMove) = analyzeMoveRealtimeForcedLocal(
                     beforeFen = before,
                     afterFen = after,
                     uciMove = uci,

@@ -745,6 +745,26 @@ object EngineClient {
         }
     }
 
+    /**
+     * ✅ ПРИНУДИТЕЛЬНО ЛОКАЛЬНАЯ версия analyzeMoveRealtime
+     * Всегда использует локальный движок, игнорируя глобальную настройку engineMode
+     * Используется в GameReportScreen для анализа вариаций в реальном времени
+     */
+    suspend fun analyzeMoveRealtimeForcedLocal(
+        beforeFen: String,
+        afterFen: String,
+        uciMove: String,
+        depth: Int = 14,
+        multiPv: Int = 3,
+        skillLevel: Int? = null
+    ): Triple<Float, MoveClass, String?> = withContext(Dispatchers.IO) {
+        val analyzer = LocalGameAnalyzer()
+        val detailed = analyzer.analyzeMoveRealtimeDetailed(
+            beforeFen, afterFen, uciMove, depth, multiPv, skillLevel
+        )
+        return@withContext Triple(detailed.evalAfter, detailed.moveClass, detailed.bestMove)
+    }
+
     suspend fun analyzeMoveByFens(
         beforeFen: String,
         afterFen: String,

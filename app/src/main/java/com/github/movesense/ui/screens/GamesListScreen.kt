@@ -714,52 +714,27 @@ fun GamesListScreen(
                                         onClick = {
                                             if (showAnalysis) return@CompactGameCard
 
-                                            val currentPgn = game.pgn.orEmpty()
-
-                                            // Запускаем всё в корутине
-                                            scope.launch {
-                                                try {
-                                                    // Проверяем есть ли уже кэшированный анализ - моментально!
-                                                    val cachedReport = currentPgn.takeIf { it.isNotBlank() }?.let {
-                                                        repo.getCachedReport(it)
-                                                    }
-
-                                                    if (cachedReport != null) {
-                                                        // Есть кэш - открываем сразу без задержек!
-                                                        Log.d(TAG, "⚡ Opening cached analysis instantly")
-                                                        onOpenReport(cachedReport)
-                                                        return@launch
-                                                    }
-
-                                                    // Нет кэша - запускаем анализ
-                                                    Log.d(TAG, "🎯 Starting analysis for: ${game.white} vs ${game.black}")
-
-                                                    // Если PGN уже содержит ходы - используем его сразу
-                                                    val pgn = currentPgn.takeIf { it.isNotBlank() } ?: ""
-
-                                                    if (pgn.isBlank()) {
-                                                        Toast.makeText(
-                                                            context,
-                                                            context.getString(R.string.pgn_not_found),
-                                                            Toast.LENGTH_SHORT
-                                                        ).show()
-                                                        return@launch
-                                                    }
-
-                                                    // Запускаем анализ сразу с имеющимся PGN
-                                                    // showAnalysis будет установлен внутри startAnalysis
-                                                    startAnalysis(pgn, depth = 12, multiPv = 3)
-
-                                                } catch (e: Exception) {
-                                                    Log.e(TAG, "❌ Error: ${e.message}", e)
-                                                    showAnalysis = false
-                                                    Toast.makeText(
-                                                        context,
-                                                        context.getString(R.string.loading_error, e.message ?: ""),
-                                                        Toast.LENGTH_SHORT
-                                                    ).show()
-                                                }
+                                            // ✅ ИСПРАВЛЕНИЕ: Используем уже загруженный кэш из analyzedGames
+                                            if (analyzedReport != null) {
+                                                // Есть кэш - открываем сразу!
+                                                Log.d(TAG, "⚡ Opening cached analysis instantly")
+                                                onOpenReport(analyzedReport)
+                                                return@CompactGameCard
                                             }
+
+                                            // Нет кэша - запускаем анализ
+                                            val currentPgn = game.pgn.orEmpty()
+                                            if (currentPgn.isBlank()) {
+                                                Toast.makeText(
+                                                    context,
+                                                    context.getString(R.string.pgn_not_found),
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                                return@CompactGameCard
+                                            }
+
+                                            Log.d(TAG, "🎯 Starting analysis for: ${game.white} vs ${game.black}")
+                                            startAnalysis(currentPgn, depth = 12, multiPv = 3)
                                         },
                                         onLongPress = {
                                             if (analyzedReport != null) {
