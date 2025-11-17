@@ -756,21 +756,22 @@ fun GamesListScreen(
 
                                             val currentPgn = game.pgn.orEmpty()
 
-                                            // Проверяем есть ли уже кэшированный анализ - моментально!
-                                            val cachedReport = currentPgn.takeIf { it.isNotBlank() }?.let {
-                                                repo.getCachedReport(it)
-                                            }
-
-                                            if (cachedReport != null) {
-                                                // Есть кэш - открываем сразу без задержек!
-                                                Log.d(TAG, "⚡ Opening cached analysis instantly")
-                                                onOpenReport(cachedReport)
-                                                return@CompactGameCard
-                                            }
-
-                                            // Нет кэша - запускаем анализ
+                                            // Запускаем всё в корутине
                                             scope.launch {
                                                 try {
+                                                    // Проверяем есть ли уже кэшированный анализ - моментально!
+                                                    val cachedReport = currentPgn.takeIf { it.isNotBlank() }?.let {
+                                                        repo.getCachedReport(it)
+                                                    }
+
+                                                    if (cachedReport != null) {
+                                                        // Есть кэш - открываем сразу без задержек!
+                                                        Log.d(TAG, "⚡ Opening cached analysis instantly")
+                                                        onOpenReport(cachedReport)
+                                                        return@launch
+                                                    }
+
+                                                    // Нет кэша - запускаем анализ
                                                     Log.d(TAG, "🎯 Starting analysis for: ${game.white} vs ${game.black}")
 
                                                     // Если PGN уже содержит ходы - используем его сразу
