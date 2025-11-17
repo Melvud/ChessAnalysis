@@ -389,7 +389,7 @@ fun GamesListScreen(
         }
     }
 
-    // ✅ ИСПРАВЛЕНИЕ #4: Удалены все ненужные delay()
+    // ✅ ИСПРАВЛЕНИЕ #4: Мгновенный показ мини-доски
     fun startAnalysis(fullPgn: String, depth: Int, multiPv: Int) {
         if (showAnalysis) return
         scope.launch {
@@ -431,6 +431,10 @@ fun GamesListScreen(
                         add(Triple(move.afterFen, move.uci, move.san))
                     }
                 }
+
+                // ✅ ИСПРАВЛЕНИЕ: Показываем стартовую позицию МОМЕНТАЛЬНО!
+                liveFen = startFen
+                Log.d(TAG, "⚡ Mini-board shown instantly with starting position")
 
                 val accumulatedPositions = mutableMapOf<Int, PositionEval>()
 
