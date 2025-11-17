@@ -309,17 +309,15 @@ fun GameReportScreen(
         }
     }
 
-    // ДИНАМИЧЕСКАЯ ГЛУБИНА: Автоматическое углубление анализа от 12 до 18
+    // ✅ ИСПРАВЛЕНИЕ: REAL-TIME обновление линий 12→18 глубина
     LaunchedEffect(currentPlyIndex, variationActive, positionSettings[currentPlyIndex], analysisVersion) {
         if (variationActive) return@LaunchedEffect
 
         val positionFen = report.positions.getOrNull(currentPlyIndex)?.fen ?: return@LaunchedEffect
 
-        // ИСПРАВЛЕНО: СНАЧАЛА проверяем updatedLines, затем report
-        // Это гарантирует, что мы используем уже проанализированные данные
-        val currentLines = updatedLines[currentPlyIndex] 
+        // Проверяем updatedLines, затем report
+        val currentLines = updatedLines[currentPlyIndex]
             ?: report.positions.getOrNull(currentPlyIndex)?.lines?.also { reportLines ->
-                // Если берем из report и там есть линии, сохраняем их в updatedLines
                 if (reportLines.isNotEmpty()) {
                     updatedLines[currentPlyIndex] = reportLines
                 }
@@ -341,68 +339,51 @@ fun GameReportScreen(
             return@LaunchedEffect
         }
 
-        Log.d(TAG, "🔄 Starting incremental analysis from depth $currentDepthValue to $targetDepth for ply $currentPlyIndex")
+        Log.d(TAG, "🔄 Starting REAL-TIME analysis from depth $currentDepthValue to $targetDepth for ply $currentPlyIndex")
         isAnalysisRunning = true
 
         try {
-            // Инкрементальный анализ: от currentDepth+1 до targetDepth
-            for (depth in (currentDepthValue + 1)..targetDepth) {
-                if (!isActive) break
+            // ✅ ИСПРАВЛЕНИЕ: Запускаем ОДИН анализ до целевой глубины, обновляем UI в реальном времени
+            EngineClient.evaluateFenDetailedStreamingForcedLocal(
+                fen = positionFen,
+                depth = targetDepth,  // ✅ Анализируем сразу до целевой глубины!
+                multiPv = viewSettings.numberOfLines.coerceAtLeast(1),
+                onUpdate = { linesList: List<EngineClient.LineDTO> ->
+                    // ✅ КРИТИЧНО: Обновляем UI В РЕАЛЬНОМ ВРЕМЕНИ для КАЖДОЙ глубины!
+                    if (linesList.isNotEmpty()) {
+                        val receivedDepth = linesList.first().depth ?: 0
 
-                Log.d(TAG, "🔍 Analyzing depth $depth for ply $currentPlyIndex")
+                        // Обновляем текущую глубину для UI
+                        currentDepth = receivedDepth
 
-                // Обновляем глубину в реальном времени
-                currentDepth = depth
+                        // Нормализуем к точке зрения белых
+                        val normalizedLines = normalizeLinesToWhitePOV(linesList, positionFen)
 
-                // ✅ КРИТИЧНО: Принудительно используем локальный движок для real-time анализа!
-                // Это игнорирует глобальный engineMode и всегда использует локальный Stockfish
-                var finalLines: List<EngineClient.LineDTO> = emptyList()
-
-                EngineClient.evaluateFenDetailedStreamingForcedLocal(
-                    fen = positionFen,
-                    depth = depth,
-                    multiPv = viewSettings.numberOfLines.coerceAtLeast(1),
-                    onUpdate = { linesList: List<EngineClient.LineDTO> ->
-                        // Сохраняем только финальный результат с правильной глубиной
-                        if (linesList.isNotEmpty() && linesList.first().depth == depth) {
-                            finalLines = linesList
+                        // Конвертируем в LineEval
+                        val lineEvals = normalizedLines.map { dto: EngineClient.LineDTO ->
+                            LineEval(
+                                pv = dto.pv,
+                                cp = dto.cp,
+                                mate = dto.mate,
+                                best = dto.pv.firstOrNull(),
+                                depth = dto.depth
+                            )
                         }
+
+                        // ✅ ОБНОВЛЯЕМ UI СРАЗУ! Не ждем завершения глубины!
+                        updatedLines[currentPlyIndex] = lineEvals
+
+                        Log.d(TAG, "📊 REAL-TIME: Position $currentPlyIndex updated to depth $receivedDepth, ${lineEvals.size} lines, BEST cp=${lineEvals.firstOrNull()?.cp}")
                     }
-                )
-
-                // Используем finalLines только если они не пустые и имеют правильную глубину
-                if (finalLines.isEmpty()) {
-                    Log.w(TAG, "⚠️ No lines received for depth $depth at position $currentPlyIndex")
-                    continue
                 }
+            )
 
-                // Нормализуем к точке зрения белых
-                val normalizedLines = normalizeLinesToWhitePOV(finalLines, positionFen)
-
-                // Конвертируем в LineEval и обновляем позицию
-                val lineEvals = normalizedLines.map { dto: EngineClient.LineDTO ->
-                    LineEval(
-                        pv = dto.pv,
-                        cp = dto.cp,
-                        mate = dto.mate,
-                        best = dto.pv.firstOrNull(),
-                        depth = dto.depth
-                    )
-                }
-
-                // КРИТИЧНО: Обновляем только если lineEvals не пустой И имеет правильную глубину
-                if (lineEvals.isNotEmpty() && lineEvals.first().depth == depth) {
-                    updatedLines[currentPlyIndex] = lineEvals
-                    Log.d(TAG, "✅ Updated position $currentPlyIndex to depth $depth with ${lineEvals.size} lines, BEST cp=${lineEvals.firstOrNull()?.cp}")
-                }
-            }
-
-            Log.d(TAG, "✅ Completed incremental analysis to depth $targetDepth for position $currentPlyIndex")
+            Log.d(TAG, "✅ Completed REAL-TIME analysis to depth $targetDepth for position $currentPlyIndex")
         } catch (e: CancellationException) {
             Log.d(TAG, "⚠️ Analysis cancelled for position $currentPlyIndex at depth $currentDepth")
             // НЕ выбрасываем исключение - сохраняем прогресс
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Error during incremental analysis for position $currentPlyIndex", e)
+            Log.e(TAG, "❌ Error during REAL-TIME analysis for position $currentPlyIndex", e)
         } finally {
             isAnalysisRunning = false
         }
