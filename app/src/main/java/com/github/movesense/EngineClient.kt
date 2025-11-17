@@ -264,11 +264,12 @@ object EngineClient {
     /**
      * Запуск polling прогресса в фоне
      * Вызывает onProgress с ServerProgress каждые pollIntervalMs
+     * ✅ УСКОРЕНО: 100ms вместо 300ms для мгновенного отклика!
      */
     fun startProgressPolling(
         progressId: String,
         scope: CoroutineScope,
-        pollIntervalMs: Long = 300L,
+        pollIntervalMs: Long = 100L,  // ✅ КРИТИЧНО: Уменьшили с 300ms до 100ms!
         onProgress: (ServerProgress) -> Unit
     ): Job {
         return scope.launch(Dispatchers.IO) {
@@ -796,6 +797,27 @@ object EngineClient {
             onUpdate(pos.lines)
             pos
         }
+    }
+
+    /**
+     * ✅ НОВАЯ ФУНКЦИЯ: Принудительно использует локальный движок, игнорируя engineMode
+     * Используется в GameReportScreen для real-time анализа позиций
+     */
+    suspend fun evaluateFenDetailedStreamingForcedLocal(
+        fen: String,
+        depth: Int = 14,
+        multiPv: Int = 3,
+        skillLevel: Int? = null,
+        onUpdate: (List<LineDTO>) -> Unit
+    ): PositionDTO = withContext(Dispatchers.IO) {
+        Log.d(TAG, "🔧 FORCED LOCAL: Evaluating FEN at depth $depth with multiPv $multiPv")
+        return@withContext LocalEngine.evaluateFenDetailedStreamingLocal(
+            fen = fen,
+            depth = depth,
+            multiPv = multiPv,
+            skillLevel = skillLevel,
+            onUpdate = onUpdate
+        )
     }
 
     suspend fun evaluateFenDetailed(

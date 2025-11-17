@@ -354,10 +354,11 @@ fun GameReportScreen(
                 // Обновляем глубину в реальном времени
                 currentDepth = depth
 
-                // ИСПРАВЛЕНО: Не используем collectedLines - берем результат напрямую из функции
+                // ✅ КРИТИЧНО: Принудительно используем локальный движок для real-time анализа!
+                // Это игнорирует глобальный engineMode и всегда использует локальный Stockfish
                 var finalLines: List<EngineClient.LineDTO> = emptyList()
 
-                evaluateFenDetailedStreaming(
+                EngineClient.evaluateFenDetailedStreamingForcedLocal(
                     fen = positionFen,
                     depth = depth,
                     multiPv = viewSettings.numberOfLines.coerceAtLeast(1),
