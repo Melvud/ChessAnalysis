@@ -483,27 +483,25 @@ fun GamesListScreen(
                         }
                     }
 
-                    // ✅ ИСПРАВЛЕНИЕ #2: В локальном режиме обновляем доску и классификацию в реальном времени
-                    if (!isServerMode) {
-                        if (!newUci.isNullOrBlank() && newUci != lastSoundedUci) {
-                            val captureNow = isCapture(prevFenForSound, newUci)
-                            playMoveSound(cls, captureNow)
-                            lastSoundedUci = newUci
-                        }
-
-                        prevFenForSound = newFen ?: prevFenForSound
-
-                        liveFen = newFen
-                        liveUciMove = newUci
-                        liveMoveClass = snap.currentClass  // ✅ Показываем классификацию в реальном времени!
-
-                        if (snap.done > 0) {
-                            currentPlyForEval = snap.done - 1
-                        }
+                    // ✅ ИСПРАВЛЕНИЕ: Обновляем доску и классификацию в реальном времени для ОБОИХ режимов
+                    if (!newUci.isNullOrBlank() && newUci != lastSoundedUci) {
+                        val captureNow = isCapture(prevFenForSound, newUci)
+                        playMoveSound(cls, captureNow)
+                        lastSoundedUci = newUci
                     }
 
-                    // Обновляем позиции для eval bar только в локальном режиме
-                    if (!isServerMode && newFen != null && (snap.evalCp != null || snap.evalMate != null)) {
+                    prevFenForSound = newFen ?: prevFenForSound
+
+                    liveFen = newFen
+                    liveUciMove = newUci
+                    liveMoveClass = snap.currentClass  // ✅ Показываем классификацию в реальном времени!
+
+                    if (snap.done > 0) {
+                        currentPlyForEval = snap.done - 1
+                    }
+
+                    // ✅ ИСПРАВЛЕНИЕ: Обновляем позиции для eval bar в обоих режимах
+                    if (newFen != null && (snap.evalCp != null || snap.evalMate != null)) {
                         val line = LineEval(
                             pv = emptyList(),
                             cp = snap.evalCp,
@@ -524,7 +522,7 @@ fun GamesListScreen(
                             .sortedBy { it.idx }
                             .toList()
 
-                        Log.d(TAG, "📊 Local streaming: positions=${livePositions.size}, ply=${currentPlyForEval}, cp=${snap.evalCp}, mate=${snap.evalMate}")
+                        Log.d(TAG, "📊 Real-time update: positions=${livePositions.size}, ply=${currentPlyForEval}, cp=${snap.evalCp}, mate=${snap.evalMate}")
                     }
                 }
 
@@ -536,12 +534,7 @@ fun GamesListScreen(
                 completedReport = report
                 analysisCompleted = true
 
-                // ✅ ИСПРАВЛЕНИЕ #1: В локальном режиме сразу переходим к отчету
-                if (!isServerMode) {
-                    showAnalysis = false
-                    loadFromLocal()
-                    onOpenReport(report)
-                }
+                // ✅ Переход к отчету теперь обрабатывается через LaunchedEffect ниже
             } catch (t: Throwable) {
                 showAnalysis = false
                 Log.e(TAG, "Analysis error: ${t.message}", t)
@@ -554,54 +547,14 @@ fun GamesListScreen(
         }
     }
 
-    // Анимация ходов в серверном режиме - УСКОРЕННАЯ!
-    LaunchedEffect(showAnalysis, isServerMode, allGameMoves) {
-        if (!showAnalysis || !isServerMode || allGameMoves.isEmpty()) return@LaunchedEffect
+    // ✅ ИСПРАВЛЕНИЕ: Убрана анимация ходов - теперь доска обновляется напрямую из прогресса анализа
+    // Это устраняет задержку перед открытием отчета в серверном режиме
 
-        Log.d(TAG, "🚀 Starting FAST server mode animation with ${allGameMoves.size} moves")
-        animatedMoveIndex = 0
-
-        // ✅ КРИТИЧНО: Показываем первую позицию МГНОВЕННО
-        val (firstFen, firstUci, _) = allGameMoves[0]
-        liveFen = firstFen
-        liveUciMove = null
-        currentPlyForEval = 0
-
-        while (showAnalysis && animatedMoveIndex < allGameMoves.size) {
-            // ✅ ИСПРАВЛЕНИЕ #1: Прерываем анимацию если анализ завершен
-            if (analysisCompleted) {
-                Log.d(TAG, "Analysis completed, stopping animation early")
-                break
-            }
-
-            val (fen, uci, san) = allGameMoves[animatedMoveIndex]
-
-            liveFen = fen
-            liveUciMove = uci.takeIf { it.isNotBlank() }
-            currentPlyForEval = animatedMoveIndex
-
-            if (uci.isNotBlank() && uci != lastSoundedUci) {
-                val prevIdx = (animatedMoveIndex - 1).coerceAtLeast(0)
-                val prevFen = if (prevIdx < allGameMoves.size) allGameMoves[prevIdx].first else null
-                val captureNow = if (prevFen != null) isCapture(prevFen, uci) else false
-
-                val cls = completedReport?.moves?.getOrNull(animatedMoveIndex - 1)?.classification
-                playMoveSound(cls, captureNow)
-                lastSoundedUci = uci
-            }
-
-            Log.d(TAG, "Animated move $animatedMoveIndex: $san")
-            animatedMoveIndex++
-
-            // ✅ КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Уменьшаем задержку с 500ms до 150ms!
-            delay(150)
-        }
-    }
-
-    // ✅ ИСПРАВЛЕНИЕ #1: Мгновенный переход к Report когда анализ завершен
+    // ✅ ИСПРАВЛЕНИЕ: Мгновенный переход к отчету когда анализ завершен
     LaunchedEffect(analysisCompleted) {
-        if (analysisCompleted && isServerMode) {
-            delay(300) // Короткая пауза для плавности
+        if (analysisCompleted) {
+            // Небольшая задержка только для серверного режима для плавности UI
+            if (isServerMode) delay(100)
             showAnalysis = false
             loadFromLocal()
             completedReport?.let { onOpenReport(it) }
