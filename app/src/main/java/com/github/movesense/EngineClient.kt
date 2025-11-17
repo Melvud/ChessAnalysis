@@ -411,6 +411,21 @@ object EngineClient {
                         ((fens.size - done) * elapsed / done)
                     } else 0L
 
+                    // ✅ ИСПРАВЛЕНИЕ: Передаем НОРМАЛИЗОВАННЫЕ оценки для корректного отображения
+                    // Stockfish дает оценки с точки зрения того, кто ходит
+                    // Нужно нормализовать к белой перспективе
+                    val whiteToPlay = fen.split(" ").getOrNull(1) == "w"
+                    val topLine = pos.lines.firstOrNull()
+                    val normalizedCp = topLine?.cp?.let { if (whiteToPlay) it else -it }
+                    val normalizedMate = topLine?.mate?.let { m ->
+                        when {
+                            m == 0 && !whiteToPlay -> 1  // Чёрные заматованы → белые выиграли
+                            m == 0 && whiteToPlay -> -1  // Белые заматованы → чёрные выиграли
+                            !whiteToPlay -> -m           // Инвертируем для черных
+                            else -> m                    // Оставляем как есть для белых
+                        }
+                    }
+
                     onProgress(ProgressSnapshot(
                         id = "local",
                         total = fens.size,
@@ -421,7 +436,9 @@ object EngineClient {
                         updatedAt = System.currentTimeMillis(),
                         etaMs = eta,
                         fen = fen,
-                        currentUci = uciMoves.getOrNull(index)
+                        currentUci = uciMoves.getOrNull(index),
+                        evalCp = normalizedCp,  // ✅ Нормализованная оценка
+                        evalMate = normalizedMate  // ✅ Нормализованный мат
                     ))
                 }
 
@@ -978,14 +995,14 @@ object EngineClient {
 
             engineScope.launch {
                 var attempts = 0
-                while (!engineReady.get() && attempts < 200) {
-                    delay(100)
+                while (!engineReady.get() && attempts < 100) {  // ✅ 100 * 50ms = 5 секунд вместо 20
+                    delay(50)  // ✅ Более частая проверка
                     attempts++
                 }
                 if (!engineReady.get()) {
-                    Log.e(LOCAL_TAG, "⚠ Engine initialization timeout after ${attempts * 100}ms")
+                    Log.e(LOCAL_TAG, "⚠ Engine initialization timeout after ${attempts * 50}ms")
                 } else {
-                    Log.d(LOCAL_TAG, "✓ Engine ready after ${attempts * 100}ms")
+                    Log.d(LOCAL_TAG, "✓ Engine ready after ${attempts * 50}ms")
                 }
             }
         }
@@ -1032,14 +1049,14 @@ object EngineClient {
             }
         }
 
-        private suspend fun waitForReady(timeoutMs: Long = 20000): Boolean {
+        private suspend fun waitForReady(timeoutMs: Long = 5000): Boolean {
             val startTime = System.currentTimeMillis()
             while (!engineReady.get()) {
                 if (System.currentTimeMillis() - startTime > timeoutMs) {
                     Log.e(LOCAL_TAG, "⚠ Engine not ready after ${timeoutMs}ms")
                     return false
                 }
-                delay(100)
+                delay(50)  // ✅ Более частая проверка (50ms вместо 100ms)
             }
             return true
         }
@@ -1076,6 +1093,12 @@ object EngineClient {
             multiPv: Int,
             skillLevel: Int?
         ): PositionDTO = withTimeout(120_000) {
+            // ✅ ИСПРАВЛЕНИЕ: Пробуем запустить движок, если он еще не запущен
+            if (!started.get()) {
+                Log.w(LOCAL_TAG, "⚠ Engine not started yet, starting now...")
+                ensureStarted()
+            }
+
             // Отменяем предыдущий анализ
             currentAnalysisJob?.cancel()
 
@@ -1085,7 +1108,8 @@ object EngineClient {
             // Захватываем mutex
             engineMutex.withLock {
                 if (!waitForReady()) {
-                    throw IllegalStateException("Engine not ready!")
+                    // ✅ ИСПРАВЛЕНИЕ: Более понятное сообщение об ошибке
+                    throw IllegalStateException("Engine not ready after ${5}s timeout! Check WebView initialization.")
                 }
 
                 val acc = mutableMapOf<Int, AccLine>()
@@ -1198,6 +1222,12 @@ object EngineClient {
             skillLevel: Int?,
             onUpdate: (List<LineDTO>) -> Unit
         ): PositionDTO = coroutineScope {
+            // ✅ ИСПРАВЛЕНИЕ: Пробуем запустить движок, если он еще не запущен
+            if (!started.get()) {
+                Log.w(LOCAL_TAG, "⚠ Engine not started yet, starting now...")
+                ensureStarted()
+            }
+
             // Отменяем предыдущий анализ
             currentAnalysisJob?.cancel()
 
