@@ -174,23 +174,36 @@ private suspend fun fetchLichessClocks(gameId: String): ClockData? = withContext
     }
 }
 
-// Нормализация линий к точке зрения белых
+/**
+ * ✅ КРИТИЧЕСКИ ВАЖНО: Нормализация линий к точке зрения белых
+ *
+ * Stockfish всегда дает оценку с точки зрения стороны, которая ХОДИТ в данной позиции:
+ * - Если ходят белые (w): cp=100 означает "белые лучше на 1 пешку" ✅ оставляем как есть
+ * - Если ходят черные (b): cp=100 означает "черные лучше на 1 пешку" ❌ инвертируем в -100
+ *
+ * После нормализации ВСЕ оценки показываются с точки зрения БЕЛЫХ:
+ * - Положительная оценка (+) = белые выигрывают
+ * - Отрицательная оценка (-) = черные выигрывают
+ * - Нулевая оценка (0) = равная позиция
+ */
 private fun normalizeLinesToWhitePOV(lines: List<EngineClient.LineDTO>, fen: String): List<EngineClient.LineDTO> {
     val fenParts = fen.split(" ")
     val whiteToPlay = fenParts.getOrNull(1) == "w"
 
-    return lines.map { line ->
+    val normalized = lines.map { line ->
         val normalizedCp = if (whiteToPlay) {
+            // Белые ходят → оценка уже с точки зрения белых
             line.cp
         } else {
+            // Черные ходят → инвертируем оценку для точки зрения белых
             line.cp?.let { -it }
         }
 
         val normalizedMate = line.mate?.let { m ->
             when {
                 m == 0 -> if (whiteToPlay) -1 else 1
-                whiteToPlay -> m
-                else -> -m
+                whiteToPlay -> m  // Белые ходят → мат уже с точки зрения белых
+                else -> -m  // Черные ходят → инвертируем для точки зрения белых
             }
         }
 
@@ -202,6 +215,12 @@ private fun normalizeLinesToWhitePOV(lines: List<EngineClient.LineDTO>, fen: Str
             multiPv = line.multiPv
         )
     }
+
+    // Логируем для отладки
+    Log.d(TAG, "🔄 Normalized ${lines.size} lines: whiteToPlay=$whiteToPlay, " +
+            "before_cp=${lines.firstOrNull()?.cp}, after_cp=${normalized.firstOrNull()?.cp}")
+
+    return normalized
 }
 
 @SuppressLint("UnrememberedMutableState")
@@ -249,14 +268,22 @@ fun GameReportScreen(
     // Хранилище для динамически обновлённых линий (ключ = plyIndex)
     val updatedLines = remember { mutableStateMapOf<Int, List<LineEval>>() }
 
-    // ИНИЦИАЛИЗАЦИЯ: Заполняем updatedLines из report при первом запуске
+    /**
+     * ✅ КРИТИЧЕСКИ ВАЖНО: Мгновенная инициализация линий из report
+     *
+     * При открытии игры сразу загружаем все уже проанализированные линии
+     * из report в updatedLines. Это гарантирует, что:
+     * 1. Анализ отображается МГНОВЕННО без задержек
+     * 2. ВСЕ оценки уже нормализованы к точке зрения белых
+     * 3. Дополнительный анализ запускается только по запросу пользователя
+     */
     LaunchedEffect(Unit) {
         report.positions.forEachIndexed { index, posEval ->
             if (posEval.lines.isNotEmpty()) {
                 updatedLines[index] = posEval.lines
             }
         }
-        Log.d(TAG, "✅ Initialized ${updatedLines.size} positions from report")
+        Log.d(TAG, "✅ Initialized ${updatedLines.size} positions from report INSTANTLY")
     }
 
     // ИСПРАВЛЕНИЕ: Стабильное отображение линий без мерцания
@@ -309,31 +336,33 @@ fun GameReportScreen(
         }
     }
 
-    // ДИНАМИЧЕСКАЯ ГЛУБИНА: Автоматическое углубление анализа от 12 до 18
+    // ✅ ИСПРАВЛЕНО: Убираем автоматический углубленный анализ при открытии игры
+    // Анализ теперь запускается только при явном изменении глубины пользователем
     LaunchedEffect(currentPlyIndex, variationActive, positionSettings[currentPlyIndex], analysisVersion) {
         if (variationActive) return@LaunchedEffect
 
         val positionFen = report.positions.getOrNull(currentPlyIndex)?.fen ?: return@LaunchedEffect
 
-        // ИСПРАВЛЕНО: СНАЧАЛА проверяем updatedLines, затем report
-        // Это гарантирует, что мы используем уже проанализированные данные
-        val currentLines = updatedLines[currentPlyIndex] 
-            ?: report.positions.getOrNull(currentPlyIndex)?.lines?.also { reportLines ->
-                // Если берем из report и там есть линии, сохраняем их в updatedLines
-                if (reportLines.isNotEmpty()) {
-                    updatedLines[currentPlyIndex] = reportLines
-                }
-            }
-            ?: emptyList()
+        // Используем линии из report - они уже проанализированы
+        val currentLines = report.positions.getOrNull(currentPlyIndex)?.lines
+        if (currentLines != null && currentLines.isNotEmpty() && currentPlyIndex !in updatedLines) {
+            updatedLines[currentPlyIndex] = currentLines
+            Log.d(TAG, "✅ Using report lines for position $currentPlyIndex, depth=${currentLines.firstOrNull()?.depth}")
+        }
 
-        val currentDepthValue = currentLines.firstOrNull()?.depth ?: 12
-
-        // Проверяем, есть ли сохранённая настройка глубины для этой позиции
-        val savedDepth = positionSettings[currentPlyIndex]?.first
-        val targetDepth = savedDepth ?: 18 // По умолчанию углубляем до 18
-
-        // Устанавливаем начальную глубину
+        val currentDepthValue = currentLines?.firstOrNull()?.depth ?: 12
         currentDepth = currentDepthValue
+
+        // Запускаем углубленный анализ ТОЛЬКО если пользователь явно изменил настройку глубины
+        val savedDepth = positionSettings[currentPlyIndex]?.first
+        if (savedDepth == null) {
+            // Нет сохранённой настройки - используем данные из report без дополнительного анализа
+            Log.d(TAG, "✅ Position $currentPlyIndex using report depth $currentDepthValue, no additional analysis needed")
+            return@LaunchedEffect
+        }
+
+        // Пользователь запросил определенную глубину
+        val targetDepth = savedDepth
 
         // Если целевая глубина достигнута - выходим
         if (currentDepthValue >= targetDepth) {
@@ -341,7 +370,7 @@ fun GameReportScreen(
             return@LaunchedEffect
         }
 
-        Log.d(TAG, "🔄 Starting incremental analysis from depth $currentDepthValue to $targetDepth for ply $currentPlyIndex")
+        Log.d(TAG, "🔄 User requested deeper analysis from depth $currentDepthValue to $targetDepth for ply $currentPlyIndex")
         isAnalysisRunning = true
 
         try {
@@ -354,7 +383,6 @@ fun GameReportScreen(
                 // Обновляем глубину в реальном времени
                 currentDepth = depth
 
-                // ИСПРАВЛЕНО: Не используем collectedLines - берем результат напрямую из функции
                 var finalLines: List<EngineClient.LineDTO> = emptyList()
 
                 evaluateFenDetailedStreaming(
@@ -375,7 +403,7 @@ fun GameReportScreen(
                     continue
                 }
 
-                // Нормализуем к точке зрения белых
+                // ✅ КРИТИЧНО: Нормализуем к точке зрения белых
                 val normalizedLines = normalizeLinesToWhitePOV(finalLines, positionFen)
 
                 // Конвертируем в LineEval и обновляем позицию

@@ -289,6 +289,22 @@ private fun ClassificationTable(report: FullReport) {
         Triple(stringResource(R.string.move_blunder), R.drawable.blunder, MoveClass.BLUNDER)
     )
 
+    /**
+     * ✅ КРИТИЧЕСКИ ВАЖНО: Подсчет ходов по игрокам
+     *
+     * report.moves содержит все ходы партии:
+     * - moves[0] = ход белых #1
+     * - moves[1] = ход черных #1
+     * - moves[2] = ход белых #2
+     * - и т.д.
+     *
+     * Поэтому:
+     * - i % 2 == 0 → ход белых
+     * - i % 2 == 1 → ход черных
+     *
+     * ВСЕ классификации ходов (MoveClass) уже правильно распределены
+     * в процессе анализа партии (см. MoveClassification.kt).
+     */
     val whiteMovesMap = mutableMapOf<MoveClass, Int>().withDefault { 0 }
     val blackMovesMap = mutableMapOf<MoveClass, Int>().withDefault { 0 }
     report.moves.forEachIndexed { i, move ->

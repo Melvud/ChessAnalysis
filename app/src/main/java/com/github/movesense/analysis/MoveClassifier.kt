@@ -88,8 +88,28 @@ object MoveClassification {
             val lastPositionWinPercentage = positionsWinPercentage[index - 1]
             val positionWinPercentage = positionsWinPercentage[index]
 
-            // ФИКС: определяем, кто сделал ход, по FEN позиции ДО хода
-            // fens[index-1] -> "<board> <side> ..."
+            /**
+             * ✅ КРИТИЧЕСКИ ВАЖНО: Определение цвета игрока, сделавшего ход
+             *
+             * Индексация:
+             * - rawPositions[0] = стартовая позиция (перед первым ходом)
+             * - rawPositions[1] = позиция после хода белых #1
+             * - rawPositions[2] = позиция после хода черных #1
+             * - и т.д.
+             *
+             * - uciMoves[0] = ход белых #1
+             * - uciMoves[1] = ход черных #1
+             * - и т.д.
+             *
+             * Поэтому для определения цвета игрока смотрим на FEN ПЕРЕД ходом:
+             * - fens[index-1] содержит позицию ДО хода
+             * - Если там "w" -> белые сделали ход
+             * - Если там "b" -> черные сделали ход
+             *
+             * ВСЕ win percentages уже нормализованы к точке зрения белых:
+             * - Высокий % (>50) = белые выигрывают
+             * - Низкий % (<50) = черные выигрывают
+             */
             val prevFenParts = fens[index - 1].split(" ")
             val moverIsWhite = prevFenParts.getOrNull(1) == "w"
             val isWhiteMove = moverIsWhite
