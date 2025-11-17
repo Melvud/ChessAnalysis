@@ -84,7 +84,7 @@ object EngineClient {
 
     object ServerConfig {
         private const val EMULATOR_URL = "http://10.0.2.2:8080"
-        private const val PRODUCTION_URL = "https://chess-analysis-backend.fly.dev"
+        private const val PRODUCTION_URL = "https://pku-app-production.up.railway.app"
         private const val IS_PRODUCTION = true
         val BASE_URL: String get() = if (IS_PRODUCTION) PRODUCTION_URL else EMULATOR_URL
     }
