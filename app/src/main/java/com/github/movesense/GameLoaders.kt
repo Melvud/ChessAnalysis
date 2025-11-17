@@ -38,15 +38,15 @@ object GameLoaders {
 
     private val clientPreferV4: OkHttpClient = OkHttpClient.Builder()
         .dns(Ipv4FirstDns)
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)  // ✅ ИСПРАВЛЕНИЕ: Сократили с 20 до 8 секунд
+        .readTimeout(10, TimeUnit.SECONDS)     // ✅ ИСПРАВЛЕНИЕ: Сократили с 20 до 10 секунд
         .retryOnConnectionFailure(true)
         .build()
 
     private val clientV4Fallback: OkHttpClient = OkHttpClient.Builder()
         .dns(Ipv4OnlyDns)
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)   // ✅ ИСПРАВЛЕНИЕ: Сократили с 20 до 8 секунд
+        .readTimeout(10, TimeUnit.SECONDS)     // ✅ ИСПРАВЛЕНИЕ: Сократили с 20 до 10 секунд
         .retryOnConnectionFailure(true)
         .build()
 
