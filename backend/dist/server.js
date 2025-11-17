@@ -705,6 +705,83 @@ app.post("/api/v1/evaluate/position", async (req, res) => {
         });
     }
 });
+app.post("/api/v1/evaluate/positions", async (req, res) => {
+    const progressId = String(req.query?.progressId ?? req.body?.progressId ?? "");
+    try {
+        const body = req.body ?? {};
+        const fens = Array.isArray(body.fens) ? body.fens : [];
+        const uciMoves = Array.isArray(body.uciMoves) ? body.uciMoves : [];
+        if (progressId) {
+            initProgress(progressId, fens.length || 0);
+            setProgress(progressId, { stage: "queued" });
+        }
+        const depthQ = Number(req.query?.depth);
+        const multiPvQ = Number(req.query?.multiPv);
+        const depth = Number.isFinite(body.depth)
+            ? Number(body.depth)
+            : Number.isFinite(depthQ)
+                ? depthQ
+                : DEFAULT_DEPTH;
+        const multiPv = Number.isFinite(body.multiPv)
+            ? Number(body.multiPv)
+            : Number.isFinite(multiPvQ)
+                ? multiPvQ
+                : DEFAULT_MULTIPV;
+        if (!Array.isArray(fens) || fens.length === 0) {
+            if (progressId)
+                setProgress(progressId, { stage: "done" });
+            return res.status(400).json({ error: "invalid_fens" });
+        }
+        const playersRatings = normalizePlayersRatings(body);
+        const baseParams = {
+            fens,
+            uciMoves,
+            depth,
+            multiPv,
+            playersRatings,
+            ...(body.useNNUE !== undefined ? { useNNUE: body.useNNUE } : {}),
+            ...(body.elo !== undefined ? { elo: body.elo } : {}),
+            ...(body.skillLevel !== undefined ? { skillLevel: body.skillLevel } : {}),
+        };
+        const result = await jobQueue.enqueue(async () => {
+            if (progressId)
+                setProgress(progressId, { stage: "evaluating", done: 0 });
+            const engineOut = await evaluateGameParallel(baseParams, Number(body.workersNb ?? 0), (p) => {
+                if (progressId) {
+                    const done = Math.max(0, Math.min(fens.length, Math.round((p / 100) * fens.length)));
+                    setProgress(progressId, {
+                        done,
+                        stage: "evaluating",
+                        fen: fens[Math.min(done, fens.length - 1)],
+                        currentUci: uciMoves[Math.min(done, uciMoves.length - 1)]
+                    });
+                }
+            });
+            if (progressId)
+                setProgress(progressId, {
+                    stage: "done",
+                    done: fens.length,
+                });
+            return {
+                positions: engineOut.positions,
+                settings: {
+                    engine: ENGINE_NAME,
+                    depth,
+                    multiPv
+                }
+            };
+        });
+        return res.json(result);
+    }
+    catch (e) {
+        if (progressId)
+            setProgress(progressId, { stage: "done" });
+        return res.status(500).json({
+            error: "evaluate_positions_failed",
+            details: String(e?.message ?? e),
+        });
+    }
+});
 app.post("/api/v1/evaluate/game/by-fens", async (req, res) => {
     const progressId = String(req.query?.progressId ?? req.body?.progressId ?? "");
     try {
