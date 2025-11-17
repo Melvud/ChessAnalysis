@@ -235,6 +235,54 @@ object EngineClient {
         val currentUci: String? = null
     )
 
+    @Serializable
+    private data class ServerGameAnalysisResponse(
+        val positions: List<ClientPositionDTO>,
+        val moves: List<MoveReportDTO> = emptyList(),
+        val accuracy: ServerAccuracy? = null,
+        val acpl: ServerAcpl? = null,
+        val estimatedElo: ServerEstimatedElo? = null,
+        val settings: AnalysisSettings
+    )
+
+    @Serializable
+    private data class ClientPositionDTO(
+        val fen: String,
+        val idx: Int,
+        val lines: List<LineDTO>
+    )
+
+    @Serializable
+    private data class MoveReportDTO(
+        val san: String,
+        val uci: String,
+        val beforeFen: String,
+        val afterFen: String,
+        val winBefore: Double,
+        val winAfter: Double,
+        val accuracy: Double,
+        val classification: String,
+        val tags: List<String> = emptyList()
+    )
+
+    @Serializable
+    private data class ServerAccuracy(
+        val white: Double,
+        val black: Double
+    )
+
+    @Serializable
+    private data class ServerAcpl(
+        val white: Int,
+        val black: Int
+    )
+
+    @Serializable
+    private data class ServerEstimatedElo(
+        val white: Int? = null,
+        val black: Int? = null
+    )
+
     /**
      * Получение текущего прогресса с сервера
      */
@@ -308,7 +356,7 @@ object EngineClient {
 
     /**
      * ОБНОВЛЕНО: Оценка всех позиций с ПРОГРЕССОМ и FEN для мини-доски
-     * Использует endpoint /api/v1/evaluate/positions
+     * Использует endpoint /api/v1/evaluate/game/by-fens
      */
     suspend fun evaluatePositionsBatchWithProgress(
         fens: List<String>,
@@ -333,7 +381,7 @@ object EngineClient {
                 val body = bodyJson.toRequestBody(JSON_MEDIA)
 
                 val request = Request.Builder()
-                    .url("${ServerConfig.BASE_URL}/api/v1/evaluate/positions?progressId=$progressId")
+                    .url("${ServerConfig.BASE_URL}/api/v1/evaluate/game/by-fens?progressId=$progressId")
                     .post(body)
                     .header("User-Agent", UA)
                     .build()
@@ -370,7 +418,21 @@ object EngineClient {
                         throw Exception("Server error: ${response.code} - $responseBody")
                     }
 
-                    val result = json.decodeFromString<EvaluatePositionsResponse>(responseBody)
+                    // Парсим ответ сервера как полный GameAnalysis
+                    val serverAnalysis = json.decodeFromString<ServerGameAnalysisResponse>(responseBody)
+                    
+                    // Конвертируем ClientPositionDTO в PositionDTO
+                    val positions = serverAnalysis.positions.map { clientPos ->
+                        PositionDTO(
+                            lines = clientPos.lines,
+                            bestMove = clientPos.lines.firstOrNull()?.pv?.firstOrNull()
+                        )
+                    }
+
+                    val result = EvaluatePositionsResponse(
+                        positions = positions,
+                        settings = serverAnalysis.settings
+                    )
 
                     // Останавливаем polling
                     pollingJob.cancel()
