@@ -134,6 +134,13 @@ fun GamesListScreen(
     var livePositions by remember { mutableStateOf<List<PositionEval>>(emptyList()) }
     var currentPlyForEval by remember { mutableStateOf(0) }
 
+    // Новые состояния для анимации ходов
+    var animatedMoveIndex by remember { mutableStateOf(0) }
+    var allGameMoves by remember { mutableStateOf<List<Triple<String, String, String>>>(emptyList()) } // (fen, uci, san)
+    var isServerMode by remember { mutableStateOf(false) }
+    var analysisCompleted by remember { mutableStateOf(false) }
+    var completedReport by remember { mutableStateOf<FullReport?>(null) }
+
     // 🔵 ETA: ... (остается без изменений)
     var visibleEtaMs by remember { mutableStateOf<Long?>(null) }
     var emaPerMoveMs by remember { mutableStateOf<Double?>(null) }
@@ -419,6 +426,9 @@ fun GamesListScreen(
                 analysisStage = null
                 livePositions = emptyList()
                 currentPlyForEval = 0
+                analysisCompleted = false
+                animatedMoveIndex = 0
+                completedReport = null
 
                 // 🔵 Сброс ETA/скорости
                 visibleEtaMs = null
@@ -431,6 +441,22 @@ fun GamesListScreen(
                 analysisStartAtMs = System.currentTimeMillis()
 
                 val header = runCatching { PgnChess.headerFromPgn(fullPgn) }.getOrNull()
+
+                // Определяем режим движка
+                isServerMode = EngineClient.engineMode.value == EngineClient.EngineMode.SERVER
+
+                // Парсим PGN для получения всех ходов
+                val parsedMoves = PgnChess.movesWithFens(fullPgn)
+                val startFen = parsedMoves.firstOrNull()?.beforeFen
+                    ?: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+
+                // Создаем список всех позиций для анимации
+                allGameMoves = buildList {
+                    add(Triple(startFen, "", ""))
+                    parsedMoves.forEach { move ->
+                        add(Triple(move.afterFen, move.uci, move.san))
+                    }
+                }
 
                 val accumulatedPositions = mutableMapOf<Int, PositionEval>()
 
@@ -449,11 +475,11 @@ fun GamesListScreen(
                     analysisProgress = (snap.percent ?: 0.0).toFloat() / 100f
                     analysisStage = snap.stage
 
-                    // 🔵 Скорость и монотонный ETA
+                    // 🔵 Скорость и монотонный ETA (всегда вычисляется локально)
                     totalPly = snap.total
                     val prevDone = lastTickDone
                     if (snap.done > 0 && snap.total > 0) {
-                        // EMA-оценка скорости (не используется для увеличения, только для возможного уменьшения)
+                        // EMA-оценка скорости
                         if (prevDone != null && snap.done > prevDone) {
                             val dt = (now - (lastTickAtMs ?: now)).coerceAtLeast(1L)
                             val dDone = (snap.done - prevDone).coerceAtLeast(1)
@@ -466,61 +492,50 @@ fun GamesListScreen(
                         val remainingPly = (snap.total - snap.done).coerceAtLeast(0)
 
                         if (etaAnchorStartMs == null || etaInitialMs == null) {
-                            // ⛳️ ПЕРВИЧНАЯ оценка: считаем ОДИН РАЗ и берём консервативную (бОльшую)
+                            // ⛳️ ПЕРВИЧНАЯ оценка: используем среднее время на ход
                             val avgPerMove = ((now - (analysisStartAtMs ?: now)).toDouble() / snap.done.toDouble())
                                 .takeIf { it.isFinite() && it > 0 }
-                            val localRemaining = avgPerMove?.times(remainingPly)?.roundToLong()
-                            val backendRemaining = snap.etaMs
-                            val initial = listOfNotNull(localRemaining, backendRemaining).maxOrNull()
-                                ?: backendRemaining
-                                ?: localRemaining
-                                ?: 0L
+                            val localRemaining = avgPerMove?.times(remainingPly)?.roundToLong() ?: 0L
                             etaAnchorStartMs = now
-                            etaInitialMs = initial
-                            visibleEtaMs = initial
+                            etaInitialMs = localRemaining
+                            visibleEtaMs = localRemaining
                         } else {
-                            // Кандидаты на уменьшение
+                            // Кандидаты на уменьшение (используем EMA)
                             val emaRemaining = emaPerMoveMs?.times(remainingPly)?.roundToLong()
-                            val candidate = listOfNotNull(emaRemaining, snap.etaMs).minOrNull()
-                            if (candidate != null) {
+                            if (emaRemaining != null) {
                                 val currentLeft = max(0L, etaAnchorStartMs!! + etaInitialMs!! - now)
                                 // Разрешаем только уменьшение
-                                if (candidate < currentLeft) {
+                                if (emaRemaining < currentLeft) {
                                     etaAnchorStartMs = now
-                                    etaInitialMs = candidate
-                                    visibleEtaMs = candidate
+                                    etaInitialMs = emaRemaining
+                                    visibleEtaMs = emaRemaining
                                 }
                             }
                         }
-                    } else if (visibleEtaMs == null && snap.etaMs != null) {
-                        // Фолбэк до первого done
-                        etaAnchorStartMs = now
-                        etaInitialMs = snap.etaMs
-                        visibleEtaMs = snap.etaMs
                     }
 
-                    if (!newUci.isNullOrBlank() && newUci != lastSoundedUci) {
-                        val captureNow = isCapture(prevFenForSound, newUci)
-                        playMoveSound(cls, captureNow)
-                        lastSoundedUci = newUci
+                    // ЛОКАЛЬНЫЙ РЕЖИМ: обновляем доску в реальном времени
+                    if (!isServerMode) {
+                        if (!newUci.isNullOrBlank() && newUci != lastSoundedUci) {
+                            val captureNow = isCapture(prevFenForSound, newUci)
+                            playMoveSound(cls, captureNow)
+                            lastSoundedUci = newUci
+                        }
+
+                        prevFenForSound = newFen ?: prevFenForSound
+
+                        liveFen = newFen
+                        liveUciMove = newUci
+                        liveMoveClass = snap.currentClass
+
+                        if (snap.done > 0) {
+                            currentPlyForEval = snap.done - 1
+                        }
                     }
 
-                    prevFenForSound = newFen ?: prevFenForSound
-
-                    // --- ‼️‼️ ИСПРАВЛЕНИЕ ЗДЕСЬ ‼️‼️ ---
-                    // Вернули "как было" - прямое присваивание.
-                    // Логика с `?:` (Элвис-оператором) приводила к тому, что
-                    // liveFen оставался null, если первый снэпшот был null.
-                    liveFen = newFen
-                    liveUciMove = newUci
-                    liveMoveClass = snap.currentClass
-                    // --- ‼️‼️ КОНЕЦ ИСПРАВЛЕНИЯ ‼️‼️ ---
-
-                    if (snap.done > 0) {
-                        currentPlyForEval = snap.done - 1
-                    }
-
-                    if (newFen != null && (snap.evalCp != null || snap.evalMate != null)) {
+                    // ТОЛЬКО для локального режима: обновляем позиции для eval bar в реальном времени
+                    // В серверном режиме eval bar обновится после получения финального результата
+                    if (!isServerMode && newFen != null && (snap.evalCp != null || snap.evalMate != null)) {
                         val line = LineEval(
                             pv = emptyList(),
                             cp = snap.evalCp,
@@ -541,7 +556,7 @@ fun GamesListScreen(
                             .sortedBy { it.idx }
                             .toList()
 
-                        Log.d(TAG, "📊 Streaming: positions=${livePositions.size}, ply=${currentPlyForEval}, cp=${snap.evalCp}, mate=${snap.evalMate}")
+                        Log.d(TAG, "📊 Local streaming: positions=${livePositions.size}, ply=${currentPlyForEval}, cp=${snap.evalCp}, mate=${snap.evalMate}")
                     }
                 }
 
@@ -549,9 +564,19 @@ fun GamesListScreen(
                 Log.d(TAG, "✅ Analysis complete, final positions count: ${livePositions.size}")
 
                 repo.saveReport(fullPgn, report)
-                showAnalysis = false
-                loadFromLocal()
-                onOpenReport(report)
+
+                // Сохраняем отчет для последующего использования
+                completedReport = report
+
+                // Устанавливаем флаг завершения анализа
+                analysisCompleted = true
+
+                // В серверном режиме ждем окончания анимации, в локальном - сразу переходим
+                if (!isServerMode) {
+                    showAnalysis = false
+                    loadFromLocal()
+                    onOpenReport(report)
+                }
             } catch (t: Throwable) {
                 showAnalysis = false
                 Log.e(TAG, "Analysis error: ${t.message}", t)
@@ -561,6 +586,58 @@ fun GamesListScreen(
                     Toast.LENGTH_LONG
                 ).show()
             }
+        }
+    }
+
+    // LaunchedEffect для анимации ходов в серверном режиме
+    LaunchedEffect(showAnalysis, isServerMode, allGameMoves) {
+        if (!showAnalysis || !isServerMode || allGameMoves.isEmpty()) return@LaunchedEffect
+
+        Log.d(TAG, "Starting server mode animation with ${allGameMoves.size} moves")
+        animatedMoveIndex = 0
+
+        while (showAnalysis && animatedMoveIndex < allGameMoves.size) {
+            val (fen, uci, san) = allGameMoves[animatedMoveIndex]
+
+            liveFen = fen
+            liveUciMove = uci.takeIf { it.isNotBlank() }
+            currentPlyForEval = animatedMoveIndex
+
+            // Воспроизводим звук для нового хода
+            if (uci.isNotBlank() && uci != lastSoundedUci) {
+                val prevIdx = (animatedMoveIndex - 1).coerceAtLeast(0)
+                val prevFen = if (prevIdx < allGameMoves.size) allGameMoves[prevIdx].first else null
+                val captureNow = if (prevFen != null) isCapture(prevFen, uci) else false
+
+                // Получаем классификацию хода из completedReport если доступен
+                val cls = completedReport?.moves?.getOrNull(animatedMoveIndex - 1)?.classification
+                playMoveSound(cls, captureNow)
+                lastSoundedUci = uci
+            }
+
+            Log.d(TAG, "Animated move $animatedMoveIndex: $san")
+            animatedMoveIndex++
+
+            // Если анализ завершен и мы показали все ходы, переходим к репорту
+            if (analysisCompleted && animatedMoveIndex >= allGameMoves.size) {
+                delay(500) // Небольшая пауза перед переходом
+                showAnalysis = false
+                loadFromLocal()
+                completedReport?.let { onOpenReport(it) }
+                break
+            }
+
+            delay(500) // 0.5 секунды на ход
+        }
+    }
+
+    // LaunchedEffect для автоматического перехода при завершении анализа в серверном режиме
+    LaunchedEffect(analysisCompleted, isServerMode, animatedMoveIndex, allGameMoves.size) {
+        if (analysisCompleted && isServerMode && animatedMoveIndex >= allGameMoves.size) {
+            delay(300)
+            showAnalysis = false
+            loadFromLocal()
+            completedReport?.let { onOpenReport(it) }
         }
     }
 

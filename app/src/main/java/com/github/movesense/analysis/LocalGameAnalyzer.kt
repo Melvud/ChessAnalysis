@@ -69,7 +69,8 @@ class LocalGameAnalyzer(
             depth = depth,
             multiPv = multiPv
         ) { serverSnap ->
-            // Сервер отправляет прогресс - конвертируем его и передаем дальше
+            // Сервер отправляет только базовый прогресс и текущую позицию
+            // Классификация и оценки будут доступны только после завершения
             val currentIdx = serverSnap.done - 1
             val currentSan = if (currentIdx >= 0 && currentIdx < sanMoves.size) {
                 sanMoves[currentIdx]
@@ -80,16 +81,16 @@ class LocalGameAnalyzer(
                 total = total,
                 done = serverSnap.done,
                 percent = serverSnap.percent,
-                etaMs = serverSnap.etaMs,
+                etaMs = serverSnap.etaMs, // null в серверном режиме
                 stage = serverSnap.stage,
                 startedAt = startedAt,
                 updatedAt = serverSnap.updatedAt ?: System.currentTimeMillis(),
                 fen = serverSnap.fen,
                 currentSan = currentSan,
-                currentClass = serverSnap.currentClass,
+                currentClass = null, // Классификация вычисляется после получения всех оценок
                 currentUci = serverSnap.currentUci,
-                evalCp = serverSnap.evalCp,
-                evalMate = serverSnap.evalMate
+                evalCp = null, // Сервер не передает оценки в прогрессе
+                evalMate = null
             )
 
             onProgress(enrichedSnap)
@@ -110,15 +111,29 @@ class LocalGameAnalyzer(
 
         notify(progressId, total, total, "postprocess", startedAt, onProgress, null, null, null, null, null, null, null)
 
-        // Нормализуем все позиции к белой перспективе
+        // Конвертируем позиции в PositionEval
+        // ВАЖНО: сервер УЖЕ нормализовал оценки к белой перспективе
+        // Локальный движок возвращает сырые данные Stockfish, которые нужно нормализовать
+        val isLocalEngine = batchResult.settings?.engine == "stockfish-local"
         val positionEvals: List<PositionEval> = positions.mapIndexed { idx, pos ->
             val currentFen = allFens[idx]
-            normalizeToWhitePOV(
-                fen = currentFen,
-                pos = pos,
-                idx = idx,
-                isLast = idx == positions.lastIndex
-            )
+            if (isLocalEngine) {
+                // Локальный движок - нормализуем
+                normalizeToWhitePOV(
+                    fen = currentFen,
+                    pos = pos,
+                    idx = idx,
+                    isLast = idx == positions.lastIndex
+                )
+            } else {
+                // Серверный движок - просто конвертируем (уже нормализовано)
+                convertToPositionEval(
+                    fen = currentFen,
+                    pos = pos,
+                    idx = idx,
+                    isLast = idx == positions.lastIndex
+                )
+            }
         }
 
         // ACPL calculation
@@ -416,9 +431,38 @@ class LocalGameAnalyzer(
         fen.split(" ").getOrNull(1) == "w"
 
     /**
+     * Конвертирует PositionDTO в PositionEval без нормализации.
+     * Используется когда данные приходят с сервера (уже нормализованы).
+     */
+    private fun convertToPositionEval(
+        fen: String,
+        pos: EngineClient.PositionDTO,
+        idx: Int,
+        isLast: Boolean
+    ): PositionEval {
+        val linesEval = pos.lines.map { line ->
+            LineEval(
+                pv = line.pv,
+                cp = line.cp,
+                mate = line.mate,
+                depth = line.depth,
+                best = if (!isLast) pos.bestMove ?: line.pv.firstOrNull() else null
+            )
+        }
+
+        return PositionEval(
+            fen = fen,
+            idx = idx,
+            lines = linesEval.ifEmpty { listOf(LineEval(pv = emptyList(), cp = 0, best = "")) },
+            bestMove = pos.bestMove ?: linesEval.firstOrNull()?.pv?.firstOrNull()
+        )
+    }
+
+    /**
      * Нормализует весь PositionDTO в белую перспективу по КОНКРЕТНОМУ FEN позиции:
      * если ход чёрных — инвертируем знаки у cp и mate для всех линий.
      * КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: правильная обработка mate: 0
+     * Используется ТОЛЬКО для локального движка.
      */
     private fun normalizeToWhitePOV(
         fen: String,
