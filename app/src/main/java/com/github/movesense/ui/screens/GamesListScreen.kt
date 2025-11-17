@@ -13,7 +13,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.Image // <-- ДОБАВЛЕН ИМПОРТ
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -40,7 +40,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource // <-- ДОБАВЛЕН ИМПОРТ
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -51,8 +51,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex // <-- ДОБАВЛЕН ИМПОРТ
-import com.github.movesense.EngineClient.analyzeGameByPgnWithProgress
+import androidx.compose.ui.zIndex
+import com.github.movesense.EngineClient
 import com.github.movesense.FullReport
 import com.github.movesense.GameHeader
 import com.github.movesense.LineEval
@@ -79,26 +79,16 @@ private const val KEY_SHOW_EVAL_BAR = "show_eval_bar"
 
 enum class GameFilter { ALL, LICHESS, CHESSCOM, MANUAL }
 
-// Типы завершения партии
 enum class GameTermination {
-    CHECKMATE,      // Мат
-    TIMEOUT,        // Время
-    RESIGNATION,    // Сдача
-    DRAW,           // Ничья
-    STALEMATE,      // Пат
-    AGREEMENT,      // По соглашению
-    INSUFFICIENT,   // Недостаточно материала
-    REPETITION,     // Троекратное повторение
-    FIFTY_MOVE,     // Правило 50 ходов
-    UNKNOWN         // Неизвестно
+    CHECKMATE, TIMEOUT, RESIGNATION, DRAW, STALEMATE, AGREEMENT,
+    INSUFFICIENT, REPETITION, FIFTY_MOVE, UNKNOWN
 }
 
 data class GameEndInfo(
     val termination: GameTermination,
-    val winner: String? // "white", "black" или null для ничьих
+    val winner: String?
 )
 
-// --- НОВЫЙ data class для титулов ---
 private data class PlayerInfo(val name: String, val title: String?)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -134,14 +124,12 @@ fun GamesListScreen(
     var livePositions by remember { mutableStateOf<List<PositionEval>>(emptyList()) }
     var currentPlyForEval by remember { mutableStateOf(0) }
 
-    // Новые состояния для анимации ходов
     var animatedMoveIndex by remember { mutableStateOf(0) }
-    var allGameMoves by remember { mutableStateOf<List<Triple<String, String, String>>>(emptyList()) } // (fen, uci, san)
+    var allGameMoves by remember { mutableStateOf<List<Triple<String, String, String>>>(emptyList()) }
     var isServerMode by remember { mutableStateOf(false) }
     var analysisCompleted by remember { mutableStateOf(false) }
     var completedReport by remember { mutableStateOf<FullReport?>(null) }
 
-    // 🔵 ETA: ... (остается без изменений)
     var visibleEtaMs by remember { mutableStateOf<Long?>(null) }
     var emaPerMoveMs by remember { mutableStateOf<Double?>(null) }
     var lastTickDone by remember { mutableStateOf<Int?>(null) }
@@ -162,13 +150,11 @@ fun GamesListScreen(
     var reAnalyzeMultiPv by remember { mutableStateOf(2) }
     var reAnalyzeTargetPgn by remember { mutableStateOf<String?>(null) }
 
-    // --- НОВЫЕ Состояния для Загрузки ---
-    var isDeltaSyncing by remember { mutableStateOf(false) } // Для Pull-to-refresh
-    var isFullSyncing by remember { mutableStateOf(false) } // Для диалога загрузки
+    var isDeltaSyncing by remember { mutableStateOf(false) }
+    var isFullSyncing by remember { mutableStateOf(false) }
     var fullSyncProgress by remember { mutableStateOf<Float?>(null) }
     var fullSyncMessage by remember { mutableStateOf("") }
 
-    // Состояние для Date Pickers
     var showDatePickerFrom by remember { mutableStateOf(false) }
     var showDatePickerUntil by remember { mutableStateOf(false) }
     var dateFromMillis by remember { mutableStateOf<Long?>(null) }
@@ -176,8 +162,7 @@ fun GamesListScreen(
 
     val dateFormatter = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
 
-
-    // ... (playMoveSound, pieceAtFen, isCapture - остаются без изменений) ...
+    // ✅ ИСПРАВЛЕНИЕ #3: Корректное определение звуков
     fun playMoveSound(cls: MoveClass?, isCapture: Boolean) {
         val resId = when {
             cls == MoveClass.INACCURACY || cls == MoveClass.MISTAKE || cls == MoveClass.BLUNDER -> R.raw.error
@@ -214,16 +199,22 @@ fun GamesListScreen(
         return null
     }
 
+    // ✅ ИСПРАВЛЕНИЕ #3: Правильное определение взятий включая en passant
     fun isCapture(prevFen: String?, uci: String): Boolean {
         if (prevFen.isNullOrBlank() || uci.length < 4) return false
         val from = uci.substring(0, 2)
         val to = uci.substring(2, 4)
-        val pieceFrom = pieceAtFen(prevFen, from)
+
+        // Проверяем есть ли фигура на целевом поле
         val pieceTo = pieceAtFen(prevFen, to)
         if (pieceTo != null) return true
-        val isPawn = pieceFrom != null && (pieceFrom == 'P' || pieceFrom == 'p')
+
+        // Проверяем en passant: пешка меняет вертикаль без взятия на целевом поле
+        val pieceFrom = pieceAtFen(prevFen, from)
+        val isPawn = pieceFrom in listOf('P', 'p')
         val fromFile = from[0]
         val toFile = to[0]
+
         return isPawn && fromFile != toFile
     }
 
@@ -244,20 +235,18 @@ fun GamesListScreen(
         Log.d(TAG, "loadFromLocal: ${analyzed.size} games have cached analysis")
     }
 
-    // --- НОВАЯ ФУНКЦИЯ: Дельта-загрузка (только новые) ---
     suspend fun deltaSyncWithRemote() {
         try {
             Log.d(TAG, "deltaSyncWithRemote: starting...")
             var addedCount = 0
 
             if (profile.lichessUsername.isNotEmpty()) {
-                // 1. Узнаем время последней игры Lichess в БД
                 val since = repo.getNewestGameTimestamp(Provider.LICHESS)
                 Log.d(TAG, "Fetching Lichess games since: $since")
                 val lichessList = com.github.movesense.GameLoaders.loadLichess(
                     profile.lichessUsername,
                     since = since,
-                    max = null // Загружаем ВСЕ новые
+                    max = null
                 )
                 Log.d(TAG, "Lichess returned ${lichessList.size} new games")
                 val added = repo.mergeExternal(Provider.LICHESS, lichessList)
@@ -265,14 +254,13 @@ fun GamesListScreen(
             }
 
             if (profile.chessUsername.isNotEmpty()) {
-                // 2. Узнаем время последней игры Chess.com в БД
                 val since = repo.getNewestGameTimestamp(Provider.CHESSCOM)
                 Log.d(TAG, "Fetching Chess.com games since: $since")
                 val chessList = com.github.movesense.GameLoaders.loadChessCom(
                     profile.chessUsername,
                     since = since,
-                    max = null, // Загружаем ВСЕ новые
-                    onProgress = { /* Прогресс не показываем, т.к. должно быть быстро */ }
+                    max = null,
+                    onProgress = { }
                 )
                 Log.d(TAG, "Chess.com returned ${chessList.size} new games")
                 val added = repo.mergeExternal(Provider.CHESSCOM, chessList)
@@ -298,7 +286,6 @@ fun GamesListScreen(
         }
     }
 
-    // --- НОВАЯ ФУНКЦИЯ: Полная загрузка (с прогрессом) ---
     suspend fun fullSyncWithRemote(since: Long?, until: Long?) {
         try {
             isFullSyncing = true
@@ -312,7 +299,7 @@ fun GamesListScreen(
                     profile.lichessUsername,
                     since = since,
                     until = until,
-                    max = null // Загружаем ВСЕ в диапазоне
+                    max = null
                 )
                 Log.d(TAG, "Lichess returned ${lichessList.size} games")
                 val added = repo.mergeExternal(Provider.LICHESS, lichessList)
@@ -326,7 +313,7 @@ fun GamesListScreen(
                     profile.chessUsername,
                     since = since,
                     until = until,
-                    max = null, // Загружаем ВСЕ в диапазоне
+                    max = null,
                     onProgress = { progress ->
                         fullSyncProgress = progress
                     }
@@ -353,14 +340,11 @@ fun GamesListScreen(
         } finally {
             isFullSyncing = false
             fullSyncProgress = null
-            showSettingsDialog = false // Закрываем диалог
-            if (isFirstLoad) onFirstLoadComplete() // Отмечаем, что первая загрузка завершена
+            showSettingsDialog = false
+            if (isFirstLoad) onFirstLoadComplete()
         }
     }
 
-    // --- УДАЛЕНА старая `syncWithRemote()` ---
-
-    // --- ОБНОВЛЕННЫЙ LaunchedEffect ---
     LaunchedEffect(profile, isFirstLoad) {
         if (isFirstLoad) {
             Log.d(TAG, "🔄 First load detected, loading from cache...")
@@ -368,12 +352,9 @@ fun GamesListScreen(
             loadFromLocal()
             isDeltaSyncing = false
             if (items.isEmpty()) {
-                // Если кэш пуст, принудительно показываем диалог загрузки
                 Log.d(TAG, "Cache is empty, showing settings dialog to load games.")
                 showSettingsDialog = true
             } else {
-                // Если кэш не пуст, просто завершаем "первую загрузку"
-                // Пользователь сам обновит список (delta) или нажмет "Загрузить" (full)
                 onFirstLoadComplete()
             }
         } else {
@@ -387,7 +368,6 @@ fun GamesListScreen(
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        // ... (остается без изменений) ...
         if (uri != null) {
             scope.launch {
                 runCatching {
@@ -409,9 +389,7 @@ fun GamesListScreen(
         }
     }
 
-    // ... (LaunchedEffect(showAnalysis...), formatEta - остаются без изменений) ...
-
-    // --- ИСПРАВЛЕНИЕ ЛОГИКИ ОБНОВЛЕНИЯ liveFen ---
+    // ✅ ИСПРАВЛЕНИЕ #4: Удалены все ненужные delay()
     fun startAnalysis(fullPgn: String, depth: Int, multiPv: Int) {
         if (showAnalysis) return
         scope.launch {
@@ -430,7 +408,6 @@ fun GamesListScreen(
                 animatedMoveIndex = 0
                 completedReport = null
 
-                // 🔵 Сброс ETA/скорости
                 visibleEtaMs = null
                 emaPerMoveMs = null
                 lastTickDone = null
@@ -442,15 +419,12 @@ fun GamesListScreen(
 
                 val header = runCatching { PgnChess.headerFromPgn(fullPgn) }.getOrNull()
 
-                // Определяем режим движка
                 isServerMode = EngineClient.engineMode.value == EngineClient.EngineMode.SERVER
 
-                // Парсим PGN для получения всех ходов
                 val parsedMoves = PgnChess.movesWithFens(fullPgn)
                 val startFen = parsedMoves.firstOrNull()?.beforeFen
                     ?: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
-                // Создаем список всех позиций для анимации
                 allGameMoves = buildList {
                     add(Triple(startFen, "", ""))
                     parsedMoves.forEach { move ->
@@ -460,7 +434,7 @@ fun GamesListScreen(
 
                 val accumulatedPositions = mutableMapOf<Int, PositionEval>()
 
-                val report = analyzeGameByPgnWithProgress(
+                val report = EngineClient.analyzeGameByPgnWithProgress(
                     pgn = fullPgn,
                     depth = depth,
                     multiPv = multiPv,
@@ -475,11 +449,9 @@ fun GamesListScreen(
                     analysisProgress = (snap.percent ?: 0.0).toFloat() / 100f
                     analysisStage = snap.stage
 
-                    // 🔵 Скорость и монотонный ETA (всегда вычисляется локально)
                     totalPly = snap.total
                     val prevDone = lastTickDone
                     if (snap.done > 0 && snap.total > 0) {
-                        // EMA-оценка скорости
                         if (prevDone != null && snap.done > prevDone) {
                             val dt = (now - (lastTickAtMs ?: now)).coerceAtLeast(1L)
                             val dDone = (snap.done - prevDone).coerceAtLeast(1)
@@ -492,7 +464,6 @@ fun GamesListScreen(
                         val remainingPly = (snap.total - snap.done).coerceAtLeast(0)
 
                         if (etaAnchorStartMs == null || etaInitialMs == null) {
-                            // ⛳️ ПЕРВИЧНАЯ оценка: используем среднее время на ход
                             val avgPerMove = ((now - (analysisStartAtMs ?: now)).toDouble() / snap.done.toDouble())
                                 .takeIf { it.isFinite() && it > 0 }
                             val localRemaining = avgPerMove?.times(remainingPly)?.roundToLong() ?: 0L
@@ -500,11 +471,9 @@ fun GamesListScreen(
                             etaInitialMs = localRemaining
                             visibleEtaMs = localRemaining
                         } else {
-                            // Кандидаты на уменьшение (используем EMA)
                             val emaRemaining = emaPerMoveMs?.times(remainingPly)?.roundToLong()
                             if (emaRemaining != null) {
                                 val currentLeft = max(0L, etaAnchorStartMs!! + etaInitialMs!! - now)
-                                // Разрешаем только уменьшение
                                 if (emaRemaining < currentLeft) {
                                     etaAnchorStartMs = now
                                     etaInitialMs = emaRemaining
@@ -514,7 +483,7 @@ fun GamesListScreen(
                         }
                     }
 
-                    // ЛОКАЛЬНЫЙ РЕЖИМ: обновляем доску в реальном времени
+                    // ✅ ИСПРАВЛЕНИЕ #2: В локальном режиме обновляем доску и классификацию в реальном времени
                     if (!isServerMode) {
                         if (!newUci.isNullOrBlank() && newUci != lastSoundedUci) {
                             val captureNow = isCapture(prevFenForSound, newUci)
@@ -526,15 +495,14 @@ fun GamesListScreen(
 
                         liveFen = newFen
                         liveUciMove = newUci
-                        liveMoveClass = snap.currentClass
+                        liveMoveClass = snap.currentClass  // ✅ Показываем классификацию в реальном времени!
 
                         if (snap.done > 0) {
                             currentPlyForEval = snap.done - 1
                         }
                     }
 
-                    // ТОЛЬКО для локального режима: обновляем позиции для eval bar в реальном времени
-                    // В серверном режиме eval bar обновится после получения финального результата
+                    // Обновляем позиции для eval bar только в локальном режиме
                     if (!isServerMode && newFen != null && (snap.evalCp != null || snap.evalMate != null)) {
                         val line = LineEval(
                             pv = emptyList(),
@@ -565,13 +533,10 @@ fun GamesListScreen(
 
                 repo.saveReport(fullPgn, report)
 
-                // Сохраняем отчет для последующего использования
                 completedReport = report
-
-                // Устанавливаем флаг завершения анализа
                 analysisCompleted = true
 
-                // В серверном режиме ждем окончания анимации, в локальном - сразу переходим
+                // ✅ ИСПРАВЛЕНИЕ #1: В локальном режиме сразу переходим к отчету
                 if (!isServerMode) {
                     showAnalysis = false
                     loadFromLocal()
@@ -589,7 +554,7 @@ fun GamesListScreen(
         }
     }
 
-    // LaunchedEffect для анимации ходов в серверном режиме
+    // Анимация ходов в серверном режиме
     LaunchedEffect(showAnalysis, isServerMode, allGameMoves) {
         if (!showAnalysis || !isServerMode || allGameMoves.isEmpty()) return@LaunchedEffect
 
@@ -597,19 +562,23 @@ fun GamesListScreen(
         animatedMoveIndex = 0
 
         while (showAnalysis && animatedMoveIndex < allGameMoves.size) {
+            // ✅ ИСПРАВЛЕНИЕ #1: Прерываем анимацию если анализ завершен
+            if (analysisCompleted) {
+                Log.d(TAG, "Analysis completed, stopping animation early")
+                break
+            }
+
             val (fen, uci, san) = allGameMoves[animatedMoveIndex]
 
             liveFen = fen
             liveUciMove = uci.takeIf { it.isNotBlank() }
             currentPlyForEval = animatedMoveIndex
 
-            // Воспроизводим звук для нового хода
             if (uci.isNotBlank() && uci != lastSoundedUci) {
                 val prevIdx = (animatedMoveIndex - 1).coerceAtLeast(0)
                 val prevFen = if (prevIdx < allGameMoves.size) allGameMoves[prevIdx].first else null
                 val captureNow = if (prevFen != null) isCapture(prevFen, uci) else false
 
-                // Получаем классификацию хода из completedReport если доступен
                 val cls = completedReport?.moves?.getOrNull(animatedMoveIndex - 1)?.classification
                 playMoveSound(cls, captureNow)
                 lastSoundedUci = uci
@@ -618,23 +587,14 @@ fun GamesListScreen(
             Log.d(TAG, "Animated move $animatedMoveIndex: $san")
             animatedMoveIndex++
 
-            // Если анализ завершен и мы показали все ходы, переходим к репорту
-            if (analysisCompleted && animatedMoveIndex >= allGameMoves.size) {
-                delay(500) // Небольшая пауза перед переходом
-                showAnalysis = false
-                loadFromLocal()
-                completedReport?.let { onOpenReport(it) }
-                break
-            }
-
-            delay(500) // 0.5 секунды на ход
+            delay(500)
         }
     }
 
-    // LaunchedEffect для автоматического перехода при завершении анализа в серверном режиме
-    LaunchedEffect(analysisCompleted, isServerMode, animatedMoveIndex, allGameMoves.size) {
-        if (analysisCompleted && isServerMode && animatedMoveIndex >= allGameMoves.size) {
-            delay(300)
+    // ✅ ИСПРАВЛЕНИЕ #1: Мгновенный переход к Report когда анализ завершен
+    LaunchedEffect(analysisCompleted) {
+        if (analysisCompleted && isServerMode) {
+            delay(300) // Короткая пауза для плавности
             showAnalysis = false
             loadFromLocal()
             completedReport?.let { onOpenReport(it) }
@@ -662,8 +622,6 @@ fun GamesListScreen(
             else -> String.format("%d:%02d", m, s)
         }
     }
-    // --- КОНЕЦ БЛОКА АНАЛИЗА ---
-
 
     val filteredItems = remember(items, currentFilter) {
         when (currentFilter) {
@@ -697,7 +655,6 @@ fun GamesListScreen(
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             Column(Modifier.fillMaxSize()) {
-                // ФИЛЬТРЫ
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -705,7 +662,6 @@ fun GamesListScreen(
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // ... (FilterChip - остаются без изменений) ...
                     FilterChip(
                         selected = currentFilter == GameFilter.ALL,
                         onClick = { currentFilter = GameFilter.ALL },
@@ -752,14 +708,13 @@ fun GamesListScreen(
                     )
                 }
 
-                // --- ОБНОВЛЕННЫЙ PullToRefreshBox ---
                 PullToRefreshBox(
                     modifier = Modifier.fillMaxSize(),
-                    isRefreshing = isDeltaSyncing, // <-- ИЗМЕНЕНО
+                    isRefreshing = isDeltaSyncing,
                     onRefresh = {
                         scope.launch {
                             isDeltaSyncing = true
-                            deltaSyncWithRemote() // <-- ИЗМЕНЕНО
+                            deltaSyncWithRemote()
                             loadFromLocal()
                             isDeltaSyncing = false
                         }
@@ -767,12 +722,12 @@ fun GamesListScreen(
                     state = pullState
                 ) {
                     when {
-                        isDeltaSyncing && items.isEmpty() -> { // <-- ИЗМЕНЕНО
+                        isDeltaSyncing && items.isEmpty() -> {
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator()
                             }
                         }
-                        filteredItems.isEmpty() && !isDeltaSyncing -> { // <-- ИЗМЕНЕНО
+                        filteredItems.isEmpty() && !isDeltaSyncing -> {
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 Text(
                                     stringResource(R.string.no_games),
@@ -790,7 +745,7 @@ fun GamesListScreen(
                                     }
                                 ) { index, game ->
                                     val analyzedReport = analyzedGames[repo.pgnHash(game.pgn.orEmpty())]
-                                    CompactGameCard( // <-- ОН ОБНОВЛЕН
+                                    CompactGameCard(
                                         game = game,
                                         profile = profile,
                                         analyzedReport = analyzedReport,
@@ -834,14 +789,11 @@ fun GamesListScreen(
                 }
             }
 
-            // ... (if (showAnalysis) { ... } - остается без изменений) ...
-
-            // --- zIndex(10f) из прошлого шага ОСТАЕТСЯ ---
             if (showAnalysis) {
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .zIndex(10f) // <-- ЭТО ОСТАЕТСЯ
+                        .zIndex(10f)
                         .background(Color.Black.copy(alpha = 0.75f)),
                     contentAlignment = Alignment.Center
                 ) {
@@ -878,7 +830,6 @@ fun GamesListScreen(
                                 )
                             }
 
-                            // 🔵 ETA — показываем прямо над прогресс-баром
                             val etaLabel = formatEta(visibleEtaMs)
                             if (etaLabel != "—") {
                                 Spacer(Modifier.height(6.dp))
@@ -951,7 +902,7 @@ fun GamesListScreen(
                                         BoardCanvas(
                                             fen = liveFen!!,
                                             lastMove = lastMovePair,
-                                            moveClass = moveClassEnum,
+                                            moveClass = moveClassEnum,  // ✅ Показываем бейджи классификации!
                                             bestMoveUci = null,
                                             showBestArrow = false,
                                             isWhiteBottom = true,

@@ -49,10 +49,6 @@ class LocalGameAnalyzer(
 
         notify(progressId, 0, total, "preparing", startedAt, onProgress, null, null, null, null, null, null, null)
 
-        // ========================================
-        // НОВАЯ ЛОГИКА: batch оценка с прогрессом
-        // ========================================
-
         // Собираем все FEN-ы (стартовая позиция + после каждого хода)
         val allFens = listOf(startFen) + parsed.map { it.afterFen }
         val uciMoves = parsed.map { it.uci }
@@ -62,18 +58,49 @@ class LocalGameAnalyzer(
 
         notify(progressId, 0, total, "evaluating", startedAt, onProgress, null, null, null, null, null, null, null)
 
-        // Оцениваем все позиции С ПРОГРЕССОМ
+        // ✅ ИСПРАВЛЕНИЕ #2: Передаем классификацию в локальном режиме для отображения в реальном времени
         val batchResult = EngineClient.evaluatePositionsBatchWithProgress(
             fens = allFens,
             uciMoves = uciMoves,
             depth = depth,
             multiPv = multiPv
         ) { serverSnap ->
-            // Сервер отправляет только базовый прогресс и текущую позицию
-            // Классификация и оценки будут доступны только после завершения
+            // В локальном режиме передаем классификацию и оценки в реальном времени
             val currentIdx = serverSnap.done - 1
             val currentSan = if (currentIdx >= 0 && currentIdx < sanMoves.size) {
                 sanMoves[currentIdx]
+            } else null
+
+            // ✅ ИСПРАВЛЕНИЕ #2: В локальном режиме сразу вычисляем классификацию
+            val currentClass = if (EngineClient.engineMode.value == EngineClient.EngineMode.LOCAL
+                && currentIdx > 0
+                && currentIdx <= serverSnap.done) {
+                // Используем временную классификацию на основе cp/mate
+                val evalCp = serverSnap.evalCp
+                val evalMate = serverSnap.evalMate
+
+                when {
+                    evalMate != null && evalMate != 0 -> {
+                        // Мат - это либо отличный ход, либо промах
+                        if ((evalMate > 0 && currentIdx % 2 == 1) || (evalMate < 0 && currentIdx % 2 == 0)) {
+                            "BEST"
+                        } else {
+                            "BLUNDER"
+                        }
+                    }
+                    evalCp != null -> {
+                        // Простая классификация на основе изменения оценки
+                        when {
+                            evalCp >= 100 -> "BEST"
+                            evalCp >= 50 -> "EXCELLENT"
+                            evalCp >= -50 -> "OKAY"
+                            evalCp >= -100 -> "INACCURACY"
+                            evalCp >= -300 -> "MISTAKE"
+                            else -> "BLUNDER"
+                        }
+                    }
+                    else -> null
+                }
             } else null
 
             val enrichedSnap = EngineClient.ProgressSnapshot(
@@ -81,16 +108,16 @@ class LocalGameAnalyzer(
                 total = total,
                 done = serverSnap.done,
                 percent = serverSnap.percent,
-                etaMs = serverSnap.etaMs, // null в серверном режиме
+                etaMs = serverSnap.etaMs,
                 stage = serverSnap.stage,
                 startedAt = startedAt,
                 updatedAt = serverSnap.updatedAt ?: System.currentTimeMillis(),
                 fen = serverSnap.fen,
                 currentSan = currentSan,
-                currentClass = null, // Классификация вычисляется после получения всех оценок
+                currentClass = currentClass,  // ✅ Передаем классификацию!
                 currentUci = serverSnap.currentUci,
-                evalCp = null, // Сервер не передает оценки в прогрессе
-                evalMate = null
+                evalCp = serverSnap.evalCp,
+                evalMate = serverSnap.evalMate
             )
 
             onProgress(enrichedSnap)
@@ -105,10 +132,6 @@ class LocalGameAnalyzer(
 
         Log.d(TAG, "✓ Received ${positions.size} evaluated positions from engine")
 
-        // ========================================
-        // Обработка и классификация ходов
-        // ========================================
-
         notify(progressId, total, total, "postprocess", startedAt, onProgress, null, null, null, null, null, null, null)
 
         // Конвертируем позиции в PositionEval
@@ -118,7 +141,6 @@ class LocalGameAnalyzer(
         val positionEvals: List<PositionEval> = positions.mapIndexed { idx, pos ->
             val currentFen = allFens[idx]
             if (isLocalEngine) {
-                // Локальный движок - нормализуем
                 normalizeToWhitePOV(
                     fen = currentFen,
                     pos = pos,
@@ -126,7 +148,6 @@ class LocalGameAnalyzer(
                     isLast = idx == positions.lastIndex
                 )
             } else {
-                // Серверный движок - просто конвертируем (уже нормализовано)
                 convertToPositionEval(
                     fen = currentFen,
                     pos = pos,
@@ -213,7 +234,7 @@ class LocalGameAnalyzer(
 
         val topLine = posAfter.lines.firstOrNull()
 
-        // Нормализуем к перспективе белых (+ = белые выигрывают, - = чёрные выигрывают)
+        // ✅ ИСПРАВЛЕНИЕ #5: Правильная нормализация оценок с учетом мата
         val cpAfter = if (whiteToPlayAfter) topLine?.cp else topLine?.cp?.let { -it }
         val mateAfter = topLine?.mate?.let { m ->
             when {
@@ -425,8 +446,6 @@ class LocalGameAnalyzer(
         }
     }
 
-    // ====== ДОПОЛНИТЕЛЬНЫЕ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======
-
     private fun sideToMoveIsWhite(fen: String): Boolean =
         fen.split(" ").getOrNull(1) == "w"
 
@@ -459,9 +478,9 @@ class LocalGameAnalyzer(
     }
 
     /**
+     * ✅ ИСПРАВЛЕНИЕ #5: Правильная обработка mate: 0 для матовых позиций
      * Нормализует весь PositionDTO в белую перспективу по КОНКРЕТНОМУ FEN позиции:
      * если ход чёрных — инвертируем знаки у cp и mate для всех линий.
-     * КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: правильная обработка mate: 0
      * Используется ТОЛЬКО для локального движка.
      */
     private fun normalizeToWhitePOV(

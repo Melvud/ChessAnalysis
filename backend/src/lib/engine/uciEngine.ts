@@ -1,8 +1,4 @@
 // src/lib/engine/uciEngine.ts
-// Реализует UCI-движок через нативный бинарник Stockfish.
-// В отличие от браузерной версии Chesskit, здесь нет Web Worker,
-// поэтому мы напрямую читаем stdout процесса, накапливаем сообщения
-// и затем используем parseEvaluationResults для разбора оценок и bestmove.
 
 import type { EngineName } from "@/types/enums";
 import type {
