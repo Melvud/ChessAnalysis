@@ -250,42 +250,13 @@ fun GameReportScreen(
     val updatedLines = remember { mutableStateMapOf<Int, List<LineEval>>() }
 
     // ИНИЦИАЛИЗАЦИЯ: Заполняем updatedLines из report при первом запуске
-    // КРИТИЧНО: Нормализуем ВСЕ линии к POV белых для обеспечения согласованности
     LaunchedEffect(Unit) {
         report.positions.forEachIndexed { index, posEval ->
             if (posEval.lines.isNotEmpty()) {
-                // ✅ ИСПРАВЛЕНИЕ: Всегда нормализуем линии к POV белых
-                // Это гарантирует, что оценки не будут скакать между +2 и -2
-                val fen = posEval.fen
-                val whiteToPlay = fen.split(" ").getOrNull(1) == "w"
-
-                val normalizedLines = posEval.lines.map { line ->
-                    // Если ход белых - оценки уже в правильной перспективе
-                    // Если ход черных - инвертируем оценки
-                    val normalizedCp = if (whiteToPlay) line.cp else line.cp?.let { -it }
-                    val normalizedMate = line.mate?.let { m ->
-                        when {
-                            m == 0 -> if (whiteToPlay) -1 else 1
-                            whiteToPlay -> m
-                            else -> -m
-                        }
-                    }
-
-                    line.copy(
-                        cp = normalizedCp,
-                        mate = normalizedMate
-                    )
-                }
-
-                updatedLines[index] = normalizedLines
-
-                // Логируем для проверки
-                if (index < 5 || index % 10 == 0) {
-                    Log.d(TAG, "✅ Position $index: whiteToPlay=$whiteToPlay, BEST cp=${normalizedLines.firstOrNull()?.cp}, mate=${normalizedLines.firstOrNull()?.mate}")
-                }
+                updatedLines[index] = posEval.lines
             }
         }
-        Log.d(TAG, "✅ Initialized ${updatedLines.size} positions from report with WHITE POV normalization")
+        Log.d(TAG, "✅ Initialized ${updatedLines.size} positions from report")
     }
 
     // ИСПРАВЛЕНИЕ: Стабильное отображение линий без мерцания
@@ -338,16 +309,15 @@ fun GameReportScreen(
         }
     }
 
-    // ИСПРАВЛЕНО: НЕ запускаем автоматический анализ при смене позиции
-    // Анализ запускается только вручную или при первой загрузке
-    LaunchedEffect(currentPlyIndex, variationActive) {
+    // ДИНАМИЧЕСКАЯ ГЛУБИНА: Автоматическое углубление анализа от 12 до 18
+    LaunchedEffect(currentPlyIndex, variationActive, positionSettings[currentPlyIndex], analysisVersion) {
         if (variationActive) return@LaunchedEffect
 
         val positionFen = report.positions.getOrNull(currentPlyIndex)?.fen ?: return@LaunchedEffect
 
         // ИСПРАВЛЕНО: СНАЧАЛА проверяем updatedLines, затем report
         // Это гарантирует, что мы используем уже проанализированные данные
-        val currentLines = updatedLines[currentPlyIndex]
+        val currentLines = updatedLines[currentPlyIndex] 
             ?: report.positions.getOrNull(currentPlyIndex)?.lines?.also { reportLines ->
                 // Если берем из report и там есть линии, сохраняем их в updatedLines
                 if (reportLines.isNotEmpty()) {
@@ -358,10 +328,83 @@ fun GameReportScreen(
 
         val currentDepthValue = currentLines.firstOrNull()?.depth ?: 12
 
-        // Устанавливаем текущую глубину для отображения
+        // Проверяем, есть ли сохранённая настройка глубины для этой позиции
+        val savedDepth = positionSettings[currentPlyIndex]?.first
+        val targetDepth = savedDepth ?: 18 // По умолчанию углубляем до 18
+
+        // Устанавливаем начальную глубину
         currentDepth = currentDepthValue
 
-        Log.d(TAG, "✅ Position $currentPlyIndex loaded with depth $currentDepthValue (NO auto-deepening)")
+        // Если целевая глубина достигнута - выходим
+        if (currentDepthValue >= targetDepth) {
+            Log.d(TAG, "✅ Position $currentPlyIndex already analyzed to depth $currentDepthValue (target: $targetDepth)")
+            return@LaunchedEffect
+        }
+
+        Log.d(TAG, "🔄 Starting incremental analysis from depth $currentDepthValue to $targetDepth for ply $currentPlyIndex")
+        isAnalysisRunning = true
+
+        try {
+            // Инкрементальный анализ: от currentDepth+1 до targetDepth
+            for (depth in (currentDepthValue + 1)..targetDepth) {
+                if (!isActive) break
+
+                Log.d(TAG, "🔍 Analyzing depth $depth for ply $currentPlyIndex")
+
+                // Обновляем глубину в реальном времени
+                currentDepth = depth
+
+                // ИСПРАВЛЕНО: Не используем collectedLines - берем результат напрямую из функции
+                var finalLines: List<EngineClient.LineDTO> = emptyList()
+
+                evaluateFenDetailedStreaming(
+                    fen = positionFen,
+                    depth = depth,
+                    multiPv = viewSettings.numberOfLines.coerceAtLeast(1),
+                    onUpdate = { linesList: List<EngineClient.LineDTO> ->
+                        // Сохраняем только финальный результат с правильной глубиной
+                        if (linesList.isNotEmpty() && linesList.first().depth == depth) {
+                            finalLines = linesList
+                        }
+                    }
+                )
+
+                // Используем finalLines только если они не пустые и имеют правильную глубину
+                if (finalLines.isEmpty()) {
+                    Log.w(TAG, "⚠️ No lines received for depth $depth at position $currentPlyIndex")
+                    continue
+                }
+
+                // Нормализуем к точке зрения белых
+                val normalizedLines = normalizeLinesToWhitePOV(finalLines, positionFen)
+
+                // Конвертируем в LineEval и обновляем позицию
+                val lineEvals = normalizedLines.map { dto: EngineClient.LineDTO ->
+                    LineEval(
+                        pv = dto.pv,
+                        cp = dto.cp,
+                        mate = dto.mate,
+                        best = dto.pv.firstOrNull(),
+                        depth = dto.depth
+                    )
+                }
+
+                // КРИТИЧНО: Обновляем только если lineEvals не пустой И имеет правильную глубину
+                if (lineEvals.isNotEmpty() && lineEvals.first().depth == depth) {
+                    updatedLines[currentPlyIndex] = lineEvals
+                    Log.d(TAG, "✅ Updated position $currentPlyIndex to depth $depth with ${lineEvals.size} lines, BEST cp=${lineEvals.firstOrNull()?.cp}")
+                }
+            }
+
+            Log.d(TAG, "✅ Completed incremental analysis to depth $targetDepth for position $currentPlyIndex")
+        } catch (e: CancellationException) {
+            Log.d(TAG, "⚠️ Analysis cancelled for position $currentPlyIndex at depth $currentDepth")
+            // НЕ выбрасываем исключение - сохраняем прогресс
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error during incremental analysis for position $currentPlyIndex", e)
+        } finally {
+            isAnalysisRunning = false
+        }
     }
 
     LaunchedEffect(report) {
