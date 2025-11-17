@@ -200,4 +200,5 @@
     <string name="depth_description">La profundidad del análisis aumenta automáticamente desde el valor seleccionado hasta 18. Mayor profundidad significa evaluación más precisa pero cálculo más lento.</string>
     <string name="display_settings">Display Settings</string>
     <string name="show_best_move_arrow">Show Best Move Arrow</string>
+    <string name="loading_error">loading_error</string>
 </resources>

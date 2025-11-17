@@ -58,30 +58,27 @@ class LocalGameAnalyzer(
 
         notify(progressId, 0, total, "evaluating", startedAt, onProgress, null, null, null, null, null, null, null)
 
-        // ✅ ИСПРАВЛЕНИЕ #2: Передаем классификацию в локальном режиме для отображения в реальном времени
+        // ✅ ИСПРАВЛЕНИЕ: Передаем классификацию в локальном режиме для отображения в реальном времени
         val batchResult = EngineClient.evaluatePositionsBatchWithProgress(
             fens = allFens,
             uciMoves = uciMoves,
             depth = depth,
             multiPv = multiPv
         ) { serverSnap ->
-            // В локальном режиме передаем классификацию и оценки в реальном времени
             val currentIdx = serverSnap.done - 1
             val currentSan = if (currentIdx >= 0 && currentIdx < sanMoves.size) {
                 sanMoves[currentIdx]
             } else null
 
-            // ✅ ИСПРАВЛЕНИЕ #2: В локальном режиме сразу вычисляем классификацию
+            // ✅ В локальном режиме сразу вычисляем классификацию
             val currentClass = if (EngineClient.engineMode.value == EngineClient.EngineMode.LOCAL
                 && currentIdx > 0
                 && currentIdx <= serverSnap.done) {
-                // Используем временную классификацию на основе cp/mate
                 val evalCp = serverSnap.evalCp
                 val evalMate = serverSnap.evalMate
 
                 when {
                     evalMate != null && evalMate != 0 -> {
-                        // Мат - это либо отличный ход, либо промах
                         if ((evalMate > 0 && currentIdx % 2 == 1) || (evalMate < 0 && currentIdx % 2 == 0)) {
                             "BEST"
                         } else {
@@ -89,7 +86,6 @@ class LocalGameAnalyzer(
                         }
                     }
                     evalCp != null -> {
-                        // Простая классификация на основе изменения оценки
                         when {
                             evalCp >= 100 -> "BEST"
                             evalCp >= 50 -> "EXCELLENT"
@@ -114,7 +110,7 @@ class LocalGameAnalyzer(
                 updatedAt = serverSnap.updatedAt ?: System.currentTimeMillis(),
                 fen = serverSnap.fen,
                 currentSan = currentSan,
-                currentClass = currentClass,  // ✅ Передаем классификацию!
+                currentClass = currentClass,
                 currentUci = serverSnap.currentUci,
                 evalCp = serverSnap.evalCp,
                 evalMate = serverSnap.evalMate
@@ -132,14 +128,25 @@ class LocalGameAnalyzer(
 
         Log.d(TAG, "✓ Received ${positions.size} evaluated positions from engine")
 
+        // 🔍 ОТЛАДКА: Логируем первые 3 позиции чтобы проверить данные
+        positions.take(3).forEachIndexed { idx, pos ->
+            val fen = allFens[idx]
+            val whiteToMove = sideToMoveIsWhite(fen)
+            val topLine = pos.lines.firstOrNull()
+            Log.d(TAG, "📊 Position $idx: whiteToMove=$whiteToMove, cp=${topLine?.cp}, mate=${topLine?.mate}, fen=${fen.take(30)}...")
+        }
+
         notify(progressId, total, total, "postprocess", startedAt, onProgress, null, null, null, null, null, null, null)
 
+        // ✅ КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Определяем режим работы
+        val isLocalEngine = EngineClient.engineMode.value == EngineClient.EngineMode.LOCAL
+
         // Конвертируем позиции в PositionEval
-        // ВАЖНО: сервер УЖЕ нормализовал оценки к белой перспективе
-        // Локальный движок возвращает сырые данные Stockfish, которые нужно нормализовать
-        val isLocalEngine = batchResult.settings?.engine == "stockfish-local"
         val positionEvals: List<PositionEval> = positions.mapIndexed { idx, pos ->
             val currentFen = allFens[idx]
+
+            // ✅ Нормализация ТОЛЬКО для локального движка!
+            // Серверные данные УЖЕ нормализованы - просто конвертируем
             if (isLocalEngine) {
                 normalizeToWhitePOV(
                     fen = currentFen,
@@ -148,6 +155,7 @@ class LocalGameAnalyzer(
                     isLast = idx == positions.lastIndex
                 )
             } else {
+                // ✅ Серверные данные УЖЕ нормализованы - просто конвертируем
                 convertToPositionEval(
                     fen = currentFen,
                     pos = pos,
@@ -155,6 +163,12 @@ class LocalGameAnalyzer(
                     isLast = idx == positions.lastIndex
                 )
             }
+        }
+
+        // 🔍 ОТЛАДКА: Логируем нормализованные данные
+        positionEvals.take(3).forEachIndexed { idx, pos ->
+            val topLine = pos.lines.firstOrNull()
+            Log.d(TAG, "📈 Normalized $idx: cp=${topLine?.cp}, mate=${topLine?.mate}")
         }
 
         // ACPL calculation
@@ -229,12 +243,11 @@ class LocalGameAnalyzer(
         val posBefore = EngineClient.evaluateFenDetailed(beforeFen, depth, multiPv, skillLevel)
         val posAfter = EngineClient.evaluateFenDetailed(afterFen, depth, multiPv, skillLevel)
 
-        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Stockfish дает оценку со стороны того, кто ходит
+        // ✅ КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Правильная нормализация
         val whiteToPlayAfter = afterFen.split(" ").getOrNull(1) == "w"
-
         val topLine = posAfter.lines.firstOrNull()
 
-        // ✅ ИСПРАВЛЕНИЕ #5: Правильная нормализация оценок с учетом мата
+        // ✅ Нормализация оценок с учетом мата
         val cpAfter = if (whiteToPlayAfter) topLine?.cp else topLine?.cp?.let { -it }
         val mateAfter = topLine?.mate?.let { m ->
             when {
@@ -450,8 +463,8 @@ class LocalGameAnalyzer(
         fen.split(" ").getOrNull(1) == "w"
 
     /**
-     * Конвертирует PositionDTO в PositionEval без нормализации.
-     * Используется когда данные приходят с сервера (уже нормализованы).
+     * ✅ Конвертирует PositionDTO в PositionEval БЕЗ нормализации.
+     * Используется когда данные приходят с СЕРВЕРА (уже нормализованы).
      */
     private fun convertToPositionEval(
         fen: String,
@@ -462,8 +475,8 @@ class LocalGameAnalyzer(
         val linesEval = pos.lines.map { line ->
             LineEval(
                 pv = line.pv,
-                cp = line.cp,
-                mate = line.mate,
+                cp = line.cp,  // ✅ Уже нормализовано на сервере
+                mate = line.mate,  // ✅ Уже нормализовано на сервере
                 depth = line.depth,
                 best = if (!isLast) pos.bestMove ?: line.pv.firstOrNull() else null
             )
@@ -478,10 +491,10 @@ class LocalGameAnalyzer(
     }
 
     /**
-     * ✅ ИСПРАВЛЕНИЕ #5: Правильная обработка mate: 0 для матовых позиций
+     * ✅ Правильная обработка mate: 0 для матовых позиций
      * Нормализует весь PositionDTO в белую перспективу по КОНКРЕТНОМУ FEN позиции:
      * если ход чёрных — инвертируем знаки у cp и mate для всех линий.
-     * Используется ТОЛЬКО для локального движка.
+     * Используется ТОЛЬКО для ЛОКАЛЬНОГО движка.
      */
     private fun normalizeToWhitePOV(
         fen: String,
@@ -490,6 +503,12 @@ class LocalGameAnalyzer(
         isLast: Boolean
     ): PositionEval {
         val whiteToPlay = sideToMoveIsWhite(fen)
+
+        // 🔍 DEBUG: Логируем входные данные
+        val firstLine = pos.lines.firstOrNull()
+        if (idx <= 3 || (idx >= pos.lines.size - 3)) {  // Логируем первые и последние 3 позиции
+            Log.d(TAG, "📊 Normalize pos[$idx]: whiteToPlay=$whiteToPlay, RAW cp=${firstLine?.cp}, mate=${firstLine?.mate}")
+        }
 
         val linesEval = pos.lines.map { line ->
             val cp = line.cp?.let { if (!whiteToPlay) -it else it }
@@ -502,6 +521,12 @@ class LocalGameAnalyzer(
                     else -> m  // Перспектива белых без изменений
                 }
             }
+
+            // 🔍 DEBUG: Логируем нормализованные данные
+            if (idx <= 3 || (idx >= pos.lines.size - 3)) {
+                Log.d(TAG, "   → NORMALIZED cp=$cp, mate=$mate")
+            }
+
             LineEval(
                 pv = line.pv,
                 cp = cp,

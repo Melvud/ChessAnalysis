@@ -306,10 +306,6 @@ object EngineClient {
         }
     }
 
-    /**
-     * ОБНОВЛЕНО: Оценка всех позиций с ПРОГРЕССОМ и FEN для мини-доски
-     * Использует endpoint /api/v1/evaluate/positions
-     */
     suspend fun evaluatePositionsBatchWithProgress(
         fens: List<String>,
         uciMoves: List<String> = emptyList(),
@@ -338,30 +334,27 @@ object EngineClient {
                     .header("User-Agent", UA)
                     .build()
 
-                // Запускаем polling прогресса в фоне
                 val pollingJob = startProgressPolling(progressId, this) { serverProgress ->
-                    // Сервер передает только FEN и currentUci для мини-доски
                     val snapshot = ProgressSnapshot(
                         id = serverProgress.id,
                         total = serverProgress.total,
                         done = serverProgress.done,
                         percent = serverProgress.percent,
-                        etaMs = null, // Сервер больше не вычисляет ETA
+                        etaMs = null,
                         stage = serverProgress.stage,
                         startedAt = serverProgress.startedAt,
                         updatedAt = serverProgress.updatedAt,
                         fen = serverProgress.fen,
-                        currentSan = null, // SAN добавляется в LocalGameAnalyzer
-                        currentClass = null, // Классификация вычисляется на клиенте
+                        currentSan = null,
+                        currentClass = null,
                         currentUci = serverProgress.currentUci,
-                        evalCp = null, // Оценки приходят только в финальном результате
+                        evalCp = null,
                         evalMate = null
                     )
                     onProgress(snapshot)
                 }
 
                 try {
-                    // Отправляем запрос
                     val response = client.newCall(request).execute()
                     val responseBody = response.body?.string()
                         ?: throw Exception("Empty response from server")
@@ -372,10 +365,8 @@ object EngineClient {
 
                     val result = json.decodeFromString<EvaluatePositionsResponse>(responseBody)
 
-                    // Останавливаем polling
                     pollingJob.cancel()
 
-                    // Отправляем финальный прогресс
                     onProgress(ProgressSnapshot(
                         id = progressId,
                         total = fens.size,
@@ -386,6 +377,8 @@ object EngineClient {
                         updatedAt = System.currentTimeMillis()
                     ))
 
+                    // ✅ КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Сервер УЖЕ вернул нормализованные данные!
+                    // НЕ нормализуем повторно - просто возвращаем как есть
                     result
                 } catch (e: Exception) {
                     pollingJob.cancel()
@@ -399,7 +392,6 @@ object EngineClient {
                 val positions = mutableListOf<PositionDTO>()
                 val startTime = System.currentTimeMillis()
 
-                // Для локального движка - последовательная оценка с прогрессом
                 fens.forEachIndexed { index, fen ->
                     val pos = LocalEngine.evaluateFenDetailedLocal(fen, depth, multiPv, null)
                     positions.add(pos)
@@ -411,18 +403,16 @@ object EngineClient {
                         ((fens.size - done) * elapsed / done)
                     } else 0L
 
-                    // ✅ ИСПРАВЛЕНИЕ: Передаем НОРМАЛИЗОВАННЫЕ оценки для корректного отображения
-                    // Stockfish дает оценки с точки зрения того, кто ходит
-                    // Нужно нормализовать к белой перспективе
+                    // ✅ Нормализация для ЛОКАЛЬНОГО движка (он возвращает сырые данные Stockfish)
                     val whiteToPlay = fen.split(" ").getOrNull(1) == "w"
                     val topLine = pos.lines.firstOrNull()
                     val normalizedCp = topLine?.cp?.let { if (whiteToPlay) it else -it }
                     val normalizedMate = topLine?.mate?.let { m ->
                         when {
-                            m == 0 && !whiteToPlay -> 1  // Чёрные заматованы → белые выиграли
-                            m == 0 && whiteToPlay -> -1  // Белые заматованы → чёрные выиграли
-                            !whiteToPlay -> -m           // Инвертируем для черных
-                            else -> m                    // Оставляем как есть для белых
+                            m == 0 && !whiteToPlay -> 1
+                            m == 0 && whiteToPlay -> -1
+                            !whiteToPlay -> -m
+                            else -> m
                         }
                     }
 
@@ -437,8 +427,8 @@ object EngineClient {
                         etaMs = eta,
                         fen = fen,
                         currentUci = uciMoves.getOrNull(index),
-                        evalCp = normalizedCp,  // ✅ Нормализованная оценка
-                        evalMate = normalizedMate  // ✅ Нормализованный мат
+                        evalCp = normalizedCp,
+                        evalMate = normalizedMate
                     ))
                 }
 
