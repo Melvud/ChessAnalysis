@@ -249,6 +249,9 @@ fun GameReportScreen(
     // Хранилище для динамически обновлённых линий (ключ = plyIndex)
     val updatedLines = remember { mutableStateMapOf<Int, List<LineEval>>() }
 
+    // ✅ ИСПРАВЛЕНИЕ: Добавляем триггер для принудительного обновления UI
+    var linesUpdateTrigger by remember { mutableStateOf(0) }
+
     // ИНИЦИАЛИЗАЦИЯ: Заполняем updatedLines из report при первом запуске
     LaunchedEffect(Unit) {
         report.positions.forEachIndexed { index, posEval ->
@@ -259,33 +262,38 @@ fun GameReportScreen(
         Log.d(TAG, "✅ Initialized ${updatedLines.size} positions from report")
     }
 
-    // ИСПРАВЛЕНИЕ: Стабильное отображение линий без мерцания
-    // Линии сортируются и кешируются, обновляются только при реальных изменениях
-    val displayedLines = remember(currentPlyIndex, variationActive, viewSettings.numberOfLines, updatedLines[currentPlyIndex]) {
-        if (variationActive) {
-            emptyList()
-        } else {
-            // КРИТИЧНО: Всегда берем из updatedLines (уже заполненного из report)
-            val lines = updatedLines[currentPlyIndex] ?: emptyList()
+    // ✅ ИСПРАВЛЕНИЕ: Используем derivedStateOf для автоматического обновления при изменении updatedLines
+    val displayedLines by remember {
+        derivedStateOf {
+            if (variationActive) {
+                emptyList()
+            } else {
+                // Принудительно читаем linesUpdateTrigger для триггера recomposition
+                @Suppress("UNUSED_EXPRESSION")
+                linesUpdateTrigger
 
-            // КРИТИЧНО: Сортировка - лучшая линия ВСЕГДА первая!
-            val sortedLines = lines.sortedByDescending { line ->
-                when {
-                    line.mate != null && line.mate!! > 0 -> 100000.0 + line.mate!!
-                    line.mate != null && line.mate!! < 0 -> -100000.0 + line.mate!!
-                    line.cp != null -> line.cp!!.toDouble()
-                    else -> 0.0
+                // КРИТИЧНО: Всегда берем из updatedLines (уже заполненного из report)
+                val lines = updatedLines[currentPlyIndex] ?: emptyList()
+
+                // КРИТИЧНО: Сортировка - лучшая линия ВСЕГДА первая!
+                val sortedLines = lines.sortedByDescending { line ->
+                    when {
+                        line.mate != null && line.mate!! > 0 -> 100000.0 + line.mate!!
+                        line.mate != null && line.mate!! < 0 -> -100000.0 + line.mate!!
+                        line.cp != null -> line.cp!!.toDouble()
+                        else -> 0.0
+                    }
                 }
+
+                val limitedLines = sortedLines.take(viewSettings.numberOfLines.coerceAtLeast(1))
+
+                // Логируем только если есть изменения
+                if (limitedLines.isNotEmpty()) {
+                    Log.d(TAG, "✅ STABLE: Displayed ${limitedLines.size} lines for ply $currentPlyIndex, BEST line cp=${limitedLines.firstOrNull()?.cp}, mate=${limitedLines.firstOrNull()?.mate}, depth=${limitedLines.firstOrNull()?.depth}")
+                }
+
+                limitedLines
             }
-
-            val limitedLines = sortedLines.take(viewSettings.numberOfLines.coerceAtLeast(1))
-
-            // Логируем только если есть изменения
-            if (limitedLines.isNotEmpty()) {
-                Log.d(TAG, "✅ STABLE: Displayed ${limitedLines.size} lines for ply $currentPlyIndex, BEST line cp=${limitedLines.firstOrNull()?.cp}, mate=${limitedLines.firstOrNull()?.mate}, depth=${limitedLines.firstOrNull()?.depth}")
-            }
-
-            limitedLines
         }
     }
 
@@ -372,6 +380,9 @@ fun GameReportScreen(
 
                         // ✅ ОБНОВЛЯЕМ UI СРАЗУ! Не ждем завершения глубины!
                         updatedLines[currentPlyIndex] = lineEvals
+
+                        // ✅ КРИТИЧНО: Триггерим recomposition через изменение триггера
+                        linesUpdateTrigger++
 
                         Log.d(TAG, "📊 REAL-TIME: Position $currentPlyIndex updated to depth $receivedDepth, ${lineEvals.size} lines, BEST cp=${lineEvals.firstOrNull()?.cp}")
                     }
