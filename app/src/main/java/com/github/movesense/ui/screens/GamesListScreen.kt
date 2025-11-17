@@ -554,12 +554,18 @@ fun GamesListScreen(
         }
     }
 
-    // Анимация ходов в серверном режиме
+    // Анимация ходов в серверном режиме - УСКОРЕННАЯ!
     LaunchedEffect(showAnalysis, isServerMode, allGameMoves) {
         if (!showAnalysis || !isServerMode || allGameMoves.isEmpty()) return@LaunchedEffect
 
-        Log.d(TAG, "Starting server mode animation with ${allGameMoves.size} moves")
+        Log.d(TAG, "🚀 Starting FAST server mode animation with ${allGameMoves.size} moves")
         animatedMoveIndex = 0
+
+        // ✅ КРИТИЧНО: Показываем первую позицию МГНОВЕННО
+        val (firstFen, firstUci, _) = allGameMoves[0]
+        liveFen = firstFen
+        liveUciMove = null
+        currentPlyForEval = 0
 
         while (showAnalysis && animatedMoveIndex < allGameMoves.size) {
             // ✅ ИСПРАВЛЕНИЕ #1: Прерываем анимацию если анализ завершен
@@ -587,7 +593,8 @@ fun GamesListScreen(
             Log.d(TAG, "Animated move $animatedMoveIndex: $san")
             animatedMoveIndex++
 
-            delay(500)
+            // ✅ КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Уменьшаем задержку с 500ms до 150ms!
+            delay(150)
         }
     }
 
