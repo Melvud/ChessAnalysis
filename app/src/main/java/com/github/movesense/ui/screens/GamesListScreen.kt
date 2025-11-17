@@ -757,10 +757,17 @@ fun GamesListScreen(
                                                 // ✅ ИСПРАВЛЕНИЕ: Сразу показываем индикатор загрузки
                                                 showAnalysis = true
                                                 try {
-                                                    val fullPgn = com.github.movesense.GameLoaders
-                                                        .ensureFullPgn(game)
-                                                        .ifBlank { game.pgn.orEmpty() }
+                                                    Log.d(TAG, "📝 Loading game: ${game.white} vs ${game.black} from ${game.site}")
+
+                                                    // Загружаем полный PGN с таймаутом
+                                                    val fullPgn = withContext(Dispatchers.IO) {
+                                                        withTimeout(15000L) { // 15 секунд таймаут
+                                                            com.github.movesense.GameLoaders.ensureFullPgn(game)
+                                                        }
+                                                    }.ifBlank { game.pgn.orEmpty() }
+
                                                     if (fullPgn.isBlank()) {
+                                                        Log.e(TAG, "❌ PGN is empty for game")
                                                         showAnalysis = false
                                                         Toast.makeText(
                                                             context,
@@ -769,22 +776,39 @@ fun GamesListScreen(
                                                         ).show()
                                                         return@launch
                                                     }
+
+                                                    Log.d(TAG, "✓ PGN loaded successfully, length: ${fullPgn.length}")
+
+                                                    // Сохраняем полный PGN в БД если это внешняя партия
                                                     if (game.site == Provider.LICHESS || game.site == Provider.CHESSCOM) {
                                                         repo.updateExternalPgn(game.site, game, fullPgn)
                                                     }
+
+                                                    // Проверяем кэш
                                                     val cached = repo.getCachedReport(fullPgn)
                                                     if (cached != null) {
+                                                        Log.d(TAG, "✓ Found cached analysis")
                                                         showAnalysis = false
                                                         onOpenReport(cached)
                                                     } else {
-                                                        // showAnalysis уже true, startAnalysis продолжит
+                                                        // Запускаем новый анализ
+                                                        Log.d(TAG, "🔄 Starting new analysis...")
                                                         startAnalysis(fullPgn, depth = 12, multiPv = 3)
                                                     }
-                                                } catch (e: Exception) {
+                                                } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                                                    Log.e(TAG, "❌ Timeout loading PGN: ${e.message}", e)
                                                     showAnalysis = false
                                                     Toast.makeText(
                                                         context,
-                                                        context.getString(R.string.loading_error, e.message ?: ""),
+                                                        "Timeout: Failed to load game data. Please check your connection.",
+                                                        Toast.LENGTH_LONG
+                                                    ).show()
+                                                } catch (e: Exception) {
+                                                    Log.e(TAG, "❌ Error loading game: ${e.message}", e)
+                                                    showAnalysis = false
+                                                    Toast.makeText(
+                                                        context,
+                                                        context.getString(R.string.loading_error, e.message ?: "Unknown error"),
                                                         Toast.LENGTH_LONG
                                                     ).show()
                                                 }

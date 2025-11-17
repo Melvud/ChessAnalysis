@@ -151,15 +151,22 @@ object GameLoaders {
 
     suspend fun ensureFullPgn(header: GameHeader): String = withContext(Dispatchers.IO) {
         val src = header.pgn.orEmpty()
-        if (src.isNotBlank() && hasMoves(src)) return@withContext src
+
+        // Если уже есть PGN с ходами - возвращаем его
+        if (src.isNotBlank() && hasMoves(src)) {
+            Log.d(TAG, "✓ PGN already contains moves, returning as-is")
+            return@withContext src
+        }
 
         val tags = parseTags(src)
         val siteUrl = tags["Site"].orEmpty()
 
+        // Пробуем получить PGN с Lichess
         val lichessId = Regex("""lichess\.org/([a-zA-Z0-9]{8})""").find(siteUrl)?.groupValues?.get(1)
             ?: tags["GameId"]
 
         if (!lichessId.isNullOrBlank()) {
+            Log.d(TAG, "⏳ Fetching Lichess PGN for game $lichessId...")
             val url =
                 "https://lichess.org/game/export/$lichessId?moves=true&tags=true&opening=true&clocks=true&evals=false"
             val req = Request.Builder().url(url).header("User-Agent", UA).build()
@@ -168,8 +175,39 @@ object GameLoaders {
                 Log.d(TAG, "✓ Fetched full PGN with clocks for $lichessId")
                 return@withContext body
             }
+            Log.w(TAG, "⚠ Failed to fetch Lichess PGN for $lichessId")
         }
 
+        // Пробуем получить PGN с Chess.com
+        val chessComUrl = Regex("""chess\.com/(?:live|game|daily)/([a-zA-Z0-9]+)""").find(siteUrl)?.groupValues?.get(1)
+            ?: tags["Link"]?.let { Regex("""chess\.com/(?:live|game|daily)/([a-zA-Z0-9]+)""").find(it)?.groupValues?.get(1) }
+
+        if (!chessComUrl.isNullOrBlank()) {
+            Log.d(TAG, "⏳ Fetching Chess.com PGN for game $chessComUrl...")
+            // Chess.com API для получения одной партии
+            val url = "https://api.chess.com/pub/game/$chessComUrl"
+            val req = Request.Builder().url(url).header("User-Agent", UA).build()
+            runCatching {
+                val body = execWithIpv6SafeClient(req)
+                if (body != null) {
+                    val pgnMatch = Regex(""""pgn"\s*:\s*"((?:\\.|[^"\\])*)"""").find(body)
+                    if (pgnMatch != null) {
+                        val pgn = pgnMatch.groupValues[1].replace("\\n", "\n").replace("\\\"", "\"")
+                        if (hasMoves(pgn)) {
+                            Log.d(TAG, "✓ Fetched Chess.com PGN for $chessComUrl")
+                            return@withContext pgn
+                        }
+                    }
+                }
+            }.onFailure { e ->
+                Log.w(TAG, "⚠ Failed to fetch Chess.com PGN for $chessComUrl: ${e.message}")
+            }
+        }
+
+        // Если ничего не получилось, возвращаем исходный PGN (может быть пустым)
+        if (src.isBlank()) {
+            Log.w(TAG, "⚠ No PGN available for game, returning empty")
+        }
         return@withContext src
     }
 
