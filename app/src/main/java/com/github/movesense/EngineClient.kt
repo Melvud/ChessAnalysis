@@ -232,12 +232,7 @@ object EngineClient {
         val startedAt: Long? = null,
         val updatedAt: Long? = null,
         val fen: String? = null,
-        val currentSan: String? = null,
-        val currentUci: String? = null,
-        val currentClass: String? = null,
-        val evalCp: Int? = null,
-        val evalMate: Int? = null,
-        val etaMs: Long? = null
+        val currentUci: String? = null
     )
 
     /**
@@ -345,22 +340,22 @@ object EngineClient {
 
                 // Запускаем polling прогресса в фоне
                 val pollingJob = startProgressPolling(progressId, this) { serverProgress ->
-                    // КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Передаем FEN для отображения на мини-доске
+                    // Сервер передает только FEN и currentUci для мини-доски
                     val snapshot = ProgressSnapshot(
                         id = serverProgress.id,
                         total = serverProgress.total,
                         done = serverProgress.done,
                         percent = serverProgress.percent,
-                        etaMs = serverProgress.etaMs,
+                        etaMs = null, // Сервер больше не вычисляет ETA
                         stage = serverProgress.stage,
                         startedAt = serverProgress.startedAt,
                         updatedAt = serverProgress.updatedAt,
                         fen = serverProgress.fen,
-                        currentSan = serverProgress.currentSan,
-                        currentClass = serverProgress.currentClass,
+                        currentSan = null, // SAN добавляется в LocalGameAnalyzer
+                        currentClass = null, // Классификация вычисляется на клиенте
                         currentUci = serverProgress.currentUci,
-                        evalCp = serverProgress.evalCp,
-                        evalMate = serverProgress.evalMate
+                        evalCp = null, // Оценки приходят только в финальном результате
+                        evalMate = null
                     )
                     onProgress(snapshot)
                 }

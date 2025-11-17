@@ -475,11 +475,11 @@ fun GamesListScreen(
                     analysisProgress = (snap.percent ?: 0.0).toFloat() / 100f
                     analysisStage = snap.stage
 
-                    // 🔵 Скорость и монотонный ETA
+                    // 🔵 Скорость и монотонный ETA (всегда вычисляется локально)
                     totalPly = snap.total
                     val prevDone = lastTickDone
                     if (snap.done > 0 && snap.total > 0) {
-                        // EMA-оценка скорости (не используется для увеличения, только для возможного уменьшения)
+                        // EMA-оценка скорости
                         if (prevDone != null && snap.done > prevDone) {
                             val dt = (now - (lastTickAtMs ?: now)).coerceAtLeast(1L)
                             val dDone = (snap.done - prevDone).coerceAtLeast(1)
@@ -492,37 +492,26 @@ fun GamesListScreen(
                         val remainingPly = (snap.total - snap.done).coerceAtLeast(0)
 
                         if (etaAnchorStartMs == null || etaInitialMs == null) {
-                            // ⛳️ ПЕРВИЧНАЯ оценка: считаем ОДИН РАЗ и берём консервативную (бОльшую)
+                            // ⛳️ ПЕРВИЧНАЯ оценка: используем среднее время на ход
                             val avgPerMove = ((now - (analysisStartAtMs ?: now)).toDouble() / snap.done.toDouble())
                                 .takeIf { it.isFinite() && it > 0 }
-                            val localRemaining = avgPerMove?.times(remainingPly)?.roundToLong()
-                            val backendRemaining = snap.etaMs
-                            val initial = listOfNotNull(localRemaining, backendRemaining).maxOrNull()
-                                ?: backendRemaining
-                                ?: localRemaining
-                                ?: 0L
+                            val localRemaining = avgPerMove?.times(remainingPly)?.roundToLong() ?: 0L
                             etaAnchorStartMs = now
-                            etaInitialMs = initial
-                            visibleEtaMs = initial
+                            etaInitialMs = localRemaining
+                            visibleEtaMs = localRemaining
                         } else {
-                            // Кандидаты на уменьшение
+                            // Кандидаты на уменьшение (используем EMA)
                             val emaRemaining = emaPerMoveMs?.times(remainingPly)?.roundToLong()
-                            val candidate = listOfNotNull(emaRemaining, snap.etaMs).minOrNull()
-                            if (candidate != null) {
+                            if (emaRemaining != null) {
                                 val currentLeft = max(0L, etaAnchorStartMs!! + etaInitialMs!! - now)
                                 // Разрешаем только уменьшение
-                                if (candidate < currentLeft) {
+                                if (emaRemaining < currentLeft) {
                                     etaAnchorStartMs = now
-                                    etaInitialMs = candidate
-                                    visibleEtaMs = candidate
+                                    etaInitialMs = emaRemaining
+                                    visibleEtaMs = emaRemaining
                                 }
                             }
                         }
-                    } else if (visibleEtaMs == null && snap.etaMs != null) {
-                        // Фолбэк до первого done
-                        etaAnchorStartMs = now
-                        etaInitialMs = snap.etaMs
-                        visibleEtaMs = snap.etaMs
                     }
 
                     // ЛОКАЛЬНЫЙ РЕЖИМ: обновляем доску в реальном времени
@@ -544,8 +533,9 @@ fun GamesListScreen(
                         }
                     }
 
-                    // Обновляем позиции для eval bar
-                    if (newFen != null && (snap.evalCp != null || snap.evalMate != null)) {
+                    // ТОЛЬКО для локального режима: обновляем позиции для eval bar в реальном времени
+                    // В серверном режиме eval bar обновится после получения финального результата
+                    if (!isServerMode && newFen != null && (snap.evalCp != null || snap.evalMate != null)) {
                         val line = LineEval(
                             pv = emptyList(),
                             cp = snap.evalCp,
@@ -566,7 +556,7 @@ fun GamesListScreen(
                             .sortedBy { it.idx }
                             .toList()
 
-                        Log.d(TAG, "📊 Streaming: positions=${livePositions.size}, ply=${currentPlyForEval}, cp=${snap.evalCp}, mate=${snap.evalMate}")
+                        Log.d(TAG, "📊 Local streaming: positions=${livePositions.size}, ply=${currentPlyForEval}, cp=${snap.evalCp}, mate=${snap.evalMate}")
                     }
                 }
 
