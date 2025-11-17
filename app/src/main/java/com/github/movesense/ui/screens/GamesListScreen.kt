@@ -753,22 +753,30 @@ fun GamesListScreen(
                                         isAnalyzing = showAnalysis,
                                         onClick = {
                                             if (showAnalysis) return@CompactGameCard
+
+                                            val currentPgn = game.pgn.orEmpty()
+
+                                            // Проверяем есть ли уже кэшированный анализ - моментально!
+                                            val cachedReport = currentPgn.takeIf { it.isNotBlank() }?.let {
+                                                repo.getCachedReport(it)
+                                            }
+
+                                            if (cachedReport != null) {
+                                                // Есть кэш - открываем сразу без задержек!
+                                                Log.d(TAG, "⚡ Opening cached analysis instantly")
+                                                onOpenReport(cachedReport)
+                                                return@CompactGameCard
+                                            }
+
+                                            // Нет кэша - запускаем анализ
                                             scope.launch {
-                                                // ✅ ИСПРАВЛЕНИЕ: Сразу показываем индикатор загрузки
-                                                showAnalysis = true
                                                 try {
-                                                    Log.d(TAG, "📝 Loading game: ${game.white} vs ${game.black} from ${game.site}")
+                                                    Log.d(TAG, "🎯 Starting analysis for: ${game.white} vs ${game.black}")
 
-                                                    // Загружаем полный PGN с таймаутом
-                                                    val fullPgn = withContext(Dispatchers.IO) {
-                                                        withTimeout(15000L) { // 15 секунд таймаут
-                                                            com.github.movesense.GameLoaders.ensureFullPgn(game)
-                                                        }
-                                                    }.ifBlank { game.pgn.orEmpty() }
+                                                    // Если PGN уже содержит ходы - используем его сразу
+                                                    val pgn = currentPgn.takeIf { it.isNotBlank() } ?: ""
 
-                                                    if (fullPgn.isBlank()) {
-                                                        Log.e(TAG, "❌ PGN is empty for game")
-                                                        showAnalysis = false
+                                                    if (pgn.isBlank()) {
                                                         Toast.makeText(
                                                             context,
                                                             context.getString(R.string.pgn_not_found),
@@ -777,39 +785,17 @@ fun GamesListScreen(
                                                         return@launch
                                                     }
 
-                                                    Log.d(TAG, "✓ PGN loaded successfully, length: ${fullPgn.length}")
+                                                    // Запускаем анализ сразу с имеющимся PGN
+                                                    // showAnalysis будет установлен внутри startAnalysis
+                                                    startAnalysis(pgn, depth = 12, multiPv = 3)
 
-                                                    // Сохраняем полный PGN в БД если это внешняя партия
-                                                    if (game.site == Provider.LICHESS || game.site == Provider.CHESSCOM) {
-                                                        repo.updateExternalPgn(game.site, game, fullPgn)
-                                                    }
-
-                                                    // Проверяем кэш
-                                                    val cached = repo.getCachedReport(fullPgn)
-                                                    if (cached != null) {
-                                                        Log.d(TAG, "✓ Found cached analysis")
-                                                        showAnalysis = false
-                                                        onOpenReport(cached)
-                                                    } else {
-                                                        // Запускаем новый анализ
-                                                        Log.d(TAG, "🔄 Starting new analysis...")
-                                                        startAnalysis(fullPgn, depth = 12, multiPv = 3)
-                                                    }
-                                                } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                                                    Log.e(TAG, "❌ Timeout loading PGN: ${e.message}", e)
-                                                    showAnalysis = false
-                                                    Toast.makeText(
-                                                        context,
-                                                        "Timeout: Failed to load game data. Please check your connection.",
-                                                        Toast.LENGTH_LONG
-                                                    ).show()
                                                 } catch (e: Exception) {
-                                                    Log.e(TAG, "❌ Error loading game: ${e.message}", e)
+                                                    Log.e(TAG, "❌ Error: ${e.message}", e)
                                                     showAnalysis = false
                                                     Toast.makeText(
                                                         context,
-                                                        context.getString(R.string.loading_error, e.message ?: "Unknown error"),
-                                                        Toast.LENGTH_LONG
+                                                        context.getString(R.string.loading_error, e.message ?: ""),
+                                                        Toast.LENGTH_SHORT
                                                     ).show()
                                                 }
                                             }
