@@ -357,10 +357,14 @@ private fun ClassificationTable(report: FullReport) {
 
 @Composable
 private fun EvalSparkline(report: FullReport) {
+    // ✅ ИСПРАВЛЕНИЕ: Оценки уже нормализованы к белой перспективе в LocalGameAnalyzer
+    // cp хранится в центипешках (centipawns), поэтому просто используем их напрямую
     val raw = report.positions.mapNotNull { pos ->
         val l = pos.lines.firstOrNull()
         when {
+            // cp уже нормализован к белой перспективе: положительное = белые выигрывают
             l?.cp != null -> l.cp.toFloat()
+            // mate уже нормализован: положительное = белые дают мат
             l?.mate != null -> if (l.mate!! > 0) 3000f else -3000f
             else -> null
         }

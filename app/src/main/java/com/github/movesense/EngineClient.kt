@@ -995,8 +995,9 @@ object EngineClient {
 
             engineScope.launch {
                 var attempts = 0
-                while (!engineReady.get() && attempts < 100) {  // ✅ 100 * 50ms = 5 секунд вместо 20
-                    delay(50)  // ✅ Более частая проверка
+                // ✅ ИСПРАВЛЕНИЕ: Сократили таймаут до 3 секунд (60 * 50ms) для быстрого старта
+                while (!engineReady.get() && attempts < 60) {
+                    delay(50)  // Проверка каждые 50ms
                     attempts++
                 }
                 if (!engineReady.get()) {
@@ -1049,14 +1050,14 @@ object EngineClient {
             }
         }
 
-        private suspend fun waitForReady(timeoutMs: Long = 5000): Boolean {
+        private suspend fun waitForReady(timeoutMs: Long = 3000): Boolean {
             val startTime = System.currentTimeMillis()
             while (!engineReady.get()) {
                 if (System.currentTimeMillis() - startTime > timeoutMs) {
                     Log.e(LOCAL_TAG, "⚠ Engine not ready after ${timeoutMs}ms")
                     return false
                 }
-                delay(50)  // ✅ Более частая проверка (50ms вместо 100ms)
+                delay(25)  // ✅ Еще более частая проверка (25ms вместо 50ms)
             }
             return true
         }

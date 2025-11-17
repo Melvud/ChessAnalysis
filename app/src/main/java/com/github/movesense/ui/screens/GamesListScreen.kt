@@ -754,23 +754,40 @@ fun GamesListScreen(
                                         onClick = {
                                             if (showAnalysis) return@CompactGameCard
                                             scope.launch {
-                                                val fullPgn = com.github.movesense.GameLoaders
-                                                    .ensureFullPgn(game)
-                                                    .ifBlank { game.pgn.orEmpty() }
-                                                if (fullPgn.isBlank()) {
+                                                // ✅ ИСПРАВЛЕНИЕ: Сразу показываем индикатор загрузки
+                                                showAnalysis = true
+                                                try {
+                                                    val fullPgn = com.github.movesense.GameLoaders
+                                                        .ensureFullPgn(game)
+                                                        .ifBlank { game.pgn.orEmpty() }
+                                                    if (fullPgn.isBlank()) {
+                                                        showAnalysis = false
+                                                        Toast.makeText(
+                                                            context,
+                                                            context.getString(R.string.pgn_not_found),
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                        return@launch
+                                                    }
+                                                    if (game.site == Provider.LICHESS || game.site == Provider.CHESSCOM) {
+                                                        repo.updateExternalPgn(game.site, game, fullPgn)
+                                                    }
+                                                    val cached = repo.getCachedReport(fullPgn)
+                                                    if (cached != null) {
+                                                        showAnalysis = false
+                                                        onOpenReport(cached)
+                                                    } else {
+                                                        // showAnalysis уже true, startAnalysis продолжит
+                                                        startAnalysis(fullPgn, depth = 12, multiPv = 3)
+                                                    }
+                                                } catch (e: Exception) {
+                                                    showAnalysis = false
                                                     Toast.makeText(
                                                         context,
-                                                        context.getString(R.string.pgn_not_found),
-                                                        Toast.LENGTH_SHORT
+                                                        context.getString(R.string.loading_error, e.message ?: ""),
+                                                        Toast.LENGTH_LONG
                                                     ).show()
-                                                    return@launch
                                                 }
-                                                if (game.site == Provider.LICHESS || game.site == Provider.CHESSCOM) {
-                                                    repo.updateExternalPgn(game.site, game, fullPgn)
-                                                }
-                                                val cached = repo.getCachedReport(fullPgn)
-                                                if (cached != null) onOpenReport(cached)
-                                                else startAnalysis(fullPgn, depth = 12, multiPv = 3)
                                             }
                                         },
                                         onLongPress = {
