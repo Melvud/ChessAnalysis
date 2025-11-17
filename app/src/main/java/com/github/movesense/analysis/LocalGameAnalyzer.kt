@@ -49,84 +49,70 @@ class LocalGameAnalyzer(
 
         notify(progressId, 0, total, "preparing", startedAt, onProgress, null, null, null, null, null, null, null)
 
-        // 1) Evaluate all positions (including start)
-        val positions = mutableListOf<EngineClient.PositionDTO>()
+        // ========================================
+        // НОВАЯ ЛОГИКА: batch оценка с прогрессом
+        // ========================================
 
-        // Start position
-        val pos0 = EngineClient.evaluateFenDetailed(startFen, depth, multiPv, null)
-        positions.add(pos0)
+        // Собираем все FEN-ы (стартовая позиция + после каждого хода)
+        val allFens = listOf(startFen) + parsed.map { it.afterFen }
+        val uciMoves = parsed.map { it.uci }
+        val sanMoves = parsed.map { it.san }
+
+        Log.d(TAG, "🚀 Evaluating ${allFens.size} positions in batch mode WITH PROGRESS")
 
         notify(progressId, 0, total, "evaluating", startedAt, onProgress, null, null, null, null, null, null, null)
 
-        // Evaluate each move's resulting position
-        for (i in 0 until total) {
-            val beforeFen = if (i == 0) startFen else parsed[i - 1].afterFen
-            val afterFen = parsed[i].afterFen
-            val san = parsed[i].san
-            val uci = parsed[i].uci
-
-            val posBefore = positions.last()
-            val posAfter = EngineClient.evaluateFenDetailed(afterFen, depth, multiPv, null)
-            positions.add(posAfter)
-
-            // Нормализуем топ-линию для ПОСЛЕ-хода по её FEN
-            val whiteToPlayAfter = sideToMoveIsWhite(afterFen)
-            val topLine = posAfter.lines.firstOrNull()
-
-            // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: правильная обработка мата
-            val evalCp = topLine?.cp?.let { if (!whiteToPlayAfter) -it else it }
-            val evalMate = topLine?.mate?.let { m ->
-                when {
-                    // mate: 0 означает, что сторона ХОД КОТОРОЙ уже заматована
-                    m == 0 && !whiteToPlayAfter -> 1  // Чёрные заматованы → белые выиграли (+M1)
-                    m == 0 && whiteToPlayAfter -> -1  // Белые заматованы → чёрные выиграли (-M1)
-                    !whiteToPlayAfter -> -m  // Обычная инверсия для перспективы чёрных
-                    else -> m  // Перспектива белых без изменений
-                }
-            }
-
-            Log.d(TAG, "Position after move $i: whiteToPlay=$whiteToPlayAfter, raw(cp=${topLine?.cp}, mate=${topLine?.mate}) -> norm(cp=$evalCp, mate=$evalMate)")
-
-            val cls = classifyMoveUsingMoveClassifier(
-                beforeFen = beforeFen,
-                afterFen = afterFen,
-                posBefore = posBefore,
-                posAfter = posAfter,
-                uciMove = uci
-            )
-
-            val doneNow = i + 1
-            val elapsed = System.currentTimeMillis() - startedAt
-            val eta = if (doneNow > 0) {
-                val perMove = elapsed / doneNow.toDouble()
-                ((total - doneNow) * perMove).toLong()
+        // Оцениваем все позиции С ПРОГРЕССОМ
+        val batchResult = EngineClient.evaluatePositionsBatchWithProgress(
+            fens = allFens,
+            uciMoves = uciMoves,
+            depth = depth,
+            multiPv = multiPv
+        ) { serverSnap ->
+            // Сервер отправляет прогресс - конвертируем его и передаем дальше
+            val currentIdx = serverSnap.done - 1
+            val currentSan = if (currentIdx >= 0 && currentIdx < sanMoves.size) {
+                sanMoves[currentIdx]
             } else null
 
-            notify(
+            val enrichedSnap = EngineClient.ProgressSnapshot(
                 id = progressId,
-                done = doneNow,
                 total = total,
-                stage = "evaluating",
+                done = serverSnap.done,
+                percent = serverSnap.percent,
+                etaMs = serverSnap.etaMs,
+                stage = serverSnap.stage,
                 startedAt = startedAt,
-                onProgress = onProgress,
-                etaMs = eta,
-                fen = afterFen,
-                san = san,
-                cls = cls.name,
-                uci = uci,
-                evalCp = evalCp,
-                evalMate = evalMate
+                updatedAt = serverSnap.updatedAt ?: System.currentTimeMillis(),
+                fen = serverSnap.fen,
+                currentSan = currentSan,
+                currentClass = serverSnap.currentClass,
+                currentUci = serverSnap.currentUci,
+                evalCp = serverSnap.evalCp,
+                evalMate = serverSnap.evalMate
             )
+
+            onProgress(enrichedSnap)
+            progressHook(progressId, serverSnap.percent, serverSnap.stage)
         }
 
-        notify(progressId, total, total, "postprocess", startedAt, onProgress, 0L, null, null, null, null, null, null)
+        val positions = batchResult.positions
 
-        // 2) Build PositionEval list с ПРАВИЛЬНОЙ инверсией (индекс позиции = номер полухода)
-        val fens = listOf(startFen) + parsed.map { it.afterFen }
-        val uciMoves = parsed.map { it.uci }
+        if (positions.size != allFens.size) {
+            throw IllegalStateException("Server returned ${positions.size} positions, expected ${allFens.size}")
+        }
 
+        Log.d(TAG, "✓ Received ${positions.size} evaluated positions from engine")
+
+        // ========================================
+        // Обработка и классификация ходов
+        // ========================================
+
+        notify(progressId, total, total, "postprocess", startedAt, onProgress, null, null, null, null, null, null, null)
+
+        // Нормализуем все позиции к белой перспективе
         val positionEvals: List<PositionEval> = positions.mapIndexed { idx, pos ->
-            val currentFen = fens[idx]
+            val currentFen = allFens[idx]
             normalizeToWhitePOV(
                 fen = currentFen,
                 pos = pos,
@@ -135,10 +121,10 @@ class LocalGameAnalyzer(
             )
         }
 
-        // 3) ACPL calculation — ИСПОЛЬЗУЕМ НОРМАЛИЗОВАННЫЕ PositionEval
+        // ACPL calculation
         val acpl = ACPL.calculateACPLFromPositionEvals(positionEvals)
 
-        // 4) Win percentages — приоритет mate над cp внутри WinPercentage
+        // Win percentages
         val winPercents = positionEvals.map { pos ->
             val first = pos.lines.firstOrNull()
             if (first != null && (first.cp != null || first.mate != null)) {
@@ -148,34 +134,34 @@ class LocalGameAnalyzer(
             }
         }
 
-        // 5) Per-move accuracy from win percentages
+        // Per-move accuracy from win percentages
         val movesAccuracy = Accuracy.perMoveAccFromWin(winPercents)
 
-        // 6) Accuracy weights
+        // Accuracy weights
         val weightsAcc = getAccuracyWeights(winPercents)
 
-        // 7) Player accuracy
+        // Player accuracy
         val whiteAcc = computePlayerAccuracy(movesAccuracy, weightsAcc, "white")
         val blackAcc = computePlayerAccuracy(movesAccuracy, weightsAcc, "black")
 
-        // 8) Move classification (по нормализованным позициям)
+        // Move classification
         val classifiedPositions = MoveClassification.getMovesClassification(
             positionEvals,
             uciMoves,
-            fens
+            allFens
         )
 
-        // 9) Build move reports
+        // Build move reports
         val moves = buildMoveReports(
             classifiedPositions,
-            fens,
+            allFens,
             uciMoves,
             winPercents,
             movesAccuracy,
-            parsed.map { it.san }
+            sanMoves
         )
 
-        // 10) Estimated Elo
+        // Estimated Elo
         val tagsHeader = PgnChess.headerFromPgn(pgn)
         val hdr = header ?: tagsHeader
         val est = EstimateElo.computeEstimatedElo(positionEvals, hdr.whiteElo, hdr.blackElo)
@@ -218,100 +204,37 @@ class LocalGameAnalyzer(
             when {
                 m == 0 && whiteToPlayAfter -> -1  // Белые заматованы
                 m == 0 && !whiteToPlayAfter -> 1  // Чёрные заматованы
-                whiteToPlayAfter -> m  // Ход белых: без инверсии
-                else -> -m  // Ход чёрных: инвертируем
+                !whiteToPlayAfter -> -m
+                else -> m
             }
         }
 
         val evalAfter = when {
-            mateAfter != null -> if (mateAfter > 0) 30f else -30f
-            cpAfter != null -> cpAfter.toFloat() / 100f
+            mateAfter != null -> {
+                if (mateAfter > 0) 100f else -100f
+            }
+            cpAfter != null -> cpAfter / 100f
             else -> 0f
         }
 
-        // Нормализуем все линии к перспективе белых
-        val linesAfter = posAfter.lines.map { line ->
-            val normalizedCp = if (whiteToPlayAfter) line.cp else line.cp?.let { -it }
-            val normalizedMate = line.mate?.let { m ->
-                when {
-                    m == 0 && whiteToPlayAfter -> -1
-                    m == 0 && !whiteToPlayAfter -> 1
-                    whiteToPlayAfter -> m
-                    else -> -m
-                }
-            }
-            EngineClient.LineDTO(
-                pv = line.pv,
-                cp = normalizedCp,
-                mate = normalizedMate,
-                depth = line.depth,
-                multiPv = line.multiPv
-            )
-        }
-
-        // Нормализуем позицию ПЕРЕД ходом для классификации
-        val whiteToPlayBefore = beforeFen.split(" ").getOrNull(1) == "w"
-
-        val posEvalBefore = PositionEval(
-            fen = beforeFen,
-            idx = 0,
-            lines = posBefore.lines.map { line ->
-                val cp = if (whiteToPlayBefore) line.cp else line.cp?.let { -it }
-                val mate = line.mate?.let { m ->
-                    when {
-                        m == 0 && whiteToPlayBefore -> -1
-                        m == 0 && !whiteToPlayBefore -> 1
-                        whiteToPlayBefore -> m
-                        else -> -m
-                    }
-                }
-                LineEval(pv = line.pv, cp = cp, mate = mate, depth = line.depth, best = line.pv.firstOrNull())
-            },
-            bestMove = posBefore.bestMove
-        )
-
-        val posEvalAfter = PositionEval(
-            fen = afterFen,
-            idx = 1,
-            lines = posAfter.lines.map { line ->
-                val cp = if (whiteToPlayAfter) line.cp else line.cp?.let { -it }
-                val mate = line.mate?.let { m ->
-                    when {
-                        m == 0 && whiteToPlayAfter -> -1
-                        m == 0 && !whiteToPlayAfter -> 1
-                        whiteToPlayAfter -> m
-                        else -> -m
-                    }
-                }
-                LineEval(pv = line.pv, cp = cp, mate = mate, depth = line.depth, best = null)
-            },
-            bestMove = null
-        )
-
-        val classified = MoveClassification.getMovesClassification(
-            listOf(posEvalBefore, posEvalAfter),
-            listOf(uciMove),
-            listOf(beforeFen, afterFen)
-        )
-
-        val cls = classified.getOrNull(1)?.moveClassification ?: MoveClass.OKAY
+        val classification = classifyMoveUsingMoveClassifier(beforeFen, afterFen, posBefore, posAfter, uciMove)
 
         EngineClient.MoveRealtimeResult(
             evalAfter = evalAfter,
-            moveClass = cls,
+            moveClass = classification,
             bestMove = posBefore.bestMove,
-            lines = linesAfter.take(3)
+            lines = posAfter.lines
         )
     }
 
-    private fun classifyMoveUsingMoveClassifier(
+    private suspend fun classifyMoveUsingMoveClassifier(
         beforeFen: String,
         afterFen: String,
         posBefore: EngineClient.PositionDTO,
         posAfter: EngineClient.PositionDTO,
         uciMove: String
-    ): MoveClass {
-        return try {
+    ): MoveClass = withContext(Dispatchers.IO) {
+        try {
             val whiteToPlayBefore = beforeFen.split(" ").getOrNull(1) == "w"
             val whiteToPlayAfter = afterFen.split(" ").getOrNull(1) == "w"
 

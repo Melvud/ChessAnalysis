@@ -209,6 +209,239 @@ object EngineClient {
         val skillLevel: Int? = null
     )
 
+    @Serializable
+    data class EvaluatePositionsResponse(
+        val positions: List<PositionDTO>,
+        val settings: AnalysisSettings? = null
+    )
+
+    @Serializable
+    data class AnalysisSettings(
+        val engine: String,
+        val depth: Int,
+        val multiPv: Int
+    )
+
+    @Serializable
+    data class ServerProgress(
+        val id: String,
+        val total: Int,
+        val done: Int,
+        val percent: Double? = null,
+        val stage: String? = null,
+        val startedAt: Long? = null,
+        val updatedAt: Long? = null,
+        val fen: String? = null,
+        val currentSan: String? = null,
+        val currentUci: String? = null,
+        val currentClass: String? = null,
+        val evalCp: Int? = null,
+        val evalMate: Int? = null,
+        val etaMs: Long? = null
+    )
+
+    /**
+     * Получение текущего прогресса с сервера
+     */
+    suspend fun fetchProgress(progressId: String): ServerProgress? = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("${ServerConfig.BASE_URL}/api/v1/progress/$progressId")
+                .get()
+                .header("User-Agent", UA)
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string() ?: return@withContext null
+
+            if (!response.isSuccessful) {
+                Log.w(TAG, "Failed to fetch progress: ${response.code}")
+                return@withContext null
+            }
+
+            json.decodeFromString<ServerProgress>(responseBody)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error fetching progress: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Запуск polling прогресса в фоне
+     * Вызывает onProgress с ServerProgress каждые pollIntervalMs
+     */
+    fun startProgressPolling(
+        progressId: String,
+        scope: CoroutineScope,
+        pollIntervalMs: Long = 300L,
+        onProgress: (ServerProgress) -> Unit
+    ): Job {
+        return scope.launch(Dispatchers.IO) {
+            var lastDone = -1
+
+            while (isActive) {
+                try {
+                    val progress = fetchProgress(progressId)
+
+                    if (progress != null) {
+                        // Вызываем callback только если есть изменения
+                        if (progress.done != lastDone || lastDone == -1) {
+                            withContext(Dispatchers.Main) {
+                                onProgress(progress)
+                            }
+                            lastDone = progress.done
+                        }
+
+                        // Если анализ завершен, останавливаем polling
+                        if (progress.stage == "done") {
+                            Log.d(TAG, "✓ Progress polling complete")
+                            break
+                        }
+                    }
+
+                    delay(pollIntervalMs)
+                } catch (e: CancellationException) {
+                    Log.d(TAG, "Progress polling cancelled")
+                    break
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error in progress polling: ${e.message}")
+                    delay(pollIntervalMs)
+                }
+            }
+        }
+    }
+
+    /**
+     * ОБНОВЛЕНО: Оценка всех позиций с ПРОГРЕССОМ и FEN для мини-доски
+     * Использует endpoint /api/v1/evaluate/positions
+     */
+    suspend fun evaluatePositionsBatchWithProgress(
+        fens: List<String>,
+        uciMoves: List<String> = emptyList(),
+        depth: Int = 14,
+        multiPv: Int = 3,
+        onProgress: (ProgressSnapshot) -> Unit = {}
+    ): EvaluatePositionsResponse = withContext(Dispatchers.IO) {
+        when (_engineMode.value) {
+            EngineMode.SERVER -> {
+                Log.d(TAG, "📡 Evaluating ${fens.size} positions via server WITH PROGRESS")
+
+                val progressId = java.util.UUID.randomUUID().toString()
+
+                val reqBody = FensUciRequest(
+                    fens = fens,
+                    uciMoves = uciMoves,
+                    depth = depth,
+                    multiPv = multiPv
+                )
+                val bodyJson = json.encodeToString(reqBody)
+                val body = bodyJson.toRequestBody(JSON_MEDIA)
+
+                val request = Request.Builder()
+                    .url("${ServerConfig.BASE_URL}/api/v1/evaluate/positions?progressId=$progressId")
+                    .post(body)
+                    .header("User-Agent", UA)
+                    .build()
+
+                // Запускаем polling прогресса в фоне
+                val pollingJob = startProgressPolling(progressId, this) { serverProgress ->
+                    // КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Передаем FEN для отображения на мини-доске
+                    val snapshot = ProgressSnapshot(
+                        id = serverProgress.id,
+                        total = serverProgress.total,
+                        done = serverProgress.done,
+                        percent = serverProgress.percent,
+                        etaMs = serverProgress.etaMs,
+                        stage = serverProgress.stage,
+                        startedAt = serverProgress.startedAt,
+                        updatedAt = serverProgress.updatedAt,
+                        fen = serverProgress.fen,
+                        currentSan = serverProgress.currentSan,
+                        currentClass = serverProgress.currentClass,
+                        currentUci = serverProgress.currentUci,
+                        evalCp = serverProgress.evalCp,
+                        evalMate = serverProgress.evalMate
+                    )
+                    onProgress(snapshot)
+                }
+
+                try {
+                    // Отправляем запрос
+                    val response = client.newCall(request).execute()
+                    val responseBody = response.body?.string()
+                        ?: throw Exception("Empty response from server")
+
+                    if (!response.isSuccessful) {
+                        throw Exception("Server error: ${response.code} - $responseBody")
+                    }
+
+                    val result = json.decodeFromString<EvaluatePositionsResponse>(responseBody)
+
+                    // Останавливаем polling
+                    pollingJob.cancel()
+
+                    // Отправляем финальный прогресс
+                    onProgress(ProgressSnapshot(
+                        id = progressId,
+                        total = fens.size,
+                        done = fens.size,
+                        percent = 100.0,
+                        stage = "done",
+                        startedAt = System.currentTimeMillis(),
+                        updatedAt = System.currentTimeMillis()
+                    ))
+
+                    result
+                } catch (e: Exception) {
+                    pollingJob.cancel()
+                    throw e
+                }
+            }
+
+            EngineMode.LOCAL -> {
+                Log.d(TAG, "🔧 Evaluating ${fens.size} positions via local engine")
+
+                val positions = mutableListOf<PositionDTO>()
+                val startTime = System.currentTimeMillis()
+
+                // Для локального движка - последовательная оценка с прогрессом
+                fens.forEachIndexed { index, fen ->
+                    val pos = LocalEngine.evaluateFenDetailedLocal(fen, depth, multiPv, null)
+                    positions.add(pos)
+
+                    val done = index + 1
+                    val percent = (done.toDouble() / fens.size.toDouble()) * 100.0
+                    val elapsed = System.currentTimeMillis() - startTime
+                    val eta = if (done > 0) {
+                        ((fens.size - done) * elapsed / done)
+                    } else 0L
+
+                    onProgress(ProgressSnapshot(
+                        id = "local",
+                        total = fens.size,
+                        done = done,
+                        percent = percent,
+                        stage = "evaluating",
+                        startedAt = startTime,
+                        updatedAt = System.currentTimeMillis(),
+                        etaMs = eta,
+                        fen = fen,
+                        currentUci = uciMoves.getOrNull(index)
+                    ))
+                }
+
+                EvaluatePositionsResponse(
+                    positions = positions,
+                    settings = AnalysisSettings(
+                        engine = "stockfish-local",
+                        depth = depth,
+                        multiPv = multiPv
+                    )
+                )
+            }
+        }
+    }
+
     suspend fun analyzeFen(
         fen: String,
         depth: Int = 14,
@@ -279,15 +512,15 @@ object EngineClient {
         header: GameHeader? = null,
         onProgress: (ProgressSnapshot) -> Unit = {}
     ): FullReport = coroutineScope {
+        // КРИТИЧНО: ПАРСИМ ЧАСЫ ДО НОРМАЛИЗАЦИИ
+        val clockData = parseClockDataFromPgn(pgn)
+        Log.d(TAG, "Parsed clocks BEFORE normalization: white=${clockData.white.size}, black=${clockData.black.size}")
+
         if (engineMode.value == EngineMode.LOCAL) {
             val analyzer = LocalGameAnalyzer { _, percent, stage ->
                 _percent.value = percent
                 _stage.value = stage
             }
-
-            // КРИТИЧНО: ПАРСИМ ЧАСЫ ДО НОРМАЛИЗАЦИИ
-            val clockData = parseClockDataFromPgn(pgn)
-            Log.d(TAG, "Parsed clocks BEFORE normalization: white=${clockData.white.size}, black=${clockData.black.size}")
 
             val report = analyzer.evaluateGameByPgnWithProgress(
                 pgn = pgn,
@@ -301,35 +534,40 @@ object EngineClient {
             return@coroutineScope report.copy(clockData = clockData)
         }
 
-        val progressId = UUID.randomUUID().toString()
-        resetProgress()
-        val poller = launch(Dispatchers.IO) { pollProgress(progressId, onProgress) }
-        try {
-            withContext(Dispatchers.IO) {
-                pingOrThrow()
-                val url = "${ServerConfig.BASE_URL}/api/v1/evaluate/game?progressId=$progressId"
+        // ====== SERVER РЕЖИМ: НОВАЯ АРХИТЕКТУРА ======
+        // Теперь сервер только отдает оценки, анализ делаем на клиенте
 
-                // КРИТИЧНО: ПАРСИМ ЧАСЫ ДО НОРМАЛИЗАЦИИ
-                val clockData = parseClockDataFromPgn(pgn)
-                Log.d(TAG, "Parsed clocks BEFORE normalization: white=${clockData.white.size}, black=${clockData.black.size}")
+        Log.d(TAG, "📡 SERVER MODE: Using new architecture (positions only)")
 
-                val normalized = normalizePgn(pgn)
-                val payload = json.encodeToString(GamePgnRequest(normalized, depth, multiPv, workersNb, header))
-                val req = Request.Builder().url(url).header("Accept", "application/json").header("User-Agent", UA)
-                    .post(payload.toRequestBody(JSON_MEDIA)).build()
-                client.newCall(req).execute().use { resp ->
-                    val body = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) error("HTTP ${resp.code}: ${body.take(300)}")
-                    val report = json.decodeFromString<FullReport>(body)
-
-                    // ДОБАВЛЯЕМ ЧАСЫ В ОТЧЁТ
-                    report.copy(clockData = clockData)
-                }
-            }
-        } finally {
-            poller.cancel()
-            poller.join()
+        // 1. Парсим PGN в FEN-ы и ходы
+        val parsed = PgnChess.movesWithFens(pgn)
+        if (parsed.isEmpty()) {
+            throw IllegalArgumentException("PGN contains no moves")
         }
+
+        val startFen = parsed.firstOrNull()?.beforeFen
+            ?: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        val allFens = listOf(startFen) + parsed.map { it.afterFen }
+        val uciMoves = parsed.map { it.uci }
+
+        Log.d(TAG, "📊 Parsed: ${allFens.size} positions, ${uciMoves.size} moves")
+
+        // 2. Используем LocalGameAnalyzer с сервером в качестве источника оценок
+        val analyzer = LocalGameAnalyzer { _, percent, stage ->
+            _percent.value = percent
+            _stage.value = stage
+        }
+
+        val report = analyzer.evaluateGameByPgnWithProgress(
+            pgn = pgn,
+            depth = depth,
+            multiPv = multiPv,
+            workersNb = workersNb,
+            header = header
+        ) { snap -> onProgress(snap) }
+
+        // ДОБАВЛЯЕМ ЧАСЫ В ОТЧЁТ
+        return@coroutineScope report.copy(clockData = clockData)
     }
 
     suspend fun analyzeGameByPgn(
