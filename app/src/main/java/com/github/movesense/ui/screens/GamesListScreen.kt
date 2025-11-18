@@ -165,14 +165,14 @@ fun GamesListScreen(
 
     val dateFormatter = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
 
-    var isPremiumUser by remember { mutableStateOf(false) }
+    var isPremiumUser by remember { mutableStateOf(profile.isPremium) }
     var showPaywall by remember { mutableStateOf(false) }
     var showPremiumBanner by remember { mutableStateOf(true) }
 
-    LaunchedEffect(Unit) {
-        isPremiumUser = GooglePlayBillingManager.isPremiumUser()
+    LaunchedEffect(profile.isPremium) {
+        isPremiumUser = profile.isPremium || GooglePlayBillingManager.isPremiumUser()
         GooglePlayBillingManager.observePremiumStatus().collect { isPremium ->
-            isPremiumUser = isPremium
+            isPremiumUser = profile.isPremium || isPremium
         }
     }
 

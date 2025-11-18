@@ -12,7 +12,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import kotlin.coroutines.resume
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
 
 /**
  * Менеджер для работы с Google Play Billing
@@ -200,8 +203,32 @@ object GooglePlayBillingManager {
                 if (purchase.products.contains(PREMIUM_PRODUCT_ID)) {
                     _isPremiumFlow.value = true
                     Log.d(TAG, "✅ User is now premium!")
+
+                    // Синхронизируем с Firebase
+                    syncPremiumStatusToFirebase(true)
                 }
             }
+        }
+    }
+
+    /**
+     * Синхронизация статуса премиума с Firebase
+     */
+    private fun syncPremiumStatusToFirebase(isPremium: Boolean) {
+        val userId = FirebaseAuth.getInstance().currentUser?.uid
+        if (userId != null) {
+            FirebaseFirestore.getInstance()
+                .collection("users")
+                .document(userId)
+                .update("isPremium", isPremium)
+                .addOnSuccessListener {
+                    Log.d(TAG, "✅ Premium status synced to Firebase: $isPremium")
+                }
+                .addOnFailureListener { e ->
+                    Log.e(TAG, "❌ Failed to sync premium status to Firebase", e)
+                }
+        } else {
+            Log.w(TAG, "⚠️ Cannot sync premium status: User not logged in")
         }
     }
 

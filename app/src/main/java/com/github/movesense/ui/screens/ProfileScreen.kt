@@ -66,8 +66,9 @@ fun ProfileScreen(
 
     val engineMode by EngineClient.engineMode.collectAsState()
 
-    // Google Play Billing
-    val isPremiumUser by GooglePlayBillingManager.isPremiumFlow.collectAsState()
+    // Google Play Billing - учитываем как статус из профиля, так и из Google Play
+    val googlePlayPremium by GooglePlayBillingManager.isPremiumFlow.collectAsState()
+    val isPremiumUser = profile.isPremium || googlePlayPremium
     var showPaywall by remember { mutableStateOf(false) }
     var showManageSubscriptionDialog by remember { mutableStateOf(false) }
 

@@ -82,7 +82,8 @@ fun AppRoot() {
                     nickname = doc.getString("nickname") ?: "",
                     lichessUsername = doc.getString("lichessUsername") ?: "",
                     chessUsername = doc.getString("chessUsername") ?: "",
-                    language = languageCode ?: LocaleManager.Language.ENGLISH.code
+                    language = languageCode ?: LocaleManager.Language.ENGLISH.code,
+                    isPremium = doc.getBoolean("isPremium") ?: false
                 )
             } else {
                 currentUserProfile = null
