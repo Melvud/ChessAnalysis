@@ -1,6 +1,3 @@
-// app/src/main/java/com/github/movesense/ui/screens/GameReportScreen.kt
-// ИСПРАВЛЕНО: Синхронное обновление линий без задержек + Preview
-
 package com.github.movesense.ui.screens
 
 import android.annotation.SuppressLint
@@ -174,7 +171,6 @@ private suspend fun fetchLichessClocks(gameId: String): ClockData? = withContext
     }
 }
 
-// Нормализация линий к точке зрения белых
 private fun normalizeLinesToWhitePOV(lines: List<EngineClient.LineDTO>, fen: String): List<EngineClient.LineDTO> {
     val fenParts = fen.split(" ")
     val whiteToPlay = fenParts.getOrNull(1) == "w"
@@ -230,7 +226,6 @@ fun GameReportScreen(
     var legalTargets by remember { mutableStateOf<Set<String>>(emptySet()) }
     var isAnalyzing by remember { mutableStateOf(false) }
 
-    // ВАЖНО: viewSettings должен быть объявлен ДО derivedStateOf
     var viewSettings by remember {
         mutableStateOf(ViewSettings(
             showEvalBar = true,
@@ -242,24 +237,34 @@ fun GameReportScreen(
         ))
     }
 
-    // Состояние для динамической глубины
     var currentDepth by remember { mutableStateOf(12) }
     var isAnalysisRunning by remember { mutableStateOf(false) }
 
-    // Хранилище для динамически обновлённых линий (ключ = plyIndex)
     val updatedLines = remember { mutableStateMapOf<Int, List<LineEval>>() }
 
-    // ✅ ИСПРАВЛЕНИЕ: Состояние для линий вариации
     var variationLines by remember { mutableStateOf<List<LineEval>>(emptyList()) }
 
-    // ✅ КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Заменяем derivedStateOf на mutableStateOf
-    // derivedStateOf НЕ отслеживает изменения в mutableStateMapOf надёжно!
-    var displayedLines by remember { mutableStateOf<List<LineEval>>(emptyList()) }
+    val displayedLines by remember {
+        derivedStateOf {
+            val lines = if (variationActive) {
+                variationLines
+            } else {
+                updatedLines[currentPlyIndex] ?: report.positions.getOrNull(currentPlyIndex)?.lines ?: emptyList()
+            }
 
-    // Триггер для форсирования обновления UI при изменении линий
-    var linesUpdateTrigger by remember { mutableStateOf(0) }
+            val sortedLines = lines.sortedByDescending { line ->
+                when {
+                    line.mate != null && line.mate!! > 0 -> 100000.0 + line.mate!!
+                    line.mate != null && line.mate!! < 0 -> -100000.0 + line.mate!!
+                    line.cp != null -> line.cp!!.toDouble()
+                    else -> 0.0
+                }
+            }
 
-    // ИНИЦИАЛИЗАЦИЯ: Заполняем updatedLines из report при первом запуске
+            sortedLines.take(viewSettings.numberOfLines.coerceAtLeast(1))
+        }
+    }
+
     LaunchedEffect(Unit) {
         report.positions.forEachIndexed { index, posEval ->
             if (posEval.lines.isNotEmpty()) {
@@ -267,37 +272,6 @@ fun GameReportScreen(
             }
         }
         Log.d(TAG, "✅ Initialized ${updatedLines.size} positions from report")
-    }
-
-    // ✅ КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Явное обновление displayedLines через LaunchedEffect
-    // Это гарантирует стабильное отображение линий при любых изменениях!
-    LaunchedEffect(currentPlyIndex, variationActive, variationLines, linesUpdateTrigger, viewSettings.numberOfLines) {
-        val lines = if (variationActive) {
-            // В режиме вариации показываем линии ВАРИАЦИИ!
-            variationLines
-        } else {
-            // Всегда берем из updatedLines (уже заполненного из report)
-            updatedLines[currentPlyIndex] ?: emptyList()
-        }
-
-        // КРИТИЧНО: Сортировка - лучшая линия ВСЕГДА первая!
-        val sortedLines = lines.sortedByDescending { line ->
-            when {
-                line.mate != null && line.mate!! > 0 -> 100000.0 + line.mate!!
-                line.mate != null && line.mate!! < 0 -> -100000.0 + line.mate!!
-                line.cp != null -> line.cp!!.toDouble()
-                else -> 0.0
-            }
-        }
-
-        val limitedLines = sortedLines.take(viewSettings.numberOfLines.coerceAtLeast(1))
-
-        // Логируем только если есть изменения
-        if (limitedLines.isNotEmpty()) {
-            Log.d(TAG, "✅ STABLE: Displayed ${limitedLines.size} lines for ply ${if (variationActive) "VAR" else currentPlyIndex}, BEST line cp=${limitedLines.firstOrNull()?.cp}, mate=${limitedLines.firstOrNull()?.mate}, depth=${limitedLines.firstOrNull()?.depth}")
-        }
-
-        displayedLines = limitedLines
     }
 
     val positionSettings = remember { mutableStateMapOf<Int, Pair<Int, Int>>() }
@@ -320,13 +294,11 @@ fun GameReportScreen(
         }
     }
 
-    // ✅ ИСПРАВЛЕНИЕ: REAL-TIME обновление линий 12→18 глубина
     LaunchedEffect(currentPlyIndex, variationActive, positionSettings[currentPlyIndex], analysisVersion) {
         if (variationActive) return@LaunchedEffect
 
         val positionFen = report.positions.getOrNull(currentPlyIndex)?.fen ?: return@LaunchedEffect
 
-        // Проверяем updatedLines, затем report
         val currentLines = updatedLines[currentPlyIndex]
             ?: report.positions.getOrNull(currentPlyIndex)?.lines?.also { reportLines ->
                 if (reportLines.isNotEmpty()) {
@@ -337,14 +309,11 @@ fun GameReportScreen(
 
         val currentDepthValue = currentLines.firstOrNull()?.depth ?: 12
 
-        // Проверяем, есть ли сохранённая настройка глубины для этой позиции
         val savedDepth = positionSettings[currentPlyIndex]?.first
-        val targetDepth = savedDepth ?: 18 // По умолчанию углубляем до 18
+        val targetDepth = savedDepth ?: 18
 
-        // Устанавливаем начальную глубину
         currentDepth = currentDepthValue
 
-        // Если целевая глубина достигнута - выходим
         if (currentDepthValue >= targetDepth) {
             Log.d(TAG, "✅ Position $currentPlyIndex already analyzed to depth $currentDepthValue (target: $targetDepth)")
             return@LaunchedEffect
@@ -354,23 +323,18 @@ fun GameReportScreen(
         isAnalysisRunning = true
 
         try {
-            // ✅ ИСПРАВЛЕНИЕ: Запускаем ОДИН анализ до целевой глубины, обновляем UI в реальном времени
             EngineClient.evaluateFenDetailedStreamingForcedLocal(
                 fen = positionFen,
-                depth = targetDepth,  // ✅ Анализируем сразу до целевой глубины!
+                depth = targetDepth,
                 multiPv = viewSettings.numberOfLines.coerceAtLeast(1),
                 onUpdate = { linesList: List<EngineClient.LineDTO> ->
-                    // ✅ КРИТИЧНО: Обновляем UI В РЕАЛЬНОМ ВРЕМЕНИ для КАЖДОЙ глубины!
                     if (linesList.isNotEmpty()) {
                         val receivedDepth = linesList.first().depth ?: 0
 
-                        // Обновляем текущую глубину для UI
                         currentDepth = receivedDepth
 
-                        // Нормализуем к точке зрения белых
                         val normalizedLines = normalizeLinesToWhitePOV(linesList, positionFen)
 
-                        // Конвертируем в LineEval
                         val lineEvals = normalizedLines.map { dto: EngineClient.LineDTO ->
                             LineEval(
                                 pv = dto.pv,
@@ -382,11 +346,7 @@ fun GameReportScreen(
                             )
                         }
 
-                        // ✅ КРИТИЧНО: Обновляем через присваивание для форсирования recomposition!
                         updatedLines[currentPlyIndex] = lineEvals
-
-                        // ✅ КРИТИЧНО: Инкрементируем триггер для форсирования обновления UI!
-                        linesUpdateTrigger++
 
                         Log.d(TAG, "📊 REAL-TIME: Position $currentPlyIndex updated to depth $receivedDepth, ${lineEvals.size} lines, BEST cp=${lineEvals.firstOrNull()?.cp}")
                     }
@@ -396,7 +356,6 @@ fun GameReportScreen(
             Log.d(TAG, "✅ Completed REAL-TIME analysis to depth $targetDepth for position $currentPlyIndex")
         } catch (e: CancellationException) {
             Log.d(TAG, "⚠️ Analysis cancelled for position $currentPlyIndex at depth $currentDepth")
-            // НЕ выбрасываем исключение - сохраняем прогресс
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error during REAL-TIME analysis for position $currentPlyIndex", e)
         } finally {
@@ -538,7 +497,6 @@ fun GameReportScreen(
 
         scope.launch {
             try {
-                // ✅ ИСПРАВЛЕНИЕ: Используем analyzeMoveRealtimeDetailed для получения линий!
                 val result = EngineClient.analyzeMoveRealtimeDetailed(
                     beforeFen = beforeFen,
                     afterFen = afterFen,
@@ -552,7 +510,6 @@ fun GameReportScreen(
                 variationMoveClass = result.moveClass
                 variationBestUci = result.bestMove
 
-                // ✅ КРИТИЧНО: Обновляем линии вариации!
                 variationLines = result.lines.map { dto ->
                     LineEval(
                         pv = dto.pv,
@@ -625,7 +582,6 @@ fun GameReportScreen(
 
         scope.launch {
             try {
-                // ✅ ИСПРАВЛЕНИЕ: Используем analyzeMoveRealtimeDetailed для получения линий!
                 val result = EngineClient.analyzeMoveRealtimeDetailed(
                     beforeFen = before,
                     afterFen = after,
@@ -639,7 +595,6 @@ fun GameReportScreen(
                 variationMoveClass = result.moveClass
                 variationBestUci = result.bestMove
 
-                // ✅ КРИТИЧНО: Обновляем линии вариации!
                 variationLines = result.lines.map { dto ->
                     LineEval(
                         pv = dto.pv,
@@ -675,10 +630,9 @@ fun GameReportScreen(
         variationBestUci = null
         variationMoveClass = null
         variationLastMove = null
-        variationLines = emptyList()  // ✅ ИСПРАВЛЕНИЕ: Очищаем линии вариации
+        variationLines = emptyList()
         selectedSquare = null
         legalTargets = emptySet()
-        linesUpdateTrigger++  // ✅ ИСПРАВЛЕНИЕ: Форсируем обновление UI
     }
 
     fun seekTo(index: Int) {
@@ -692,9 +646,6 @@ fun GameReportScreen(
             val mv = report.moves.getOrNull(currentPlyIndex - 1)
             playMoveSound(mv?.classification, mv?.san?.contains('x') == true)
         }
-
-        // ✅ ИСПРАВЛЕНИЕ: Форсируем обновление UI при переключении позиций
-        linesUpdateTrigger++
     }
 
     fun goNext() { if (!isAnalyzing && currentPlyIndex < report.positions.lastIndex) seekTo(currentPlyIndex + 1) }
@@ -760,7 +711,6 @@ fun GameReportScreen(
                 .padding(padding)
                 .background(bgColor)
         ) {
-            // Верхний тонкий eval bar (если выбрано)
             if (viewSettings.showEvalBar && viewSettings.evalBarPosition == EvalBarPosition.TOP) {
                 val evalPositions: List<PositionEval>
                 val evalIndex: Int
@@ -786,7 +736,6 @@ fun GameReportScreen(
                 )
             }
 
-            // Компактные линии движка
             if (viewSettings.showEngineLines && displayedLines.isNotEmpty()) {
                 Box(
                     modifier = Modifier
@@ -812,7 +761,6 @@ fun GameReportScreen(
                 }
             }
 
-            // Верхний игрок
             val topIsWhite = !isWhiteBottom
             val topName = if (topIsWhite) {
                 report.header.white ?: stringResource(R.string.white)
@@ -844,7 +792,6 @@ fun GameReportScreen(
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             )
 
-            // ДОСКА - фиксированный размер
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -924,7 +871,6 @@ fun GameReportScreen(
                 }
             }
 
-            // Нижний игрок
             val bottomIsWhite = isWhiteBottom
             val bottomName = if (bottomIsWhite) {
                 report.header.white ?: stringResource(R.string.white)
@@ -956,7 +902,6 @@ fun GameReportScreen(
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             )
 
-            // КРИТИЧНО: Карусель ходов занимает ВСЁ оставшееся место
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -972,7 +917,6 @@ fun GameReportScreen(
                 )
             }
 
-            // Вариации (если активны)
             if (variationActive) {
                 Card(
                     modifier = Modifier
@@ -1025,26 +969,19 @@ fun GameReportScreen(
             onDismiss = { showSettingsDialog = false },
             onSettingsChange = { newSettings ->
                 viewSettings = newSettings
-                // При изменении настроек увеличиваем версию для перезапуска анализа
                 analysisVersion++
-                // ✅ ИСПРАВЛЕНИЕ: Форсируем обновление линий при изменении настроек
-                linesUpdateTrigger++
             }
         )
     }
 
     if (showDepthDialog) {
         DepthDialog(
-            currentDepth = currentDepth, // Показываем ТЕКУЩУЮ глубину анализа
+            currentDepth = currentDepth,
             onDismiss = { showDepthDialog = false },
             onDepthSelected = { depth ->
-                // Сохраняем глубину ТОЛЬКО для текущей позиции
                 if (!variationActive) {
                     positionSettings[currentPlyIndex] = Pair(depth, viewSettings.numberOfLines)
                     Log.d(TAG, "💾 Saved depth $depth for position $currentPlyIndex")
-
-                    // Принудительно перезапускаем анализ для этой позиции
-                    // LaunchedEffect сам подхватит изменение через positionSettings
                 }
                 showDepthDialog = false
             }
@@ -1085,7 +1022,6 @@ private fun CompactPvRow(
     onClickMoveAtIndex: (idx: Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // ИСПРАВЛЕНИЕ: Всегда показываем все доступные ходы из PV
     if (line.pv.isEmpty()) return
 
     val tokens = remember(baseFen, line.pv) { buildIconTokens(baseFen, line.pv) }
@@ -1102,7 +1038,6 @@ private fun CompactPvRow(
             modifier = Modifier.weight(1f),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // ИСПРАВЛЕНИЕ: Показываем ВСЕ токены, а не только первые 10
             itemsIndexed(tokens) { idx, token ->
                 Row(
                     modifier = Modifier
@@ -1568,4 +1503,3 @@ private fun InitialAvatar(
         )
     }
 }
-
