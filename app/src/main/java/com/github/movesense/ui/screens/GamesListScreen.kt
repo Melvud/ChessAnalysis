@@ -1315,6 +1315,8 @@ private fun parseGameEnd(pgn: String?, result: String?): GameEndInfo {
         else -> null
     }
 
+    // ИСПРАВЛЕНИЕ: Вернули "normal" - проблема была в неправильной обработке мата в WinPercentage.kt
+    // Теперь WinPercentage правильно обрабатывает mate:0 и другие случаи мата
     val termination = when {
         "normal" in terminationTag && resultTag != "1/2-1/2" -> GameTermination.CHECKMATE
         "checkmate" in terminationTag -> GameTermination.CHECKMATE

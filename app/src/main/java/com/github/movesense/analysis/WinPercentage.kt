@@ -17,7 +17,14 @@ object WinPercentage {
     }
 
     private fun getWinPercentageFromMate(mate: Int): Double {
-        return if (mate >= 0) 100.0 else 0.0
+        // ИСПРАВЛЕНИЕ: mate должен быть уже нормализован к белой перспективе
+        // mate > 0 = белые выигрывают, mate < 0 = черные выигрывают
+        // mate == 0 НЕ ДОЛЖЕН существовать после нормализации, но обрабатываем как ничью для безопасности
+        return when {
+            mate > 0 -> 100.0  // Белые выигрывают (мат в пользу белых)
+            mate < 0 -> 0.0    // Черные выигрывают (мат в пользу черных)
+            else -> 50.0       // mate == 0 - ничья (не должно случаться после нормализации)
+        }
     }
 
     private fun getWinPercentageFromCp(cp: Int): Double {
