@@ -1,7 +1,5 @@
 // src/server.ts
-// Сервер ТОЛЬКО для оценки позиций движком Stockfish
-// Весь анализ (классификация, ACPL, точность) производится на клиенте (LocalGameAnalyzer.kt)
-// ОПТИМИЗИРОВАНО для 8 vCPU и 8 GB RAM
+// ОПТИМИЗИРОВАНО: Мгновенный старт сервера, фоновая загрузка движков
 
 import "dotenv/config";
 import express from "express";
@@ -21,7 +19,7 @@ import type {
 
 import { UciEngine } from "@/lib/engine/uciEngine";
 
-// -------------------- ENV (ОПТИМИЗИРОВАНО для 8 vCPU / 8 GB) --------------------
+// -------------------- ENV --------------------
 const PORT = Number(process.env.PORT ?? 8080);
 const ENGINE_NAME: EngineName =
   (process.env.ENGINE_NAME as EngineName) ?? EngineName.Stockfish17Lite;
@@ -30,22 +28,18 @@ const DEFAULT_MULTIPV = Number(process.env.ENGINE_MULTIPV ?? 3);
 
 const CPU_CORES = Math.max(1, os.cpus()?.length ?? 1);
 
-// ✅ Используем все 8 ядер
 const ENGINE_THREADS = Math.max(
   1,
   Number(process.env.ENGINE_THREADS ?? Math.min(8, CPU_CORES)),
 );
 
-// ✅ 2 GB Hash для одного процесса
-const ENGINE_HASH_MB = Math.max(16, Number(process.env.ENGINE_HASH_MB ?? 2048));
+const ENGINE_HASH_MB = Math.max(16, Number(process.env.ENGINE_HASH_MB ?? 128));
 
-// ✅ Максимум 4 воркера для параллельной обработки (8 vCPU / 2)
 const ENGINE_WORKERS_MAX = Math.max(
   1,
   Number(process.env.ENGINE_WORKERS_MAX ?? Math.min(4, Math.floor(CPU_CORES / 2))),
 );
 
-// ✅ 2 одновременных задачи (для баланса скорости и памяти)
 const ENGINE_MAX_CONCURRENT_JOBS = Math.max(
   1,
   Number(process.env.ENGINE_MAX_CONCURRENT_JOBS ?? 2),
@@ -148,6 +142,10 @@ type EngineIface = {
 
 let singletonEngine: EngineIface | null = null;
 
+// -------------------- Worker Pool --------------------
+const workerPool: EngineIface[] = [];
+let workerPoolReady = false;
+
 async function createEngineInstance(opts?: {
   threads?: number;
   hashMb?: number;
@@ -170,8 +168,46 @@ async function createEngineInstance(opts?: {
   return eng;
 }
 
+/** Инициализирует пул воркеров В ФОНЕ */
+async function initializeWorkerPool() {
+  if (workerPoolReady) return;
+
+  const threadsPer = Math.max(1, Math.floor(ENGINE_THREADS / ENGINE_WORKERS_MAX));
+  const hashPer = Math.max(128, Math.floor(ENGINE_HASH_MB / ENGINE_WORKERS_MAX));
+
+  log.info({ workers: ENGINE_WORKERS_MAX }, "🔥 Initializing worker pool (background)...");
+
+  const tasks = [];
+  for (let i = 0; i < ENGINE_WORKERS_MAX; i++) {
+    tasks.push(
+      createEngineInstance({
+        threads: threadsPer,
+        hashMb: hashPer,
+        multiPv: DEFAULT_MULTIPV,
+      }).then(async (eng) => {
+        // Легкий прогрев
+        try {
+          await eng.evaluatePositionWithUpdate({
+            fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            depth: 6,
+            multiPv: 1,
+          } as any);
+        } catch (e) { /* ignore */ }
+        return eng;
+      })
+    );
+  }
+
+  const workers = await Promise.all(tasks);
+  workerPool.push(...workers);
+  workerPoolReady = true;
+
+  log.info({ count: workerPool.length }, "✅ Worker pool ready");
+}
+
 async function getSingletonEngine(): Promise<EngineIface> {
   if (singletonEngine) return singletonEngine;
+  // Создаем движок "на лету", если он еще не прогрет
   singletonEngine = await createEngineInstance({
     threads: ENGINE_THREADS,
     hashMb: ENGINE_HASH_MB,
@@ -211,7 +247,7 @@ class AsyncQueue {
 
 const jobQueue = new AsyncQueue(ENGINE_MAX_CONCURRENT_JOBS);
 
-// -------------------- Parallel evaluation (ОПТИМИЗИРОВАНО) --------------------
+// -------------------- Parallel evaluation --------------------
 async function evaluateGameParallel(
   baseParams: EvaluateGameParams,
   workersRequested: number,
@@ -222,33 +258,31 @@ async function evaluateGameParallel(
   const uciMoves = baseParams.uciMoves ?? [];
   const total = fens.length;
 
-  const startTime = Date.now();
-  const requested = Number(workersRequested);
+  // Исправлено: убрана неиспользуемая переменная startTime
 
-  // ✅ Адаптивное количество воркеров
   let workers: number;
   if (total <= 20) {
-    workers = 1; // Малые партии - один процесс с теплым кэшем
+    workers = 1;
   } else if (total <= 40) {
-    workers = Math.min(2, ENGINE_WORKERS_MAX); // Средние - 2 воркера
+    workers = Math.min(2, ENGINE_WORKERS_MAX);
   } else {
-    workers = Number.isFinite(requested) && requested > 0
-      ? Math.min(Math.max(1, Math.floor(requested)), ENGINE_WORKERS_MAX)
-      : ENGINE_WORKERS_MAX; // Большие - максимум воркеров
+    workers = Number.isFinite(workersRequested) && workersRequested > 0
+      ? Math.min(Math.max(1, Math.floor(workersRequested)), ENGINE_WORKERS_MAX)
+      : ENGINE_WORKERS_MAX;
   }
 
-  log.info({ workers, total, depth: baseParams.depth }, "Starting parallel evaluation");
+  // Если пул еще не готов, используем меньше воркеров или 1, чтобы не ждать
+  if (!workerPoolReady) {
+    log.info("⚠️ Pool not ready, falling back to on-demand worker");
+    workers = 1;
+  }
 
-  // ✅ Один воркер = singleton с теплым кэшем
   if (workers === 1) {
     const eng = await getSingletonEngine();
     const result = await eng.evaluateGame(baseParams, onProgress);
-    const elapsed = Date.now() - startTime;
-    log.info({ elapsed, msPerMove: Math.round(elapsed / total) }, "Evaluation complete");
     return result;
   }
 
-  // ✅ ПАРАЛЛЕЛЬНАЯ ОБРАБОТКА
   const threadsPer = Math.max(1, Math.floor(ENGINE_THREADS / workers));
   const hashPer = Math.max(128, Math.floor(ENGINE_HASH_MB / workers));
   const multiPvPer = baseParams.multiPv ?? DEFAULT_MULTIPV;
@@ -270,11 +304,18 @@ async function evaluateGameParallel(
     const shardFens = idxs.map((i) => baseParams.fens![i]);
     const shardUci = idxs.map((i) => baseParams.uciMoves![i]);
 
-    const eng = await createEngineInstance({
-      threads: threadsPer,
-      hashMb: hashPer,
-      multiPv: multiPvPer,
-    });
+    let eng: EngineIface;
+
+    // ✅ УМНАЯ ЛОГИКА: Если пул готов, берем из пула. Если нет - создаем новый (fallback).
+    if (workerPoolReady && wi < workerPool.length) {
+      eng = workerPool[wi];
+    } else {
+      eng = await createEngineInstance({
+        threads: threadsPer,
+        hashMb: hashPer,
+        multiPv: multiPvPer,
+      });
+    }
 
     const onShardProgress = (p: number) => {
       const shardDone = Math.round((p / 100) * shardFens.length);
@@ -282,15 +323,11 @@ async function evaluateGameParallel(
         perWorkerDone[wi] = shardDone;
         reportProgress();
 
-        // ✅ Обновляем текущую позицию для отображения
         if (progressId && shardDone > 0 && shardDone <= shardFens.length) {
           const currentIdx = idxs[shardDone - 1];
-          const currentFen = currentIdx < fens.length ? fens[currentIdx] : undefined;
-          const currentUci = currentIdx < uciMoves.length ? uciMoves[currentIdx] : undefined;
-
           setProgress(progressId, {
-            fen: currentFen,
-            currentUci: currentUci,
+            fen: currentIdx < fens.length ? fens[currentIdx] : undefined,
+            currentUci: currentIdx < uciMoves.length ? uciMoves[currentIdx] : undefined,
           });
         }
       }
@@ -311,19 +348,18 @@ async function evaluateGameParallel(
 
   const shards = await Promise.all(tasks);
 
-  // ✅ Безопасное закрытие воркеров
+  // Закрываем только временные воркеры
   await Promise.allSettled(
-    shards.map(async (shard) => {
+    shards.map(async (shard, idx) => {
       return new Promise<void>((resolve) => {
         setTimeout(() => {
           try {
             const worker = (shard as any)?.__engine;
-            if (worker && typeof worker.shutdown === "function") {
+            const isPoolWorker = workerPoolReady && idx < workerPool.length && worker === workerPool[idx];
+            if (worker && typeof worker.shutdown === "function" && !isPoolWorker) {
               worker.shutdown();
             }
-          } catch (e) {
-            log.warn({ err: String(e) }, "Worker shutdown warning");
-          }
+          } catch (e) { /* ignore */ }
           resolve();
         }, 50);
       });
@@ -342,51 +378,7 @@ async function evaluateGameParallel(
   );
   const settings = (first as any)?.settings ?? {};
 
-  const elapsed = Date.now() - startTime;
-  log.info({ elapsed, msPerMove: Math.round(elapsed / total), workers }, "Parallel evaluation complete");
-
   return { positions: positionsMerged, settings } as any as GameEval;
-}
-
-// -------------------- Helper: Нормализация к перспективе белых --------------------
-/**
- * ✅ КРИТИЧЕСКИ ВАЖНО: Stockfish возвращает оценку с точки зрения стороны, которая ходит.
- * Мы нормализуем все к перспективе белых: + = белые лучше, - = чёрные лучше
- */
-function normalizeEvalToWhitePOV(
-  rawLine: any,
-  fen: string
-): { cp?: number; mate?: number; pv: string[] } {
-  const whiteToPlay = fen.split(" ")[1] === "w";
-
-  let cp = typeof rawLine?.cp === "number" ? rawLine.cp : undefined;
-  let mate = typeof rawLine?.mate === "number" ? rawLine.mate : undefined;
-
-  // ✅ Если ход чёрных, инвертируем оценку
-  if (!whiteToPlay) {
-    if (cp !== undefined) cp = -cp;
-    if (mate !== undefined) {
-      // Специальная обработка mate: 0 (текущая сторона заматована)
-      if (mate === 0) {
-        mate = 1; // Чёрные заматованы → белые выиграли
-      } else {
-        mate = -mate;
-      }
-    }
-  } else {
-    // Если ход белых и mate: 0, значит белые заматованы
-    if (mate === 0) {
-      mate = -1;
-    }
-  }
-
-  const pv: string[] = Array.isArray(rawLine?.pv)
-    ? rawLine.pv
-    : Array.isArray(rawLine?.pv?.moves)
-    ? rawLine.pv.moves
-    : [];
-
-  return { cp, mate, pv };
 }
 
 // -------------------- Helper: Convert to client format --------------------
@@ -399,32 +391,32 @@ function toClientPosition(
 ): ClientPosition {
   const rawLines: any[] = Array.isArray(posAny?.lines) ? posAny.lines : [];
 
-  // ✅ Нормализуем каждую линию к перспективе белых
   const lines: ClientLine[] = rawLines.map((l: any) => {
-    const normalized = normalizeEvalToWhitePOV(l, fen);
+    const pv: string[] = Array.isArray(l?.pv)
+      ? l.pv
+      : Array.isArray(l?.pv?.moves)
+      ? l.pv.moves
+      : [];
+
     return {
-      pv: normalized.pv,
-      cp: normalized.cp,
-      mate: normalized.mate,
+      pv: pv,
+      cp: typeof l?.cp === "number" ? l.cp : undefined,
+      mate: typeof l?.mate === "number" ? l.mate : undefined,
     };
   });
 
-  // ✅ Fallback для пустых линий или мата
   if (lines.length === 0) {
     if (isLastPosition && gameResult) {
-      if (gameResult === "1-0") {
-        lines.push({ pv: [], mate: 1 }); // Белые победили
-      } else if (gameResult === "0-1") {
-        lines.push({ pv: [], mate: -1 }); // Чёрные победили
+      if (gameResult === "1-0" || gameResult === "0-1") {
+        lines.push({ pv: [], mate: 0 });
       } else {
-        lines.push({ pv: [], cp: 0 }); // Ничья
+        lines.push({ pv: [], cp: 0 });
       }
     } else {
       lines.push({ pv: [], cp: 0 });
     }
   }
 
-  // ✅ Best move из первой линии
   const firstPv = lines[0]?.pv;
   const best =
     (posAny as any)?.bestMove ??
@@ -466,10 +458,6 @@ app.get("/api/v1/progress/:id", (req, res) => {
   res.json(p);
 });
 
-/**
- * ✅ ОСНОВНОЙ ENDPOINT: Оценка позиций БЕЗ анализа
- * Клиент получает только нормализованные cp/mate и делает весь анализ через LocalGameAnalyzer
- */
 app.post("/api/v1/evaluate/positions", async (req, res) => {
   const progressId = String(
     (req.query as any)?.progressId ?? req.body?.progressId ?? "",
@@ -528,7 +516,6 @@ app.post("/api/v1/evaluate/positions", async (req, res) => {
         setProgress(progressId, { stage: "done" as ProgressStage, done: fens.length });
       }
 
-      // ✅ Возвращаем ТОЛЬКО позиции с нормализованными cp/mate, БЕЗ анализа
       const positions: ClientPosition[] = fens.map((fen: string, idx: number) => {
         const posAny: any = (out.positions as any[])[idx] ?? {};
         const isLast = idx === fens.length - 1;
@@ -556,9 +543,6 @@ app.post("/api/v1/evaluate/positions", async (req, res) => {
   }
 });
 
-/**
- * ✅ Оценка одной позиции (для real-time анализа в GameReportScreen)
- */
 app.post("/api/v1/evaluate/position", async (req, res) => {
   try {
     const {
@@ -573,7 +557,7 @@ app.post("/api/v1/evaluate/position", async (req, res) => {
       uciMove,
     } = req.body ?? {};
 
-    // ✅ РЕЖИМ: анализ ОДНОГО хода (для real-time)
+    // РЕЖИМ: анализ ОДНОГО хода
     if (
       typeof beforeFen === "string" &&
       typeof afterFen === "string" &&
@@ -592,6 +576,7 @@ app.post("/api/v1/evaluate/position", async (req, res) => {
         ...(skillLevel !== undefined ? { skillLevel } : {}),
       } as any;
 
+      // Здесь используем evaluateGameParallel, который сам решит, использовать пул или создать новый
       const out: GameEval = await evaluateGameParallel(baseParams, 1, null);
 
       const rawPositions: any[] = Array.isArray((out as any)?.positions)
@@ -604,7 +589,6 @@ app.post("/api/v1/evaluate/position", async (req, res) => {
         return toClientPosition(posAny, fenStr, idx, idx === 1);
       });
 
-      // ✅ Проверка на мат с использованием chess.js
       try {
         const ch = new Chess();
         ch.load(String(beforeFen));
@@ -614,58 +598,17 @@ app.post("/api/v1/evaluate/position", async (req, res) => {
         const mv = ch.move({ from, to, promotion: prom as any });
 
         if (mv && ch.isCheckmate && ch.isCheckmate()) {
-          const moverIsWhite = String(beforeFen).includes(" w ");
-          const mateVal = moverIsWhite ? +1 : -1;
-
           if (positions[1].lines.length === 0) {
-            positions[1].lines.push({ pv: [], mate: mateVal });
+            positions[1].lines.push({ pv: [], mate: 0 });
           } else {
             positions[1].lines[0] = {
               ...(positions[1].lines[0] || {}),
-              mate: mateVal,
+              mate: 0,
             };
             delete (positions[1].lines[0] as any).cp;
           }
-
-          log.info({ moverIsWhite, mateVal }, "Checkmate detected");
         }
-      } catch (e) {
-        log.warn({ err: e }, "Checkmate detection failed");
-      }
-
-      // ✅ Если нет best для позиции "до" - запрашиваем
-      const needBestFix =
-        !positions[0]?.lines?.[0]?.best ||
-        String(positions[0].lines[0].best).trim() === "";
-
-      if (needBestFix) {
-        try {
-          const engine = await getSingletonEngine();
-          const eval0 = await engine.evaluatePositionWithUpdate({
-            fen: String(beforeFen),
-            depth: effDepth,
-            multiPv: effMultiPv,
-            useNNUE,
-            elo,
-            ...(skillLevel !== undefined ? { skillLevel } : {}),
-          } as any);
-
-          const rawTop = Array.isArray(eval0?.lines) ? eval0.lines[0] : undefined;
-          const bestFromEngine: string =
-            (eval0 as any)?.bestMove ??
-            (Array.isArray(rawTop?.pv) ? rawTop.pv[0] : undefined) ??
-            "";
-
-          if (bestFromEngine) {
-            positions[0].lines[0].best = String(bestFromEngine);
-            if (!Array.isArray(positions[0].lines[0].pv) || positions[0].lines[0].pv.length === 0) {
-              positions[0].lines[0].pv = [String(bestFromEngine)];
-            }
-          }
-        } catch (e) {
-          log.warn({ err: e }, "Best move retrieval failed");
-        }
-      }
+      } catch (e) { /* ignore */ }
 
       const bestFromBefore = String(
         positions[0]?.lines?.[0]?.best ??
@@ -679,7 +622,7 @@ app.post("/api/v1/evaluate/position", async (req, res) => {
       });
     }
 
-    // ✅ РЕЖИМ: оценка обычной позиции
+    // РЕЖИМ: оценка обычной позиции (Single Engine)
     if (!fen || typeof fen !== "string") {
       return res.status(400).json({ error: "fen_required" });
     }
@@ -696,20 +639,16 @@ app.post("/api/v1/evaluate/position", async (req, res) => {
 
     const rawEval = await engine.evaluatePositionWithUpdate(params);
 
-    // ✅ Нормализуем результат к перспективе белых
-    const normalizedLines = Array.isArray(rawEval?.lines)
-      ? rawEval.lines.map((line: any) => {
-          const normalized = normalizeEvalToWhitePOV(line, fen);
-          return {
-            pv: normalized.pv,
-            cp: normalized.cp,
-            mate: normalized.mate,
-          };
-        })
+    const rawLines = Array.isArray(rawEval?.lines)
+      ? rawEval.lines.map((line: any) => ({
+          pv: line.pv,
+          cp: line.cp,
+          mate: line.mate,
+        }))
       : [];
 
     return res.json({
-      lines: normalizedLines,
+      lines: rawLines,
       bestMove: (rawEval as any)?.bestMove,
     });
   } catch (e: any) {
@@ -727,32 +666,8 @@ app.use((req, res) => {
     .json({ error: "not_found", path: `${req.method} ${req.originalUrl}` });
 });
 
-// ✅ Прогрев движка при старте (убирает задержку первого запроса)
-(async () => {
-  try {
-    log.info("🔥 Warming up engine...");
-    const warmupEngine = await createEngineInstance({
-      threads: ENGINE_THREADS,
-      hashMb: ENGINE_HASH_MB,
-      multiPv: 1,
-    });
-
-    // Оцениваем стартовую позицию для инициализации
-    await warmupEngine.evaluatePositionWithUpdate({
-      fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-      depth: 10,
-      multiPv: 1,
-    } as any);
-
-    log.info("✅ Engine warmed up and ready");
-
-    // Сохраняем как singleton
-    singletonEngine = warmupEngine;
-  } catch (e) {
-    log.warn({ err: e }, "⚠️  Engine warmup failed, will initialize on first request");
-  }
-})();
-
+// ✅ 1. ЗАПУСКАЕМ СЕРВЕР СРАЗУ (Мгновенный ответ на Health Checks)
+// Исправлено: убрано присваивание const server =, так как переменная не использовалась
 app.listen(PORT, () => {
   log.info(
     {
@@ -762,19 +677,30 @@ app.listen(PORT, () => {
       maxWorkers: ENGINE_WORKERS_MAX,
       concurrentJobs: ENGINE_MAX_CONCURRENT_JOBS,
     },
-    "🚀 Server started"
+    "🚀 Server started (Listening immediately)"
   );
 });
 
-// ✅ Keep-alive для Railway (предотвращает "засыпание")
-if (process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === "production") {
-  const KEEP_ALIVE_INTERVAL = 5 * 60 * 1000; // 5 минут
+// ✅ 2. ПРОГРЕВАЕМ ДВИЖКИ В ФОНЕ (Не блокируя порт)
+(async () => {
+  try {
+    // Прогреваем singleton (основной движок для быстрых запросов)
+    await getSingletonEngine();
+    log.info("✅ Singleton engine ready");
 
-  setInterval(() => {
-    fetch(`http://localhost:${PORT}/health`)
-      .then(() => log.debug("Keep-alive ping successful"))
-      .catch((e) => log.warn({ err: String(e) }, "Keep-alive ping failed"));
-  }, KEEP_ALIVE_INTERVAL);
+    // Прогреваем тяжелый пул
+    await initializeWorkerPool();
 
-  log.info("💚 Keep-alive enabled (Railway optimization)");
-}
+  } catch (e) {
+    log.warn({ err: e }, "⚠️ Engine warmup warning (server is still usable)");
+  }
+
+  // Keep-alive ping
+  if (process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === "production") {
+    setInterval(() => {
+      fetch(`http://localhost:${PORT}/health`)
+        .catch((e) => log.warn({ err: String(e) }, "Keep-alive ping failed"));
+    }, 5 * 60 * 1000);
+    log.info("💚 Keep-alive enabled");
+  }
+})();

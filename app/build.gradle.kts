@@ -138,4 +138,7 @@ dependencies {
     implementation("com.patrykandpatrick.vico:core:2.1.3")
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     implementation("androidx.datastore:datastore-preferences-core:1.0.0")
+
+    implementation("com.revenuecat.purchases:purchases:7.11.1")
+    implementation("com.revenuecat.purchases:purchases-ui:7.11.1")
 }
