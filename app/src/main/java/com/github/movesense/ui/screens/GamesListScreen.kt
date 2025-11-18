@@ -70,7 +70,7 @@ import kotlinx.serialization.json.Json
 import kotlin.math.max
 import kotlin.math.roundToLong
 import com.github.movesense.R
-import com.github.movesense.subscription.RevenueCatManager
+import com.github.movesense.subscription.GooglePlayBillingManager
 import com.github.movesense.ui.components.PremiumBanner
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -170,8 +170,8 @@ fun GamesListScreen(
     var showPremiumBanner by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
-        isPremiumUser = RevenueCatManager.isPremiumUser()
-        RevenueCatManager.observePremiumStatus().collect { isPremium ->
+        isPremiumUser = GooglePlayBillingManager.isPremiumUser()
+        GooglePlayBillingManager.observePremiumStatus().collect { isPremium ->
             isPremiumUser = isPremium
         }
     }

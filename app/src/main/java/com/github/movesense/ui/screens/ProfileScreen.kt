@@ -655,12 +655,14 @@ private fun EngineSection(
                 title = stringResource(R.string.engine_server),
                 description = stringResource(R.string.engine_server_desc),
                 icon = Icons.Default.CloudDone,
-                isSelected = engineMode == "SERVER",
+                isSelected = engineMode == EngineClient.EngineMode.SERVER,
                 isEnabled = isPremium,
                 onUpgradeClick = onUpgradeClick,
                 onClick = {
                     if (isPremium) {
-                        setEngineMode("SERVER")
+                        scope.launch {
+                            setEngineMode(EngineClient.EngineMode.SERVER)
+                        }
                     }
                 }
             )
@@ -671,9 +673,13 @@ private fun EngineSection(
                 title = stringResource(R.string.engine_local),
                 description = stringResource(R.string.engine_local_desc),
                 icon = Icons.Default.PhoneAndroid,
-                isSelected = engineMode == "LOCAL",
+                isSelected = engineMode == EngineClient.EngineMode.LOCAL,
                 isEnabled = true,
-                onClick = { setEngineMode("LOCAL") }
+                onClick = {
+                    scope.launch {
+                        setEngineMode(EngineClient.EngineMode.LOCAL)
+                    }
+                }
             )
         }
     }
