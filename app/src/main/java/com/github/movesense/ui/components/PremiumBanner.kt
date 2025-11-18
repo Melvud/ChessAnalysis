@@ -82,7 +82,7 @@ fun PremiumBanner(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // Иконка звезды
+                    // Star Icon
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = Color.White.copy(alpha = 0.3f),
@@ -98,7 +98,7 @@ fun PremiumBanner(
                         }
                     }
 
-                    // Текст
+                    // Text
                     Column(
                         modifier = Modifier.weight(1f)
                     ) {
@@ -118,7 +118,7 @@ fun PremiumBanner(
                         )
                     }
 
-                    // Кнопка
+                    // Button
                     Button(
                         onClick = onUpgradeClick,
                         colors = ButtonDefaults.buttonColors(

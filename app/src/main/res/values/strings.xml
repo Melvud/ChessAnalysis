@@ -250,4 +250,32 @@
         <string name="unexpected_error">An unexpected error occurred</string>
         <string name="product_not_found">Product not found</string>
         <string name="purchase_failed">Purchase failed</string>
+
+    <string name="feature_basic_analysis">Basic Analysis</string>
+    <string name="feature_local_engine">Local Engine</string>
+    <string name="feature_limited_depth">Limited Depth</string>
+    <string name="feature_unlimited_analysis">Unlimited Analysis</string>
+    <string name="feature_cloud_engine">Cloud Engine</string>
+    <string name="feature_priority_support">Priority Support</string>
+
+    <string name="continue_button">Continue</string>
+    <string name="pro">PRO</string>
+
+    <string name="subscription_price">Subscription for just %s/year</string>
+    <string name="subscribe_to_premium">Subscribe to Premium for %s</string>
+
+    <string name="premium_status">Premium Status</string>
+    <string name="premium_active">Premium Active</string>
+    <string name="premium_expires">Valid until: %s</string>
+
+    <string name="purchase_error">Purchase Error</string>
+    <string name="restore_failed">Failed to restore purchases</string>
+    <string name="billing_not_ready">Billing is not ready, please try again later</string>
+
+    <string name="benefit_instant_analysis">⚡ Instant Position Analysis</string>
+    <string name="benefit_deep_calculation">🧠 Deep Calculation of Variations</string>
+    <string name="benefit_cloud_processing">☁️ Cloud Processing</string>
+    <string name="benefit_unlimited">♾️ Unlimited Usage</string>
+    <string name="benefit_no_ads">🚫 No Ads</string>
+    <string name="benefit_priority_support">💬 Priority Support</string>
 </resources>

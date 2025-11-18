@@ -251,4 +251,42 @@
         <string name="product_not_found">Продукт не найден</string>
         <string name="purchase_failed">Покупка не удалась</string>
 
+    <!-- ============================================ -->
+    <!-- НОВЫЕ СТРОКИ ДЛЯ GOOGLE PLAY BILLING        -->
+    <!-- Добавь эти строки в свой strings.xml        -->
+    <!-- ============================================ -->
+
+    <!-- Comparison Table Features (для таблицы FREE vs PRO) -->
+    <string name="feature_basic_analysis">Базовый анализ</string>
+    <string name="feature_local_engine">Локальный движок</string>
+    <string name="feature_limited_depth">Ограниченная глубина</string>
+    <string name="feature_unlimited_analysis">Неограниченный анализ</string>
+    <string name="feature_cloud_engine">Облачный движок</string>
+    <string name="feature_priority_support">Приоритетная поддержка</string>
+
+    <!-- Buttons -->
+    <string name="continue_button">Продолжить</string>
+    <string name="pro">PRO</string>
+
+    <!-- Price -->
+    <string name="subscription_price">Подписка всего за %s/год</string>
+    <string name="subscribe_to_premium">Подпишись на Premium за %s</string>
+
+    <!-- Status -->
+    <string name="premium_status">Premium статус</string>
+    <string name="premium_active">Premium активен</string>
+    <string name="premium_expires">Действителен до: %s</string>
+
+    <!-- Additional Errors -->
+    <string name="purchase_error">Ошибка покупки</string>
+    <string name="restore_failed">Не удалось восстановить покупки</string>
+    <string name="billing_not_ready">Billing не готов, попробуйте позже</string>
+
+    <!-- Benefits for Comparison Table (опционально) -->
+    <string name="benefit_instant_analysis">⚡ Мгновенный анализ позиций</string>
+    <string name="benefit_deep_calculation">🧠 Глубокий расчет вариантов</string>
+    <string name="benefit_cloud_processing">☁️ Облачная обработка</string>
+    <string name="benefit_unlimited">♾️ Неограниченное использование</string>
+    <string name="benefit_no_ads">🚫 Без рекламы</string>
+    <string name="benefit_priority_support">💬 Приоритетная поддержка</string>
 </resources>

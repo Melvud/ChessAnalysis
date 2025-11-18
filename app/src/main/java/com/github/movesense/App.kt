@@ -3,8 +3,8 @@ package com.github.movesense
 import android.app.Application
 import android.util.Log
 import com.github.movesense.analysis.Openings
+import com.github.movesense.subscription.GooglePlayBillingManager
 import com.github.movesense.util.LocaleManager
-import com.github.movesense.subscription.RevenueCatManager
 import java.util.Locale
 
 class App : Application() {
@@ -18,6 +18,7 @@ class App : Application() {
         // ✅ При первом запуске устанавливаем английский по умолчанию
         val prefs = getSharedPreferences("app_settings", MODE_PRIVATE)
         val isFirstLaunch = prefs.getBoolean("first_launch", true)
+        GooglePlayBillingManager.initialize(this)
 
         if (isFirstLaunch) {
             // Сохраняем английский как дефолтный язык
@@ -35,12 +36,5 @@ class App : Application() {
         EngineClient.setAndroidContext(this)
         Openings.init(this)
 
-        // 🆕 Инициализируем RevenueCat
-        try {
-            RevenueCatManager.initialize(this)
-            Log.d(TAG, "✅ RevenueCat initialized successfully")
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to initialize RevenueCat", e)
-        }
     }
 }
