@@ -371,6 +371,10 @@ fun GameReportScreen(
         Log.d(TAG, "🔄 Starting REAL-TIME analysis from depth $currentDepthValue to $targetDepth for ply $currentPlyIndex")
         isAnalysisRunning = true
 
+        // ✅ КРИТИЧНО: Захватываем currentPlyIndex в локальную переменную
+        // чтобы избежать race condition при смене позиции
+        val analysisPlyIndex = currentPlyIndex
+
         // Сохраняем Job для возможности отмены
         currentAnalysisJob = launch {
             try {
@@ -401,23 +405,25 @@ fun GameReportScreen(
                                 )
                             }
 
-                            // ✅ ОБНОВЛЯЕМ UI СРАЗУ! Не ждем завершения глубины!
-                            updatedLines[currentPlyIndex] = lineEvals
+                            // ✅ КРИТИЧНО: Используем захваченный analysisPlyIndex вместо currentPlyIndex!
+                            // Это гарантирует, что мы обновляем правильную позицию даже если пользователь
+                            // переключился на другую позицию во время анализа
+                            updatedLines[analysisPlyIndex] = lineEvals
 
                             // ✅ КРИТИЧНО: Триггерим recomposition через изменение триггера
                             linesUpdateTrigger++
 
-                            Log.d(TAG, "📊 REAL-TIME: Position $currentPlyIndex updated to depth $receivedDepth, ${lineEvals.size} lines, BEST cp=${lineEvals.firstOrNull()?.cp}")
+                            Log.d(TAG, "📊 REAL-TIME: Position $analysisPlyIndex updated to depth $receivedDepth, ${lineEvals.size} lines, BEST cp=${lineEvals.firstOrNull()?.cp}")
                         }
                     }
                 )
 
-                Log.d(TAG, "✅ Completed REAL-TIME analysis to depth $targetDepth for position $currentPlyIndex")
+                Log.d(TAG, "✅ Completed REAL-TIME analysis to depth $targetDepth for position $analysisPlyIndex")
             } catch (e: CancellationException) {
-                Log.d(TAG, "⚠️ Analysis cancelled for position $currentPlyIndex at depth $currentDepth")
+                Log.d(TAG, "⚠️ Analysis cancelled for position $analysisPlyIndex at depth $currentDepth - progress saved!")
                 // НЕ выбрасываем исключение - сохраняем прогресс
             } catch (e: Exception) {
-                Log.e(TAG, "❌ Error during REAL-TIME analysis for position $currentPlyIndex", e)
+                Log.e(TAG, "❌ Error during REAL-TIME analysis for position $analysisPlyIndex", e)
             } finally {
                 isAnalysisRunning = false
             }

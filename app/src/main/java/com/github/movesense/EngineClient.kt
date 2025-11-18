@@ -58,8 +58,11 @@ object EngineClient {
             _engineMode.value = saved
             // ✅ ИСПРАВЛЕНИЕ: ВСЕГДА запускаем движок при старте для мгновенной готовности!
             Log.d(TAG, "🚀 Starting engine immediately for instant readiness")
-            runCatching { LocalEngine.ensureStarted() }
-                .onFailure { e -> Log.e(TAG, "Failed to start local engine on restore", e) }
+            GlobalScope.launch(Dispatchers.IO) {
+                runCatching { LocalEngine.ensureStartedSuspend() }
+                    .onSuccess { Log.d(TAG, "✅ Engine ready on app start") }
+                    .onFailure { e -> Log.e(TAG, "Failed to start local engine on restore", e) }
+            }
         }
     }
 
@@ -70,11 +73,13 @@ object EngineClient {
         prefs?.edit()?.putString(KEY_ENGINE_MODE, mode.name)?.apply()
 
         if (mode == EngineMode.LOCAL) {
-            runCatching { LocalEngine.ensureStarted() }
-                .onFailure { e ->
-                    Log.e(TAG, "Failed to start local engine", e)
-                    throw e
-                }
+            withContext(Dispatchers.IO) {
+                runCatching { LocalEngine.ensureStartedSuspend() }
+                    .onFailure { e ->
+                        Log.e(TAG, "Failed to start local engine", e)
+                        throw e
+                    }
+            }
         } else {
             LocalEngine.stop()
         }
@@ -1018,6 +1023,72 @@ object EngineClient {
             }
         }
 
+        /**
+         * ✅ НОВАЯ ФУНКЦИЯ: Suspend версия ensureStarted - ждет готовности движка синхронно
+         */
+        suspend fun ensureStartedSuspend() = withContext(Dispatchers.IO) {
+            if (started.get() && engineReady.get()) {
+                Log.d(LOCAL_TAG, "✅ Engine already started and ready")
+                return@withContext
+            }
+
+            if (!started.get()) {
+                // Запускаем инициализацию
+                withContext(Dispatchers.Main) {
+                    if (started.getAndSet(true)) {
+                        Log.d(LOCAL_TAG, "Engine start race condition - already started")
+                    } else {
+                        val ctx = appCtx ?: throw IllegalStateException(
+                            "EngineClient: context is not set. Call setAndroidContext(context) before LOCAL mode."
+                        )
+
+                        Log.d(LOCAL_TAG, "🚀 Starting engine initialization (sync)...")
+
+                        web = EngineWebView.getInstance(ctx) { line ->
+                            when {
+                                line == "ENGINE_READY" -> {
+                                    engineReady.set(true)
+                                    web?.markInitialized()
+                                    Log.d(LOCAL_TAG, "✓ ENGINE_READY received")
+                                }
+                                line.startsWith("info string") -> { /* ignore */ }
+                                else -> {
+                                    synchronized(listeners) {
+                                        for (l in listeners) {
+                                            try {
+                                                l(line)
+                                            } catch (e: Exception) {
+                                                Log.e(LOCAL_TAG, "Listener error", e)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        web?.start()
+                    }
+                }
+            }
+
+            // ✅ КРИТИЧНО: Ждем готовности движка СИНХРОННО!
+            var attempts = 0
+            val maxAttempts = 200  // 200 * 50ms = 10 секунд максимум
+            while (!engineReady.get() && attempts < maxAttempts) {
+                delay(50)
+                attempts++
+            }
+
+            if (!engineReady.get()) {
+                val waitedMs = attempts * 50
+                Log.e(LOCAL_TAG, "❌ Engine NOT ready after ${waitedMs}ms!")
+                throw IllegalStateException("Engine failed to initialize after ${waitedMs}ms")
+            } else {
+                val waitedMs = attempts * 50
+                Log.d(LOCAL_TAG, "✅ Engine ready after ${waitedMs}ms")
+            }
+        }
+
         fun stop() {
             Log.d(LOCAL_TAG, "stop() called — WebView remains alive")
         }
@@ -1104,11 +1175,8 @@ object EngineClient {
             multiPv: Int,
             skillLevel: Int?
         ): PositionDTO = withTimeout(120_000) {
-            // ✅ ИСПРАВЛЕНИЕ: Пробуем запустить движок, если он еще не запущен
-            if (!started.get()) {
-                Log.w(LOCAL_TAG, "⚠ Engine not started yet, starting now...")
-                ensureStarted()
-            }
+            // ✅ ИСПРАВЛЕНИЕ: Всегда проверяем готовность движка синхронно
+            ensureStartedSuspend()
 
             // Отменяем предыдущий анализ
             currentAnalysisJob?.cancel()
@@ -1233,11 +1301,8 @@ object EngineClient {
             skillLevel: Int?,
             onUpdate: (List<LineDTO>) -> Unit
         ): PositionDTO = coroutineScope {
-            // ✅ ИСПРАВЛЕНИЕ: Пробуем запустить движок, если он еще не запущен
-            if (!started.get()) {
-                Log.w(LOCAL_TAG, "⚠ Engine not started yet, starting now...")
-                ensureStarted()
-            }
+            // ✅ ИСПРАВЛЕНИЕ: Всегда проверяем готовность движка синхронно
+            ensureStartedSuspend()
 
             // Отменяем предыдущий анализ
             currentAnalysisJob?.cancel()
