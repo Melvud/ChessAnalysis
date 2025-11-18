@@ -65,39 +65,25 @@ class LocalGameAnalyzer(
             depth = depth,
             multiPv = multiPv
         ) { serverSnap ->
-            val currentIdx = serverSnap.done - 1
-            val currentSan = if (currentIdx >= 0 && currentIdx < sanMoves.size) {
-                sanMoves[currentIdx]
+            // КРИТИЧНО: serverSnap.done указывает на ПОСЛЕДНЮЮ ОБРАБОТАННУЮ позицию в allFens
+            // Позиция 0 - стартовая, Позиция 1 - после 1-го хода (uciMoves[0]), и т.д.
+            val currentPosIdx = serverSnap.done - 1
+
+            // Определяем индекс ХОДА, который привел к текущей позиции
+            // Если currentPosIdx = 1, это позиция ПОСЛЕ 1-го хода, значит ход имеет индекс 0
+            val moveIdx = currentPosIdx - 1
+
+            val currentSan = if (moveIdx >= 0 && moveIdx < sanMoves.size) {
+                sanMoves[moveIdx]
             } else null
 
-            // ✅ В локальном режиме сразу вычисляем классификацию
-            val currentClass = if (EngineClient.engineMode.value == EngineClient.EngineMode.LOCAL
-                && currentIdx > 0
-                && currentIdx <= serverSnap.done) {
-                val evalCp = serverSnap.evalCp
-                val evalMate = serverSnap.evalMate
-
-                when {
-                    evalMate != null && evalMate != 0 -> {
-                        if ((evalMate > 0 && currentIdx % 2 == 1) || (evalMate < 0 && currentIdx % 2 == 0)) {
-                            "BEST"
-                        } else {
-                            "BLUNDER"
-                        }
-                    }
-                    evalCp != null -> {
-                        when {
-                            evalCp >= 100 -> "BEST"
-                            evalCp >= 50 -> "EXCELLENT"
-                            evalCp >= -50 -> "OKAY"
-                            evalCp >= -100 -> "INACCURACY"
-                            evalCp >= -300 -> "MISTAKE"
-                            else -> "BLUNDER"
-                        }
-                    }
-                    else -> null
-                }
+            val currentUci = if (moveIdx >= 0 && moveIdx < uciMoves.size) {
+                uciMoves[moveIdx]
             } else null
+
+            // Классификация не вычисляется в реальном времени для локального режима
+            // Она будет рассчитана позже через MoveClassification.getMovesClassification()
+            val currentClass = null
 
             val enrichedSnap = EngineClient.ProgressSnapshot(
                 id = progressId,
@@ -111,7 +97,7 @@ class LocalGameAnalyzer(
                 fen = serverSnap.fen,
                 currentSan = currentSan,
                 currentClass = currentClass,
-                currentUci = serverSnap.currentUci,
+                currentUci = currentUci,
                 evalCp = serverSnap.evalCp,
                 evalMate = serverSnap.evalMate
             )
