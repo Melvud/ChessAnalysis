@@ -1315,9 +1315,10 @@ private fun parseGameEnd(pgn: String?, result: String?): GameEndInfo {
         else -> null
     }
 
-    // ИСПРАВЛЕНИЕ: "Normal" НЕ всегда означает мат! Это может быть и сдача.
-    // Проверяем конкретные теги вместо того, чтобы предполагать мат по "normal"
+    // ИСПРАВЛЕНИЕ: Вернули "normal" - проблема была в неправильной обработке мата в WinPercentage.kt
+    // Теперь WinPercentage правильно обрабатывает mate:0 и другие случаи мата
     val termination = when {
+        "normal" in terminationTag && resultTag != "1/2-1/2" -> GameTermination.CHECKMATE
         "checkmate" in terminationTag -> GameTermination.CHECKMATE
         "time forfeit" in terminationTag -> GameTermination.TIMEOUT
         "timeout" in terminationTag -> GameTermination.TIMEOUT
@@ -1332,8 +1333,8 @@ private fun parseGameEnd(pgn: String?, result: String?): GameEndInfo {
         "threefold" in terminationTag -> GameTermination.REPETITION
         "agreement" in terminationTag || "agreed" in terminationTag -> GameTermination.AGREEMENT
         resultTag == "1/2-1/2" && terminationTag.isNotBlank() -> GameTermination.DRAW
-        resultTag == "1/2-1/2" -> GameTermination.DRAW
         resultTag == "1-0" || resultTag == "0-1" -> GameTermination.UNKNOWN
+        resultTag == "1/2-1/2" -> GameTermination.DRAW
         else -> GameTermination.UNKNOWN
     }
 

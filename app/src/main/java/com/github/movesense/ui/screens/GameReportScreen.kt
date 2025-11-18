@@ -294,11 +294,14 @@ fun GameReportScreen(
         }
     }
 
+    // ИСПРАВЛЕНИЕ: Убрали автоматическое углубление анализа
+    // Теперь только при явном выборе пользователем глубины через диалог
     LaunchedEffect(currentPlyIndex, variationActive, positionSettings[currentPlyIndex], analysisVersion) {
         if (variationActive) return@LaunchedEffect
 
         val positionFen = report.positions.getOrNull(currentPlyIndex)?.fen ?: return@LaunchedEffect
 
+        // Инициализируем линии из отчета, если еще не инициализированы
         val currentLines = updatedLines[currentPlyIndex]
             ?: report.positions.getOrNull(currentPlyIndex)?.lines?.also { reportLines ->
                 if (reportLines.isNotEmpty()) {
@@ -308,31 +311,37 @@ fun GameReportScreen(
             ?: emptyList()
 
         val currentDepthValue = currentLines.firstOrNull()?.depth ?: 12
-
-        val savedDepth = positionSettings[currentPlyIndex]?.first
-        val targetDepth = savedDepth ?: 18
-
         currentDepth = currentDepthValue
 
-        if (currentDepthValue >= targetDepth) {
-            Log.d(TAG, "✅ Position $currentPlyIndex already analyzed to depth $currentDepthValue (target: $targetDepth)")
+        // Проверяем, выбрал ли пользователь конкретную глубину для этой позиции
+        val savedDepth = positionSettings[currentPlyIndex]?.first
+        if (savedDepth == null) {
+            // Пользователь не выбрал глубину - просто показываем данные из отчета
+            Log.d(TAG, "✅ Position $currentPlyIndex: showing report data at depth $currentDepthValue")
             return@LaunchedEffect
         }
 
-        Log.d(TAG, "🔄 Starting REAL-TIME analysis from depth $currentDepthValue to $targetDepth for ply $currentPlyIndex")
+        // Пользователь выбрал конкретную глубину - анализируем
+        if (currentDepthValue >= savedDepth) {
+            Log.d(TAG, "✅ Position $currentPlyIndex already analyzed to depth $currentDepthValue (requested: $savedDepth)")
+            return@LaunchedEffect
+        }
+
+        Log.d(TAG, "🔄 User requested depth $savedDepth for position $currentPlyIndex, analyzing...")
         isAnalysisRunning = true
 
         try {
-            EngineClient.evaluateFenDetailedStreamingForcedLocal(
+            // Анализируем БЕЗ real-time обновления - просто ждем результат
+            val result = EngineClient.evaluateFenDetailedStreamingForcedLocal(
                 fen = positionFen,
-                depth = targetDepth,
+                depth = savedDepth,
                 multiPv = viewSettings.numberOfLines.coerceAtLeast(1),
                 onUpdate = { linesList: List<EngineClient.LineDTO> ->
-                    if (linesList.isNotEmpty()) {
-                        val receivedDepth = linesList.first().depth ?: 0
+                    // Обновляем только когда достигли целевой глубины
+                    val receivedDepth = linesList.firstOrNull()?.depth ?: 0
+                    currentDepth = receivedDepth
 
-                        currentDepth = receivedDepth
-
+                    if (receivedDepth >= savedDepth && linesList.isNotEmpty()) {
                         val normalizedLines = normalizeLinesToWhitePOV(linesList, positionFen)
 
                         val lineEvals = normalizedLines.map { dto: EngineClient.LineDTO ->
@@ -347,17 +356,16 @@ fun GameReportScreen(
                         }
 
                         updatedLines[currentPlyIndex] = lineEvals
-
-                        Log.d(TAG, "📊 REAL-TIME: Position $currentPlyIndex updated to depth $receivedDepth, ${lineEvals.size} lines, BEST cp=${lineEvals.firstOrNull()?.cp}")
+                        Log.d(TAG, "✅ Position $currentPlyIndex analyzed to depth $receivedDepth")
                     }
                 }
             )
 
-            Log.d(TAG, "✅ Completed REAL-TIME analysis to depth $targetDepth for position $currentPlyIndex")
+            Log.d(TAG, "✅ Completed analysis to depth $savedDepth for position $currentPlyIndex")
         } catch (e: CancellationException) {
-            Log.d(TAG, "⚠️ Analysis cancelled for position $currentPlyIndex at depth $currentDepth")
+            Log.d(TAG, "⚠️ Analysis cancelled for position $currentPlyIndex")
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Error during REAL-TIME analysis for position $currentPlyIndex", e)
+            Log.e(TAG, "❌ Error during analysis for position $currentPlyIndex", e)
         } finally {
             isAnalysisRunning = false
         }
