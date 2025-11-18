@@ -57,7 +57,7 @@ object RevenueCatManager {
             }
 
             override fun onError(error: PurchasesError) {
-                Log.e(TAG, "Error checking premium status: ${error.underlyingErrorMessage}")
+                Log.e(TAG, "Error checking premium status: ${error.message}")
                 continuation.resume(false)
             }
         })
@@ -82,7 +82,7 @@ object RevenueCatManager {
             }
 
             override fun onError(error: PurchasesError) {
-                Log.e(TAG, "Error getting customer info: ${error.underlyingErrorMessage}")
+                Log.e(TAG, "Error getting customer info: ${error.message}")
             }
         })
 
@@ -101,7 +101,7 @@ object RevenueCatManager {
             }
 
             override fun onError(error: PurchasesError) {
-                Log.e(TAG, "Error getting customer info: ${error.underlyingErrorMessage}")
+                Log.e(TAG, "Error getting customer info: ${error.message}")
                 continuation.resume(null)
             }
         })
@@ -113,12 +113,12 @@ object RevenueCatManager {
     suspend fun login(userId: String) {
         try {
             Purchases.sharedInstance.logIn(
-                newAppUserID = userId,
+                userId,
+                onError = { error ->
+                    Log.e(TAG, "Error logging in: ${error.message}")
+                },
                 onSuccess = { customerInfo, created ->
                     Log.d(TAG, "User logged in: $userId, created: $created")
-                },
-                onError = { error ->
-                    Log.e(TAG, "Error logging in: ${error.underlyingErrorMessage}")
                 }
             )
         } catch (e: Exception) {
@@ -132,11 +132,11 @@ object RevenueCatManager {
     suspend fun logout() {
         try {
             Purchases.sharedInstance.logOut(
+                onError = { error ->
+                    Log.e(TAG, "Error logging out: ${error.message}")
+                },
                 onSuccess = { customerInfo ->
                     Log.d(TAG, "User logged out successfully")
-                },
-                onError = { error ->
-                    Log.e(TAG, "Error logging out: ${error.underlyingErrorMessage}")
                 }
             )
         } catch (e: Exception) {
@@ -149,14 +149,14 @@ object RevenueCatManager {
      */
     suspend fun restorePurchases(): Boolean = suspendCancellableCoroutine { continuation ->
         Purchases.sharedInstance.restorePurchases(
+            onError = { error ->
+                Log.e(TAG, "Error restoring purchases: ${error.message}")
+                continuation.resume(false)
+            },
             onSuccess = { customerInfo ->
                 val isPremium = customerInfo.entitlements.active.containsKey(ENTITLEMENT_ID)
                 Log.d(TAG, "Purchases restored, premium: $isPremium")
                 continuation.resume(true)
-            },
-            onError = { error ->
-                Log.e(TAG, "Error restoring purchases: ${error.underlyingErrorMessage}")
-                continuation.resume(false)
             }
         )
     }

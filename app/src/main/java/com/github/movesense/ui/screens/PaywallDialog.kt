@@ -209,26 +209,29 @@ fun PaywallDialog(
                                                         context as androidx.activity.ComponentActivity,
                                                         packageToPurchase
                                                     ).build(),
-                                                    onError = { error: PurchasesError, userCancelled: Boolean ->
-                                                        if (!userCancelled) {
-                                                            errorMessage = error.underlyingErrorMessage
+                                                    object : com.revenuecat.purchases.interfaces.PurchaseCallback {
+                                                        override fun onCompleted(storeTransaction: StoreTransaction, customerInfo: CustomerInfo) {
+                                                            val isPremium = customerInfo.entitlements.active.containsKey(RevenueCatManager.ENTITLEMENT_ID)
+                                                            isPurchasing = false
+                                                            if (isPremium) {
+                                                                onPurchaseSuccess()
+                                                            } else {
+                                                                errorMessage = context.getString(R.string.purchase_failed)
+                                                            }
                                                         }
-                                                        isPurchasing = false
-                                                    },
-                                                    onSuccess = { _: StoreTransaction, customerInfo: CustomerInfo ->
-                                                        val isPremium = customerInfo.entitlements.active.containsKey(RevenueCatManager.ENTITLEMENT_ID)
-                                                        isPurchasing = false
-                                                        if (isPremium) {
-                                                            onPurchaseSuccess()
-                                                        } else {
-                                                            errorMessage = context.getString(R.string.purchase_failed)
+
+                                                        override fun onError(error: PurchasesError, userCancelled: Boolean) {
+                                                            if (!userCancelled) {
+                                                                errorMessage = error.message
+                                                            }
+                                                            isPurchasing = false
                                                         }
                                                     }
                                                 )
                                             }
 
                                             override fun onError(error: PurchasesError) {
-                                                errorMessage = error.underlyingErrorMessage
+                                                errorMessage = error.message
                                                 isPurchasing = false
                                             }
                                         })
