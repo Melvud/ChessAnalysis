@@ -248,5 +248,7 @@
         <string name="load_products_error">Failed to load subscription options</string>
         <string name="no_products_available">No subscription options available</string>
         <string name="unexpected_error">An unexpected error occurred</string>
+        <string name="product_not_found">Producto no encontrado</string>
+        <string name="purchase_failed">Compra fallida</string>
 
 </resources>
