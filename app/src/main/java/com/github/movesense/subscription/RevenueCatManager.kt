@@ -6,6 +6,7 @@ import com.revenuecat.purchases.CustomerInfo
 import com.revenuecat.purchases.Purchases
 import com.revenuecat.purchases.PurchasesConfiguration
 import com.revenuecat.purchases.PurchasesError
+import com.revenuecat.purchases.interfaces.LogInCallback
 import com.revenuecat.purchases.interfaces.ReceiveCustomerInfoCallback
 import com.revenuecat.purchases.interfaces.UpdatedCustomerInfoListener
 import kotlinx.coroutines.channels.awaitClose
@@ -112,15 +113,15 @@ object RevenueCatManager {
      */
     suspend fun login(userId: String) {
         try {
-            Purchases.sharedInstance.logIn(
-                userId,
-                onError = { error ->
+            Purchases.sharedInstance.logIn(userId, object : LogInCallback {
+                override fun onError(error: PurchasesError) {
                     Log.e(TAG, "Error logging in: ${error.message}")
-                },
-                onSuccess = { customerInfo, created ->
+                }
+
+                override fun onReceived(customerInfo: CustomerInfo, created: Boolean) {
                     Log.d(TAG, "User logged in: $userId, created: $created")
                 }
-            )
+            })
         } catch (e: Exception) {
             Log.e(TAG, "Error logging in: ${e.message}")
         }
@@ -131,14 +132,15 @@ object RevenueCatManager {
      */
     suspend fun logout() {
         try {
-            Purchases.sharedInstance.logOut(
-                onError = { error ->
+            Purchases.sharedInstance.logOut(object : ReceiveCustomerInfoCallback {
+                override fun onError(error: PurchasesError) {
                     Log.e(TAG, "Error logging out: ${error.message}")
-                },
-                onSuccess = { customerInfo ->
+                }
+
+                override fun onReceived(customerInfo: CustomerInfo) {
                     Log.d(TAG, "User logged out successfully")
                 }
-            )
+            })
         } catch (e: Exception) {
             Log.e(TAG, "Error logging out: ${e.message}")
         }
@@ -148,16 +150,17 @@ object RevenueCatManager {
      * Восстановление покупок
      */
     suspend fun restorePurchases(): Boolean = suspendCancellableCoroutine { continuation ->
-        Purchases.sharedInstance.restorePurchases(
-            onError = { error ->
+        Purchases.sharedInstance.restorePurchases(object : ReceiveCustomerInfoCallback {
+            override fun onError(error: PurchasesError) {
                 Log.e(TAG, "Error restoring purchases: ${error.message}")
                 continuation.resume(false)
-            },
-            onSuccess = { customerInfo ->
+            }
+
+            override fun onReceived(customerInfo: CustomerInfo) {
                 val isPremium = customerInfo.entitlements.active.containsKey(ENTITLEMENT_ID)
                 Log.d(TAG, "Purchases restored, premium: $isPremium")
                 continuation.resume(true)
             }
-        )
+        })
     }
 }
