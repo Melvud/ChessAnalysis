@@ -252,6 +252,13 @@ fun GameReportScreen(
     // ✅ ИСПРАВЛЕНИЕ: Состояние для линий вариации
     var variationLines by remember { mutableStateOf<List<LineEval>>(emptyList()) }
 
+    // ✅ КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Заменяем derivedStateOf на mutableStateOf
+    // derivedStateOf НЕ отслеживает изменения в mutableStateMapOf надёжно!
+    var displayedLines by remember { mutableStateOf<List<LineEval>>(emptyList()) }
+
+    // Триггер для форсирования обновления UI при изменении линий
+    var linesUpdateTrigger by remember { mutableStateOf(0) }
+
     // ИНИЦИАЛИЗАЦИЯ: Заполняем updatedLines из report при первом запуске
     LaunchedEffect(Unit) {
         report.positions.forEachIndexed { index, posEval ->
@@ -262,37 +269,35 @@ fun GameReportScreen(
         Log.d(TAG, "✅ Initialized ${updatedLines.size} positions from report")
     }
 
-    // ✅ КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Прямое чтение из updatedLines БЕЗ derivedStateOf!
-    // derivedStateOf не отслеживает изменения в mutableStateMapOf надёжно
-    val displayedLines by remember {
-        derivedStateOf {
-            val lines = if (variationActive) {
-                // ✅ ИСПРАВЛЕНИЕ: В режиме вариации показываем линии ВАРИАЦИИ!
-                variationLines
-            } else {
-                // КРИТИЧНО: Всегда берем из updatedLines (уже заполненного из report)
-                updatedLines[currentPlyIndex] ?: emptyList()
-            }
-
-            // КРИТИЧНО: Сортировка - лучшая линия ВСЕГДА первая!
-            val sortedLines = lines.sortedByDescending { line ->
-                when {
-                    line.mate != null && line.mate!! > 0 -> 100000.0 + line.mate!!
-                    line.mate != null && line.mate!! < 0 -> -100000.0 + line.mate!!
-                    line.cp != null -> line.cp!!.toDouble()
-                    else -> 0.0
-                }
-            }
-
-            val limitedLines = sortedLines.take(viewSettings.numberOfLines.coerceAtLeast(1))
-
-            // Логируем только если есть изменения
-            if (limitedLines.isNotEmpty()) {
-                Log.d(TAG, "✅ STABLE: Displayed ${limitedLines.size} lines for ply ${if (variationActive) "VAR" else currentPlyIndex}, BEST line cp=${limitedLines.firstOrNull()?.cp}, mate=${limitedLines.firstOrNull()?.mate}, depth=${limitedLines.firstOrNull()?.depth}")
-            }
-
-            limitedLines
+    // ✅ КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Явное обновление displayedLines через LaunchedEffect
+    // Это гарантирует стабильное отображение линий при любых изменениях!
+    LaunchedEffect(currentPlyIndex, variationActive, variationLines, linesUpdateTrigger, viewSettings.numberOfLines) {
+        val lines = if (variationActive) {
+            // В режиме вариации показываем линии ВАРИАЦИИ!
+            variationLines
+        } else {
+            // Всегда берем из updatedLines (уже заполненного из report)
+            updatedLines[currentPlyIndex] ?: emptyList()
         }
+
+        // КРИТИЧНО: Сортировка - лучшая линия ВСЕГДА первая!
+        val sortedLines = lines.sortedByDescending { line ->
+            when {
+                line.mate != null && line.mate!! > 0 -> 100000.0 + line.mate!!
+                line.mate != null && line.mate!! < 0 -> -100000.0 + line.mate!!
+                line.cp != null -> line.cp!!.toDouble()
+                else -> 0.0
+            }
+        }
+
+        val limitedLines = sortedLines.take(viewSettings.numberOfLines.coerceAtLeast(1))
+
+        // Логируем только если есть изменения
+        if (limitedLines.isNotEmpty()) {
+            Log.d(TAG, "✅ STABLE: Displayed ${limitedLines.size} lines for ply ${if (variationActive) "VAR" else currentPlyIndex}, BEST line cp=${limitedLines.firstOrNull()?.cp}, mate=${limitedLines.firstOrNull()?.mate}, depth=${limitedLines.firstOrNull()?.depth}")
+        }
+
+        displayedLines = limitedLines
     }
 
     val positionSettings = remember { mutableStateMapOf<Int, Pair<Int, Int>>() }
@@ -379,6 +384,9 @@ fun GameReportScreen(
 
                         // ✅ КРИТИЧНО: Обновляем через присваивание для форсирования recomposition!
                         updatedLines[currentPlyIndex] = lineEvals
+
+                        // ✅ КРИТИЧНО: Инкрементируем триггер для форсирования обновления UI!
+                        linesUpdateTrigger++
 
                         Log.d(TAG, "📊 REAL-TIME: Position $currentPlyIndex updated to depth $receivedDepth, ${lineEvals.size} lines, BEST cp=${lineEvals.firstOrNull()?.cp}")
                     }
@@ -670,6 +678,7 @@ fun GameReportScreen(
         variationLines = emptyList()  // ✅ ИСПРАВЛЕНИЕ: Очищаем линии вариации
         selectedSquare = null
         legalTargets = emptySet()
+        linesUpdateTrigger++  // ✅ ИСПРАВЛЕНИЕ: Форсируем обновление UI
     }
 
     fun seekTo(index: Int) {
@@ -683,6 +692,9 @@ fun GameReportScreen(
             val mv = report.moves.getOrNull(currentPlyIndex - 1)
             playMoveSound(mv?.classification, mv?.san?.contains('x') == true)
         }
+
+        // ✅ ИСПРАВЛЕНИЕ: Форсируем обновление UI при переключении позиций
+        linesUpdateTrigger++
     }
 
     fun goNext() { if (!isAnalyzing && currentPlyIndex < report.positions.lastIndex) seekTo(currentPlyIndex + 1) }
@@ -1015,6 +1027,8 @@ fun GameReportScreen(
                 viewSettings = newSettings
                 // При изменении настроек увеличиваем версию для перезапуска анализа
                 analysisVersion++
+                // ✅ ИСПРАВЛЕНИЕ: Форсируем обновление линий при изменении настроек
+                linesUpdateTrigger++
             }
         )
     }
