@@ -28,6 +28,7 @@ import java.util.regex.Pattern
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.text.iterator
+import com.github.bhlangonijr.chesslib.Board
 
 object EngineClient {
 
@@ -1104,6 +1105,33 @@ object EngineClient {
             multiPv: Int,
             skillLevel: Int?
         ): PositionDTO = withTimeout(120_000) {
+            // ✅ ИСПРАВЛЕНИЕ: Проверяем, является ли позиция терминальной (мат или пат)
+            try {
+                val board = Board()
+                board.loadFromFen(fen)
+                
+                if (board.isMated) {
+                    // Позиция - мат. Сторона, которая ходит, заматована
+                    Log.d(LOCAL_TAG, "✓ Terminal position detected: checkmate (mate 0)")
+                    return@withTimeout PositionDTO(
+                        lines = listOf(LineDTO(pv = emptyList(), cp = null, mate = 0)),
+                        bestMove = null
+                    )
+                }
+                
+                if (board.isDraw) {
+                    // Позиция - ничья (пат, недостаточно материала, и т.д.)
+                    Log.d(LOCAL_TAG, "✓ Terminal position detected: draw (cp 0)")
+                    return@withTimeout PositionDTO(
+                        lines = listOf(LineDTO(pv = emptyList(), cp = 0, mate = null)),
+                        bestMove = null
+                    )
+                }
+            } catch (e: Exception) {
+                // Если не удалось загрузить FEN, продолжаем с нормальным анализом
+                Log.w(LOCAL_TAG, "⚠ Failed to check if position is terminal: ${e.message}")
+            }
+            
             // ✅ ИСПРАВЛЕНИЕ: Пробуем запустить движок, если он еще не запущен
             if (!started.get()) {
                 Log.w(LOCAL_TAG, "⚠ Engine not started yet, starting now...")
@@ -1233,6 +1261,37 @@ object EngineClient {
             skillLevel: Int?,
             onUpdate: (List<LineDTO>) -> Unit
         ): PositionDTO = coroutineScope {
+            // ✅ ИСПРАВЛЕНИЕ: Проверяем, является ли позиция терминальной (мат или пат)
+            try {
+                val board = Board()
+                board.loadFromFen(fen)
+                
+                if (board.isMated) {
+                    // Позиция - мат. Сторона, которая ходит, заматована
+                    Log.d(LOCAL_TAG, "✓ Terminal position detected: checkmate (mate 0)")
+                    val result = PositionDTO(
+                        lines = listOf(LineDTO(pv = emptyList(), cp = null, mate = 0)),
+                        bestMove = null
+                    )
+                    onUpdate(result.lines)
+                    return@coroutineScope result
+                }
+                
+                if (board.isDraw) {
+                    // Позиция - ничья (пат, недостаточно материала, и т.д.)
+                    Log.d(LOCAL_TAG, "✓ Terminal position detected: draw (cp 0)")
+                    val result = PositionDTO(
+                        lines = listOf(LineDTO(pv = emptyList(), cp = 0, mate = null)),
+                        bestMove = null
+                    )
+                    onUpdate(result.lines)
+                    return@coroutineScope result
+                }
+            } catch (e: Exception) {
+                // Если не удалось загрузить FEN, продолжаем с нормальным анализом
+                Log.w(LOCAL_TAG, "⚠ Failed to check if position is terminal: ${e.message}")
+            }
+            
             // ✅ ИСПРАВЛЕНИЕ: Пробуем запустить движок, если он еще не запущен
             if (!started.get()) {
                 Log.w(LOCAL_TAG, "⚠ Engine not started yet, starting now...")
