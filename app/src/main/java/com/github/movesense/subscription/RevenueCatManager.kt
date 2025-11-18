@@ -5,7 +5,9 @@ import android.util.Log
 import com.revenuecat.purchases.CustomerInfo
 import com.revenuecat.purchases.Purchases
 import com.revenuecat.purchases.PurchasesConfiguration
+import com.revenuecat.purchases.PurchasesError
 import com.revenuecat.purchases.interfaces.ReceiveCustomerInfoCallback
+import com.revenuecat.purchases.interfaces.UpdatedCustomerInfoListener
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -49,13 +51,13 @@ object RevenueCatManager {
     suspend fun isPremiumUser(): Boolean = suspendCancellableCoroutine { continuation ->
         Purchases.sharedInstance.getCustomerInfo(object : ReceiveCustomerInfoCallback {
             override fun onReceived(customerInfo: CustomerInfo) {
-                val isPremium = customerInfo.entitlements[ENTITLEMENT_ID]?.isActive == true
+                val isPremium = customerInfo.entitlements.active.containsKey(ENTITLEMENT_ID)
                 Log.d(TAG, "Premium status: $isPremium")
                 continuation.resume(isPremium)
             }
 
-            override fun onError(error: com.revenuecat.purchases.PurchasesError) {
-                Log.e(TAG, "Error checking premium status: ${error.message}")
+            override fun onError(error: PurchasesError) {
+                Log.e(TAG, "Error checking premium status: ${error.underlyingErrorMessage}")
                 continuation.resume(false)
             }
         })
@@ -65,21 +67,27 @@ object RevenueCatManager {
      * Flow для отслеживания изменений статуса подписки
      */
     fun observePremiumStatus(): Flow<Boolean> = callbackFlow {
-        val listener = Purchases.sharedInstance.addCustomerInfoUpdateListener { customerInfo ->
-            val isPremium = customerInfo.entitlements[ENTITLEMENT_ID]?.isActive == true
+        val listener = UpdatedCustomerInfoListener { customerInfo ->
+            val isPremium = customerInfo.entitlements.active.containsKey(ENTITLEMENT_ID)
             trySend(isPremium)
         }
 
+        Purchases.sharedInstance.updatedCustomerInfoListener = listener
+
         // Отправляем текущий статус
-        Purchases.sharedInstance.getCustomerInfo { customerInfo, _ ->
-            customerInfo?.let {
-                val isPremium = it.entitlements[ENTITLEMENT_ID]?.isActive == true
+        Purchases.sharedInstance.getCustomerInfo(object : ReceiveCustomerInfoCallback {
+            override fun onReceived(customerInfo: CustomerInfo) {
+                val isPremium = customerInfo.entitlements.active.containsKey(ENTITLEMENT_ID)
                 trySend(isPremium)
             }
-        }
+
+            override fun onError(error: PurchasesError) {
+                Log.e(TAG, "Error getting customer info: ${error.underlyingErrorMessage}")
+            }
+        })
 
         awaitClose {
-            Purchases.sharedInstance.removeCustomerInfoUpdateListener(listener)
+            Purchases.sharedInstance.updatedCustomerInfoListener = null
         }
     }
 
@@ -92,8 +100,8 @@ object RevenueCatManager {
                 continuation.resume(customerInfo)
             }
 
-            override fun onError(error: com.revenuecat.purchases.PurchasesError) {
-                Log.e(TAG, "Error getting customer info: ${error.message}")
+            override fun onError(error: PurchasesError) {
+                Log.e(TAG, "Error getting customer info: ${error.underlyingErrorMessage}")
                 continuation.resume(null)
             }
         })
@@ -104,9 +112,15 @@ object RevenueCatManager {
      */
     suspend fun login(userId: String) {
         try {
-            Purchases.sharedInstance.logIn(userId) { customerInfo, created ->
-                Log.d(TAG, "User logged in: $userId, created: $created")
-            }
+            Purchases.sharedInstance.logIn(
+                newAppUserID = userId,
+                onSuccess = { customerInfo, created ->
+                    Log.d(TAG, "User logged in: $userId, created: $created")
+                },
+                onError = { error ->
+                    Log.e(TAG, "Error logging in: ${error.underlyingErrorMessage}")
+                }
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Error logging in: ${e.message}")
         }
@@ -117,13 +131,14 @@ object RevenueCatManager {
      */
     suspend fun logout() {
         try {
-            Purchases.sharedInstance.logOut { customerInfo, error ->
-                if (error != null) {
-                    Log.e(TAG, "Error logging out: ${error.message}")
-                } else {
+            Purchases.sharedInstance.logOut(
+                onSuccess = { customerInfo ->
                     Log.d(TAG, "User logged out successfully")
+                },
+                onError = { error ->
+                    Log.e(TAG, "Error logging out: ${error.underlyingErrorMessage}")
                 }
-            }
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Error logging out: ${e.message}")
         }
@@ -133,15 +148,16 @@ object RevenueCatManager {
      * Восстановление покупок
      */
     suspend fun restorePurchases(): Boolean = suspendCancellableCoroutine { continuation ->
-        Purchases.sharedInstance.restorePurchases { customerInfo, error ->
-            if (error != null) {
-                Log.e(TAG, "Error restoring purchases: ${error.message}")
-                continuation.resume(false)
-            } else {
-                val isPremium = customerInfo.entitlements[ENTITLEMENT_ID]?.isActive == true
+        Purchases.sharedInstance.restorePurchases(
+            onSuccess = { customerInfo ->
+                val isPremium = customerInfo.entitlements.active.containsKey(ENTITLEMENT_ID)
                 Log.d(TAG, "Purchases restored, premium: $isPremium")
                 continuation.resume(true)
+            },
+            onError = { error ->
+                Log.e(TAG, "Error restoring purchases: ${error.underlyingErrorMessage}")
+                continuation.resume(false)
             }
-        }
+        )
     }
 }

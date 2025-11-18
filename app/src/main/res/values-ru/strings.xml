@@ -248,5 +248,7 @@
         <string name="load_products_error">Не удалось загрузить варианты подписки</string>
         <string name="no_products_available">Нет доступных вариантов подписки</string>
         <string name="unexpected_error">Произошла непредвиденная ошибка</string>
+        <string name="product_not_found">Продукт не найден</string>
+        <string name="purchase_failed">Покупка не удалась</string>
 
 </resources>

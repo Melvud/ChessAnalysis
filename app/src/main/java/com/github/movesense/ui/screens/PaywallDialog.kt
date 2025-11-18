@@ -26,8 +26,11 @@ import androidx.compose.ui.window.DialogProperties
 import com.github.movesense.R
 import com.github.movesense.subscription.RevenueCatManager
 import com.revenuecat.purchases.Purchases
+import com.revenuecat.purchases.PurchasesError
+import com.revenuecat.purchases.interfaces.ReceiveOfferingsCallback
 import com.revenuecat.purchases.models.StoreProduct
-import com.revenuecat.purchases.purchaseWith
+import com.revenuecat.purchases.models.StoreTransaction
+import com.revenuecat.purchases.CustomerInfo
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -48,18 +51,19 @@ fun PaywallDialog(
     // Load available products
     LaunchedEffect(Unit) {
         try {
-            Purchases.sharedInstance.getOfferings { offerings, error ->
-                if (error != null) {
-                    errorMessage = context.getString(R.string.load_products_error)
+            Purchases.sharedInstance.getOfferings(object : ReceiveOfferingsCallback {
+                override fun onReceived(offerings: com.revenuecat.purchases.Offerings) {
+                    val products = offerings.current?.availablePackages?.map { it.product } ?: emptyList()
+                    availableProducts = products
+                    selectedProduct = products.firstOrNull()
                     isLoading = false
-                    return@getOfferings
                 }
 
-                val products = offerings?.current?.availablePackages?.mapNotNull { it.product }
-                availableProducts = products ?: emptyList()
-                selectedProduct = products?.firstOrNull()
-                isLoading = false
-            }
+                override fun onError(error: PurchasesError) {
+                    errorMessage = context.getString(R.string.load_products_error)
+                    isLoading = false
+                }
+            })
         } catch (e: Exception) {
             errorMessage = context.getString(R.string.unexpected_error)
             isLoading = false
@@ -179,52 +183,55 @@ fun PaywallDialog(
                                 scope.launch {
                                     try {
                                         // 1. Get fresh offerings to find the correct Package
-                                        Purchases.sharedInstance.getOfferings { offerings, error ->
-                                            if (error != null) {
-                                                errorMessage = error.message
-                                                isPurchasing = false
-                                                return@getOfferings
-                                            }
-
-                                            val currentOffering = offerings?.current
-                                            if (currentOffering == null) {
-                                                errorMessage = context.getString(R.string.no_products_available)
-                                                isPurchasing = false
-                                                return@getOfferings
-                                            }
-
-                                            // 2. Find the package that matches the selected product
-                                            val packageToPurchase = currentOffering.availablePackages.find {
-                                                it.product.id == selectedProduct?.id
-                                            }
-
-                                            if (packageToPurchase == null) {
-                                                errorMessage = context.getString(R.string.product_not_found)
-                                                isPurchasing = false
-                                                return@getOfferings
-                                            }
-
-                                            // 3. Execute Purchase
-                                            Purchases.sharedInstance.purchaseWith(
-                                                activity = context as androidx.activity.ComponentActivity,
-                                                packageToPurchase = packageToPurchase,
-                                                onError = { error, userCancelled ->
-                                                    if (!userCancelled) {
-                                                        errorMessage = error.message
-                                                    }
+                                        Purchases.sharedInstance.getOfferings(object : ReceiveOfferingsCallback {
+                                            override fun onReceived(offerings: com.revenuecat.purchases.Offerings) {
+                                                val currentOffering = offerings.current
+                                                if (currentOffering == null) {
+                                                    errorMessage = context.getString(R.string.no_products_available)
                                                     isPurchasing = false
-                                                },
-                                                onSuccess = { _, customerInfo ->
-                                                    val isPremium = customerInfo.entitlements[RevenueCatManager.ENTITLEMENT_ID]?.isActive == true
-                                                    isPurchasing = false
-                                                    if (isPremium) {
-                                                        onPurchaseSuccess()
-                                                    } else {
-                                                        errorMessage = context.getString(R.string.purchase_failed)
-                                                    }
+                                                    return
                                                 }
-                                            )
-                                        }
+
+                                                // 2. Find the package that matches the selected product
+                                                val packageToPurchase = currentOffering.availablePackages.find {
+                                                    it.product.id == selectedProduct?.id
+                                                }
+
+                                                if (packageToPurchase == null) {
+                                                    errorMessage = context.getString(R.string.product_not_found)
+                                                    isPurchasing = false
+                                                    return
+                                                }
+
+                                                // 3. Execute Purchase
+                                                Purchases.sharedInstance.purchase(
+                                                    com.revenuecat.purchases.PurchaseParams.Builder(
+                                                        context as androidx.activity.ComponentActivity,
+                                                        packageToPurchase
+                                                    ).build(),
+                                                    onError = { error: PurchasesError, userCancelled: Boolean ->
+                                                        if (!userCancelled) {
+                                                            errorMessage = error.underlyingErrorMessage
+                                                        }
+                                                        isPurchasing = false
+                                                    },
+                                                    onSuccess = { _: StoreTransaction, customerInfo: CustomerInfo ->
+                                                        val isPremium = customerInfo.entitlements.active.containsKey(RevenueCatManager.ENTITLEMENT_ID)
+                                                        isPurchasing = false
+                                                        if (isPremium) {
+                                                            onPurchaseSuccess()
+                                                        } else {
+                                                            errorMessage = context.getString(R.string.purchase_failed)
+                                                        }
+                                                    }
+                                                )
+                                            }
+
+                                            override fun onError(error: PurchasesError) {
+                                                errorMessage = error.underlyingErrorMessage
+                                                isPurchasing = false
+                                            }
+                                        })
                                     } catch (e: Exception) {
                                         errorMessage = e.message ?: context.getString(R.string.unexpected_error)
                                         isPurchasing = false
