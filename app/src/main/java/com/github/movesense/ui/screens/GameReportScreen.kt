@@ -1022,9 +1022,11 @@ private fun CompactPvRow(
     onClickMoveAtIndex: (idx: Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    if (line.pv.isEmpty()) return
-
-    val tokens = remember(baseFen, line.pv) { buildIconTokens(baseFen, line.pv) }
+    // ИСПРАВЛЕНИЕ: Не возвращаемся если pv пустой, отображаем хотя бы оценку
+    // Это важно для терминальных позиций (мат, пат)
+    val tokens = remember(baseFen, line.pv) {
+        if (line.pv.isEmpty()) emptyList() else buildIconTokens(baseFen, line.pv)
+    }
 
     Row(
         modifier = modifier,
@@ -1034,11 +1036,13 @@ private fun CompactPvRow(
 
         Spacer(Modifier.width(6.dp))
 
-        LazyRow(
-            modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            itemsIndexed(tokens) { idx, token ->
+        // ИСПРАВЛЕНИЕ: Отображаем ходы только если они есть
+        if (tokens.isNotEmpty()) {
+            LazyRow(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                itemsIndexed(tokens) { idx, token ->
                 Row(
                     modifier = Modifier
                         .clickable { onClickMoveAtIndex(idx) }
@@ -1091,6 +1095,7 @@ private fun CompactPvRow(
                     )
                 }
             }
+        }
         }
     }
 }
