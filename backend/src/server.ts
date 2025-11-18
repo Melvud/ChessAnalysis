@@ -409,8 +409,38 @@ function toClientPosition(
     };
   });
 
-  // ✅ Fallback для пустых линий или мата
-  if (lines.length === 0) {
+  // ✅ КРИТИЧЕСКИ ВАЖНО: Проверяем на мат КАЖДУЮ позицию, а не только последнюю
+  let isCheckmate = false;
+  let checkmateWinner: "white" | "black" | null = null;
+
+  try {
+    const ch = new Chess(fen);
+    if (ch.isCheckmate()) {
+      isCheckmate = true;
+      // В позиции мата ходит проигравшая сторона (у неё нет легальных ходов)
+      // Если ходят белые (w) и это мат → белые проиграли, черные выиграли
+      // Если ходят черные (b) и это мат → черные проиграли, белые выиграли
+      checkmateWinner = ch.turn() === "w" ? "black" : "white";
+    }
+  } catch (e) {
+    // Игнорируем ошибки парсинга FEN
+  }
+
+  // ✅ Если это мат, устанавливаем правильную оценку mate вместо cp
+  if (isCheckmate) {
+    const mateVal = checkmateWinner === "white" ? 1 : -1;
+    if (lines.length === 0) {
+      lines.push({ pv: [], mate: mateVal });
+    } else {
+      lines[0] = {
+        pv: lines[0].pv || [],
+        mate: mateVal,
+      };
+      // Удаляем cp, если был
+      delete (lines[0] as any).cp;
+    }
+  } else if (lines.length === 0) {
+    // Fallback для пустых линий (не мат)
     if (isLastPosition && gameResult) {
       if (gameResult === "1-0") {
         lines.push({ pv: [], mate: 1 }); // Белые победили
