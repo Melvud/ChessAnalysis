@@ -15,6 +15,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -69,6 +70,8 @@ import kotlinx.serialization.json.Json
 import kotlin.math.max
 import kotlin.math.roundToLong
 import com.github.movesense.R
+import com.github.movesense.subscription.RevenueCatManager
+import com.github.movesense.ui.components.PremiumBanner
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -162,7 +165,17 @@ fun GamesListScreen(
 
     val dateFormatter = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
 
-    // ✅ ИСПРАВЛЕНИЕ #3: Корректное определение звуков
+    var isPremiumUser by remember { mutableStateOf(false) }
+    var showPaywall by remember { mutableStateOf(false) }
+    var showPremiumBanner by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        isPremiumUser = RevenueCatManager.isPremiumUser()
+        RevenueCatManager.observePremiumStatus().collect { isPremium ->
+            isPremiumUser = isPremium
+        }
+    }
+
     fun playMoveSound(cls: MoveClass?, isCapture: Boolean) {
         val resId = when {
             cls == MoveClass.INACCURACY || cls == MoveClass.MISTAKE || cls == MoveClass.BLUNDER -> R.raw.error
@@ -199,17 +212,14 @@ fun GamesListScreen(
         return null
     }
 
-    // ✅ ИСПРАВЛЕНИЕ #3: Правильное определение взятий включая en passant
     fun isCapture(prevFen: String?, uci: String): Boolean {
         if (prevFen.isNullOrBlank() || uci.length < 4) return false
         val from = uci.substring(0, 2)
         val to = uci.substring(2, 4)
 
-        // Проверяем есть ли фигура на целевом поле
         val pieceTo = pieceAtFen(prevFen, to)
         if (pieceTo != null) return true
 
-        // Проверяем en passant: пешка меняет вертикаль без взятия на целевом поле
         val pieceFrom = pieceAtFen(prevFen, from)
         val isPawn = pieceFrom in listOf('P', 'p')
         val fromFile = from[0]
@@ -221,7 +231,6 @@ fun GamesListScreen(
     suspend fun loadFromLocal() {
         Log.d(TAG, "loadFromLocal: starting...")
         items = repo.getAllHeaders()
-        Log.d(TAG, "loadFromLocal: loaded ${items.size} games")
 
         val analyzed = mutableMapOf<String, FullReport>()
         items.forEach { game ->
@@ -232,42 +241,34 @@ fun GamesListScreen(
             }
         }
         analyzedGames = analyzed
-        Log.d(TAG, "loadFromLocal: ${analyzed.size} games have cached analysis")
     }
 
     suspend fun deltaSyncWithRemote() {
         try {
-            Log.d(TAG, "deltaSyncWithRemote: starting...")
             var addedCount = 0
 
             if (profile.lichessUsername.isNotEmpty()) {
                 val since = repo.getNewestGameTimestamp(Provider.LICHESS)
-                Log.d(TAG, "Fetching Lichess games since: $since")
                 val lichessList = com.github.movesense.GameLoaders.loadLichess(
                     profile.lichessUsername,
                     since = since,
                     max = null
                 )
-                Log.d(TAG, "Lichess returned ${lichessList.size} new games")
                 val added = repo.mergeExternal(Provider.LICHESS, lichessList)
                 addedCount += added
             }
 
             if (profile.chessUsername.isNotEmpty()) {
                 val since = repo.getNewestGameTimestamp(Provider.CHESSCOM)
-                Log.d(TAG, "Fetching Chess.com games since: $since")
                 val chessList = com.github.movesense.GameLoaders.loadChessCom(
                     profile.chessUsername,
                     since = since,
                     max = null,
                     onProgress = { }
                 )
-                Log.d(TAG, "Chess.com returned ${chessList.size} new games")
                 val added = repo.mergeExternal(Provider.CHESSCOM, chessList)
                 addedCount += added
             }
-
-            Log.d(TAG, "deltaSyncWithRemote: total added = $addedCount")
 
             if (addedCount > 0) {
                 Toast.makeText(
@@ -291,7 +292,6 @@ fun GamesListScreen(
             isFullSyncing = true
             fullSyncProgress = null
             fullSyncMessage = context.getString(R.string.loading_lichess)
-            Log.d(TAG, "fullSyncWithRemote: starting (since=$since, until=$until)")
             var addedCount = 0
 
             if (profile.lichessUsername.isNotEmpty()) {
@@ -301,7 +301,6 @@ fun GamesListScreen(
                     until = until,
                     max = null
                 )
-                Log.d(TAG, "Lichess returned ${lichessList.size} games")
                 val added = repo.mergeExternal(Provider.LICHESS, lichessList)
                 addedCount += added
             }
@@ -318,12 +317,10 @@ fun GamesListScreen(
                         fullSyncProgress = progress
                     }
                 )
-                Log.d(TAG, "Chess.com returned ${chessList.size} games")
                 val added = repo.mergeExternal(Provider.CHESSCOM, chessList)
                 addedCount += added
             }
 
-            Log.d(TAG, "fullSyncWithRemote: total added = $addedCount")
             Toast.makeText(
                 context,
                 context.getString(R.string.games_added, addedCount),
@@ -347,18 +344,15 @@ fun GamesListScreen(
 
     LaunchedEffect(profile, isFirstLoad) {
         if (isFirstLoad) {
-            Log.d(TAG, "🔄 First load detected, loading from cache...")
             isDeltaSyncing = true
             loadFromLocal()
             isDeltaSyncing = false
             if (items.isEmpty()) {
-                Log.d(TAG, "Cache is empty, showing settings dialog to load games.")
                 showSettingsDialog = true
             } else {
                 onFirstLoadComplete()
             }
         } else {
-            Log.d(TAG, "✓ Not first load, loading from cache only")
             loadFromLocal()
         }
     }
@@ -389,9 +383,16 @@ fun GamesListScreen(
         }
     }
 
-    // ✅ ИСПРАВЛЕНИЕ #4: Удалены все ненужные delay()
     fun startAnalysis(fullPgn: String, depth: Int, multiPv: Int) {
         if (showAnalysis) return
+
+        val currentMode = EngineClient.engineMode.value
+
+        if (currentMode == EngineClient.EngineMode.SERVER && !isPremiumUser) {
+            showPaywall = true
+            return
+        }
+
         scope.launch {
             try {
                 showAnalysis = true
@@ -483,7 +484,6 @@ fun GamesListScreen(
                         }
                     }
 
-                    // ✅ ИСПРАВЛЕНИЕ: Обновляем доску и классификацию в реальном времени для ОБОИХ режимов
                     if (!newUci.isNullOrBlank() && newUci != lastSoundedUci) {
                         val captureNow = isCapture(prevFenForSound, newUci)
                         playMoveSound(cls, captureNow)
@@ -494,13 +494,12 @@ fun GamesListScreen(
 
                     liveFen = newFen
                     liveUciMove = newUci
-                    liveMoveClass = snap.currentClass  // ✅ Показываем классификацию в реальном времени!
+                    liveMoveClass = snap.currentClass
 
                     if (snap.done > 0) {
                         currentPlyForEval = snap.done - 1
                     }
 
-                    // ✅ ИСПРАВЛЕНИЕ: Обновляем позиции для eval bar в обоих режимах
                     if (newFen != null && (snap.evalCp != null || snap.evalMate != null)) {
                         val line = LineEval(
                             pv = emptyList(),
@@ -521,20 +520,15 @@ fun GamesListScreen(
                         livePositions = accumulatedPositions.values
                             .sortedBy { it.idx }
                             .toList()
-
-                        Log.d(TAG, "📊 Real-time update: positions=${livePositions.size}, ply=${currentPlyForEval}, cp=${snap.evalCp}, mate=${snap.evalMate}")
                     }
                 }
 
                 livePositions = report.positions
-                Log.d(TAG, "✅ Analysis complete, final positions count: ${livePositions.size}")
-
                 repo.saveReport(fullPgn, report)
 
                 completedReport = report
                 analysisCompleted = true
 
-                // ✅ Переход к отчету теперь обрабатывается через LaunchedEffect ниже
             } catch (t: Throwable) {
                 showAnalysis = false
                 Log.e(TAG, "Analysis error: ${t.message}", t)
@@ -547,13 +541,8 @@ fun GamesListScreen(
         }
     }
 
-    // ✅ ИСПРАВЛЕНИЕ: Убрана анимация ходов - теперь доска обновляется напрямую из прогресса анализа
-    // Это устраняет задержку перед открытием отчета в серверном режиме
-
-    // ✅ ИСПРАВЛЕНИЕ: Мгновенный переход к отчету когда анализ завершен
     LaunchedEffect(analysisCompleted) {
         if (analysisCompleted) {
-            // Небольшая задержка только для серверного режима для плавности UI
             if (isServerMode) delay(100)
             showAnalysis = false
             loadFromLocal()
@@ -668,6 +657,14 @@ fun GamesListScreen(
                     )
                 }
 
+                if (!isPremiumUser && showPremiumBanner && !showAnalysis) {
+                    PremiumBanner(
+                        onUpgradeClick = { showPaywall = true },
+                        onDismiss = { showPremiumBanner = false },
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                }
+
                 PullToRefreshBox(
                     modifier = Modifier.fillMaxSize(),
                     isRefreshing = isDeltaSyncing,
@@ -716,25 +713,17 @@ fun GamesListScreen(
 
                                             val currentPgn = game.pgn.orEmpty()
 
-                                            // Запускаем всё в корутине
                                             scope.launch {
                                                 try {
-                                                    // Проверяем есть ли уже кэшированный анализ - моментально!
                                                     val cachedReport = currentPgn.takeIf { it.isNotBlank() }?.let {
                                                         repo.getCachedReport(it)
                                                     }
 
                                                     if (cachedReport != null) {
-                                                        // Есть кэш - открываем сразу без задержек!
-                                                        Log.d(TAG, "⚡ Opening cached analysis instantly")
                                                         onOpenReport(cachedReport)
                                                         return@launch
                                                     }
 
-                                                    // Нет кэша - запускаем анализ
-                                                    Log.d(TAG, "🎯 Starting analysis for: ${game.white} vs ${game.black}")
-
-                                                    // Если PGN уже содержит ходы - используем его сразу
                                                     val pgn = currentPgn.takeIf { it.isNotBlank() } ?: ""
 
                                                     if (pgn.isBlank()) {
@@ -746,8 +735,6 @@ fun GamesListScreen(
                                                         return@launch
                                                     }
 
-                                                    // Запускаем анализ сразу с имеющимся PGN
-                                                    // showAnalysis будет установлен внутри startAnalysis
                                                     startAnalysis(pgn, depth = 12, multiPv = 3)
 
                                                 } catch (e: Exception) {
@@ -775,6 +762,16 @@ fun GamesListScreen(
                         }
                     }
                 }
+            }
+
+            if (showAnalysis && !isPremiumUser && !isServerMode) {
+                CompactPremiumBanner(
+                    onUpgradeClick = { showPaywall = true },
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 16.dp)
+                        .zIndex(11f)
+                )
             }
 
             if (showAnalysis) {
@@ -863,7 +860,6 @@ fun GamesListScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 if (showEvalBar && livePositions.isNotEmpty()) {
-                                    Log.d(TAG, "Drawing eval bar: positions=${livePositions.size}, ply=$currentPlyForEval")
                                     MiniEvalBar(
                                         positions = livePositions,
                                         currentPlyIndex = currentPlyForEval,
@@ -890,7 +886,7 @@ fun GamesListScreen(
                                         BoardCanvas(
                                             fen = liveFen!!,
                                             lastMove = lastMovePair,
-                                            moveClass = moveClassEnum,  // ✅ Показываем бейджи классификации!
+                                            moveClass = moveClassEnum,
                                             bestMoveUci = null,
                                             showBestArrow = false,
                                             isWhiteBottom = true,
@@ -915,14 +911,12 @@ fun GamesListScreen(
         }
     }
 
-    // --- ОБНОВЛЕННЫЙ Диалог Настроек (С ИСПРАВЛЕНИЕМ КРЕША) ---
     if (showSettingsDialog) {
         AlertDialog(
             onDismissRequest = { if (!isFullSyncing) showSettingsDialog = false },
             title = { Text(stringResource(R.string.settings)) },
             text = {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    // 1. Старая настройка Eval Bar
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -945,7 +939,6 @@ fun GamesListScreen(
 
                     Divider(modifier = Modifier.padding(vertical = 12.dp))
 
-                    // 2. Новая секция "Загрузить Партии"
                     Text(
                         stringResource(R.string.load_games_title),
                         style = MaterialTheme.typography.titleMedium
@@ -953,34 +946,24 @@ fun GamesListScreen(
                     Spacer(Modifier.height(12.dp))
 
                     if (isFullSyncing) {
-                        // --- UI Во время загрузки ---
                         Text(fullSyncMessage, style = MaterialTheme.typography.bodyMedium)
                         Spacer(Modifier.height(16.dp))
 
-                        // --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-                        // Условие изменено: `> 0f` убрано, чтобы показывать 0%
                         if (fullSyncProgress != null) {
-                            // --- UI для ОПРЕДЕЛЕННОГО прогресса ---
                             LinearProgressIndicator(
-                                // ИСПРАВЛЕНО: убран `!!`
                                 progress = { fullSyncProgress ?: 0f },
                                 modifier = Modifier.fillMaxWidth()
                             )
                             Text(
-                                // ИСПРАВЛЕНО: убран `!!`
                                 "${((fullSyncProgress ?: 0f) * 100).toInt()}%",
                                 style = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.padding(top = 4.dp)
                             )
                         } else {
-                            // --- UI для НЕОПРЕДЕЛЕННОГО прогресса ---
-                            // (Lichess или самое начало Chess.com)
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
-                        // --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
                     } else {
-                        // --- UI Выбора загрузки ---
                         Text(
                             stringResource(R.string.load_games_desc),
                             style = MaterialTheme.typography.bodyMedium,
@@ -988,7 +971,6 @@ fun GamesListScreen(
                         )
                         Spacer(Modifier.height(16.dp))
 
-                        // Date Pickers
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceAround
@@ -1009,8 +991,6 @@ fun GamesListScreen(
                             onClick = {
                                 scope.launch {
                                     fullSyncWithRemote(dateFromMillis, dateUntilMillis)
-                                    // Переносим loadFromLocal сюда, чтобы он запускался
-                                    // только после завершения
                                     loadFromLocal()
                                 }
                             },
@@ -1025,8 +1005,7 @@ fun GamesListScreen(
 
                         Button(onClick = {
                             scope.launch {
-                                fullSyncWithRemote(null, null) // null, null = все
-                                // И сюда тоже
+                                fullSyncWithRemote(null, null)
                                 loadFromLocal()
                             }
                         }) {
@@ -1040,7 +1019,7 @@ fun GamesListScreen(
                     onClick = {
                         if (!isFullSyncing) {
                             showSettingsDialog = false
-                            if (isFirstLoad) onFirstLoadComplete() // Отмечаем, что юзер закрыл диалог
+                            if (isFirstLoad) onFirstLoadComplete()
                         }
                     },
                     enabled = !isFullSyncing
@@ -1112,7 +1091,6 @@ fun GamesListScreen(
         )
     }
 
-    // ... (if (showReAnalyzeSheet) { ... } - остается без изменений) ...
     if (showReAnalyzeSheet) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
@@ -1168,7 +1146,6 @@ fun GamesListScreen(
         }
     }
 
-    // --- НОВЫЕ Date Pickers ---
     if (showDatePickerFrom) {
         val datePickerState = rememberDatePickerState(
             initialSelectedDateMillis = dateFromMillis ?: System.currentTimeMillis()
@@ -1208,9 +1185,56 @@ fun GamesListScreen(
             }
         ) { DatePicker(state = datePickerState) }
     }
+
+    if (showPaywall) {
+        PaywallDialog(
+            onDismiss = { showPaywall = false },
+            onPurchaseSuccess = {
+                showPaywall = false
+                isPremiumUser = true
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.premium_activated),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        )
+    }
 }
 
-// ... (MiniEvalBar, parseGameEnd, formatGameEndText - остаются без изменений) ...
+@Composable
+private fun CompactPremiumBanner(
+    onUpgradeClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .clickable(onClick = onUpgradeClick)
+            .clip(RoundedCornerShape(24.dp)),
+        color = Color(0xFFFFD700),
+        shadowElevation = 6.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                painter = painterResource(id = R.drawable.icon_crown),
+                contentDescription = null,
+                tint = Color.Black,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = stringResource(R.string.upgrade_to_premium),
+                style = MaterialTheme.typography.labelLarge,
+                color = Color.Black,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
 @Composable
 private fun MiniEvalBar(
     positions: List<PositionEval>,
@@ -1227,7 +1251,6 @@ private fun MiniEvalBar(
             val width = size.width
 
             if (positions.isEmpty()) {
-                Log.w(TAG, "MiniEvalBar: no positions!")
                 return@Canvas
             }
 
@@ -1292,37 +1315,24 @@ private fun parseGameEnd(pgn: String?, result: String?): GameEndInfo {
         else -> null
     }
 
-    // КРИТИЧНО: Улучшенное определение для Chess.com и Lichess
     val termination = when {
-        // Мат
         "normal" in terminationTag && resultTag != "1/2-1/2" -> GameTermination.CHECKMATE
         "checkmate" in terminationTag -> GameTermination.CHECKMATE
-
-        // Время
         "time forfeit" in terminationTag -> GameTermination.TIMEOUT
         "timeout" in terminationTag -> GameTermination.TIMEOUT
         "time" in terminationTag && resultTag != "1/2-1/2" -> GameTermination.TIMEOUT
-
-        // Сдача
         "abandoned" in terminationTag -> GameTermination.RESIGNATION
         "resignation" in terminationTag -> GameTermination.RESIGNATION
         "resign" in terminationTag -> GameTermination.RESIGNATION
-
-        // Ничьи
         "stalemate" in terminationTag -> GameTermination.STALEMATE
         "insufficient material" in terminationTag -> GameTermination.INSUFFICIENT
         "50" in terminationTag && "move" in terminationTag -> GameTermination.FIFTY_MOVE
         "repetition" in terminationTag -> GameTermination.REPETITION
         "threefold" in terminationTag -> GameTermination.REPETITION
-
-        // По соглашению
         "agreement" in terminationTag || "agreed" in terminationTag -> GameTermination.AGREEMENT
         resultTag == "1/2-1/2" && terminationTag.isNotBlank() -> GameTermination.DRAW
-
-        // Fallback: если есть победитель, но причина неизвестна
         resultTag == "1-0" || resultTag == "0-1" -> GameTermination.UNKNOWN
         resultTag == "1/2-1/2" -> GameTermination.DRAW
-
         else -> GameTermination.UNKNOWN
     }
 
@@ -1366,10 +1376,6 @@ private fun formatGameEndText(endInfo: GameEndInfo, game: GameHeader): String {
     }
 }
 
-
-// --- НОВЫЕ ХЕЛПЕРЫ для ТИТУЛОВ ---
-
-// НОВАЯ функция парсинга имени и титула
 private fun parsePlayerInfo(name: String?, pgn: String?, isWhite: Boolean): PlayerInfo {
     val base = name.orEmpty()
     if (pgn.isNullOrBlank()) return PlayerInfo(base, null)
@@ -1379,7 +1385,6 @@ private fun parsePlayerInfo(name: String?, pgn: String?, isWhite: Boolean): Play
     return PlayerInfo(base, if (title.isNullOrBlank() || title == "NONE") null else title)
 }
 
-// НОВАЯ функция для определения титула самого пользователя
 private fun getUserTitle(profile: UserProfile, whiteInfo: PlayerInfo, blackInfo: PlayerInfo): String? {
     val me = listOf(profile.nickname.trim(), profile.lichessUsername.trim(), profile.chessUsername.trim())
         .filter { it.isNotBlank() }.map { it.lowercase() }
@@ -1393,7 +1398,6 @@ private fun getUserTitle(profile: UserProfile, whiteInfo: PlayerInfo, blackInfo:
     }
 }
 
-// --- ОБНОВЛЕННЫЙ Composable для красивого отображения имени ---
 @Composable
 private fun PlayerName(
     info: PlayerInfo,
@@ -1408,18 +1412,18 @@ private fun PlayerName(
     ) {
         if (info.title != null) {
             Text(
-                text = info.title.uppercase(Locale.getDefault()), // <-- ИЗМЕНЕНО: .uppercase()
+                text = info.title.uppercase(Locale.getDefault()),
                 style = MaterialTheme.typography.bodySmall.copy(
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White // <-- ИЗМЕНЕНО: Белый шрифт
+                    color = Color.White
                 ),
                 modifier = Modifier
                     .background(
-                        Color(0xFFD32F2F), // <-- ИЗМЕНЕНО: Красный фон
+                        Color(0xFFD32F2F),
                         RoundedCornerShape(4.dp)
                     )
-                    .padding(horizontal = 4.dp, vertical = 2.dp) // <-- ИЗМЕНЕНО: vertical = 2.dp
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
             )
             Spacer(Modifier.width(4.dp))
         }
@@ -1433,7 +1437,6 @@ private fun PlayerName(
     }
 }
 
-// --- ОБНОВЛЕННАЯ CompactGameCard (С КОРОНОЙ) ---
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CompactGameCard(
@@ -1451,7 +1454,6 @@ private fun CompactGameCard(
     val userLost = mySide != null && ((mySide && game.result == "0-1") || (!mySide && game.result == "1-0"))
     val isAnalyzed = analyzedReport != null
 
-    // ИСПРАВЛЕНО: передаём result в parseGameEnd
     val gameEndInfo = remember(game.pgn, game.result) {
         parseGameEnd(game.pgn, game.result)
     }
@@ -1464,7 +1466,6 @@ private fun CompactGameCard(
         label = "scale"
     )
 
-    // --- НОВАЯ ЛОГИКА ТИТУЛОВ ---
     val whiteInfo = remember(game.white, game.pgn) { parsePlayerInfo(game.white, game.pgn, isWhite = true) }
     val blackInfo = remember(game.black, game.pgn) { parsePlayerInfo(game.black, game.pgn, isWhite = false) }
 
@@ -1475,25 +1476,18 @@ private fun CompactGameCard(
         null -> null
     }
 
-    // Победа против титулованного, если у самого пользователя титула нет
     val isWinVsTitled = userWon && (userTitle == null) && (opponentTitle != null)
-    // --- КОНЕЦ НОВОЙ ЛОГИКИ ---
 
-    // --- ИЗМЕНЕНО: Card обернут в Box для размещения короны ---
     Box(
         contentAlignment = Alignment.TopCenter,
         modifier = Modifier
             .fillMaxWidth()
-            // Отступы для элемента списка.
-            // Динамический верхний отступ, чтобы корона не налезала на элемент выше
-            // --- ИСПРАВЛЕНИЕ (из прошлого шага) ---
             .padding(
                 start = 12.dp,
                 end = 12.dp,
-                top = if (isWinVsTitled) 18.dp else 4.dp, // 14dp для короны + 4dp отступ
+                top = if (isWinVsTitled) 18.dp else 4.dp,
                 bottom = 4.dp
             )
-            // --- КОНЕЦ ИСПРАВЛЕНИЯ ---
             .scale(scale)
             .combinedClickable(
                 enabled = !isAnalyzing,
@@ -1510,12 +1504,10 @@ private fun CompactGameCard(
                 }
             ),
             elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-            // НОВОЕ СВОЙСТВО: золотая рамка (как в вашем коде)
             border = if (isWinVsTitled) BorderStroke(2.dp, Color(0xFFFFD700)) else null,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(if (endText.isNotBlank()) 168.dp else 148.dp)
-            // Модификаторы .scale и .combinedClickable ПЕРЕНЕСЕНЫ на Box
         ) {
             val siteName = when (game.site) {
                 Provider.LICHESS -> stringResource(R.string.filter_lichess)
@@ -1575,8 +1567,6 @@ private fun CompactGameCard(
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                         UserBubble(name = game.white ?: "W", size = 22.dp)
                         Spacer(Modifier.width(6.dp))
-
-                        // ИСПОЛЬЗУЕМ ОБНОВЛЕННЫЙ PlayerName
                         PlayerName(info = whiteInfo, modifier = Modifier.weight(1f, fill = false))
                     }
                     Text(
@@ -1589,8 +1579,6 @@ private fun CompactGameCard(
                         modifier = Modifier.weight(1f),
                         horizontalArrangement = Arrangement.End
                     ) {
-
-                        // ИСПОЛЬЗУЕМ ОБНОВЛЕННЫЙ PlayerName
                         PlayerName(
                             info = blackInfo,
                             textAlign = TextAlign.End,
@@ -1601,7 +1589,6 @@ private fun CompactGameCard(
                     }
                 }
 
-                // ... (Отображение способа завершения, openingLine, StatColumn - остаются без изменений) ...
                 if (endText.isNotBlank()) {
                     Spacer(Modifier.height(6.dp))
                     Surface(
@@ -1663,23 +1650,20 @@ private fun CompactGameCard(
             }
         }
 
-        // --- НОВОЕ: Отображение иконки короны ---
         if (isWinVsTitled) {
             Image(
-                painter = painterResource(id = R.drawable.icon_crown), // Убедитесь, что файл есть
+                painter = painterResource(id = R.drawable.icon_crown),
                 contentDescription = stringResource(id = R.string.victory_vs_titled),
                 modifier = Modifier
-                    .zIndex(1f) // Поверх Card
+                    .zIndex(1f)
                     .size(28.dp)
-                    .align(Alignment.TopCenter) // К верхнему краю Box
-                    .offset(y = (-14).dp)     // Сдвиг вверх на половину высоты
+                    .align(Alignment.TopCenter)
+                    .offset(y = (-14).dp)
             )
         }
-        // --- КОНЕЦ: Отображение иконки короны ---
     }
 }
 
-// ... (StatColumn, getAccuracyColor, UserBubble, guessMySide - остаются без изменений) ...
 @Composable
 private fun StatColumn(accuracy: Double?, performance: Int?) {
     val accText = if (accuracy != null) "%.1f%%".format(accuracy) else "—"
@@ -1742,11 +1726,6 @@ private fun guessMySide(profile: UserProfile, game: GameHeader): Boolean? {
     }
 }
 
-
-// --- УДАЛЕНА старая `playerWithTitle()` ---
-
-
-// ... (deriveModeAndOpening, mapTimeControlToMode, addManualGame, parseTags - остаются без изменений) ...
 private fun deriveModeAndOpening(game: GameHeader, context: Context): Pair<String, String> {
     val pgn = game.pgn
     var mode = ""

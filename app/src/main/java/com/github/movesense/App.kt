@@ -1,11 +1,17 @@
 package com.github.movesense
 
 import android.app.Application
+import android.util.Log
 import com.github.movesense.analysis.Openings
 import com.github.movesense.util.LocaleManager
+import com.github.movesense.subscription.RevenueCatManager
 import java.util.Locale
 
 class App : Application() {
+    companion object {
+        private const val TAG = "App"
+    }
+
     override fun onCreate() {
         super.onCreate()
 
@@ -28,5 +34,13 @@ class App : Application() {
         // Устанавливаем контекст для локального движка
         EngineClient.setAndroidContext(this)
         Openings.init(this)
+
+        // 🆕 Инициализируем RevenueCat
+        try {
+            RevenueCatManager.initialize(this)
+            Log.d(TAG, "✅ RevenueCat initialized successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to initialize RevenueCat", e)
+        }
     }
 }

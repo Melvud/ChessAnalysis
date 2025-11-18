@@ -1,25 +1,39 @@
 package com.github.movesense.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+import android.text.format.DateFormat
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.github.movesense.ui.UserProfile
+import androidx.compose.ui.unit.sp
 import com.github.movesense.EngineClient
+import com.github.movesense.R
+import com.github.movesense.subscription.RevenueCatManager
+import com.github.movesense.ui.UserProfile
 import com.github.movesense.util.LocaleManager
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.revenuecat.purchases.CustomerInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -27,7 +41,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
-import com.github.movesense.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,7 +66,17 @@ fun ProfileScreen(
 
     val engineMode by EngineClient.engineMode.collectAsState()
 
-    // Функция для проверки существования пользователя на Lichess
+    var isPremiumUser by remember { mutableStateOf(false) }
+    var customerInfo by remember { mutableStateOf<CustomerInfo?>(null) }
+    var showPaywall by remember { mutableStateOf(false) }
+    var showManageSubscriptionDialog by remember { mutableStateOf(false) }
+    var isLoadingSubscription by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        isPremiumUser = RevenueCatManager.isPremiumUser()
+        customerInfo = RevenueCatManager.getCustomerInfo()
+    }
+
     suspend fun checkLichessUserExists(username: String): Boolean = withContext(Dispatchers.IO) {
         if (username.isBlank()) return@withContext true
         try {
@@ -74,7 +97,6 @@ fun ProfileScreen(
         }
     }
 
-    // Функция для проверки существования пользователя на Chess.com
     suspend fun checkChessComUserExists(username: String): Boolean = withContext(Dispatchers.IO) {
         if (username.isBlank()) return@withContext true
         try {
@@ -115,7 +137,6 @@ fun ProfileScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Email
             OutlinedTextField(
                 value = email,
                 onValueChange = { email = it },
@@ -124,7 +145,6 @@ fun ProfileScreen(
                 enabled = !isSaving
             )
 
-            // Nickname
             OutlinedTextField(
                 value = nickname,
                 onValueChange = { nickname = it },
@@ -133,7 +153,6 @@ fun ProfileScreen(
                 enabled = !isSaving
             )
 
-            // Lichess Username
             OutlinedTextField(
                 value = lichessName,
                 onValueChange = { lichessName = it },
@@ -142,7 +161,6 @@ fun ProfileScreen(
                 enabled = !isSaving
             )
 
-            // Chess.com Username
             OutlinedTextField(
                 value = chessName,
                 onValueChange = { chessName = it },
@@ -151,7 +169,6 @@ fun ProfileScreen(
                 enabled = !isSaving
             )
 
-            // Language Selector
             OutlinedTextField(
                 value = getLanguageDisplayName(selectedLanguage),
                 onValueChange = {},
@@ -173,7 +190,154 @@ fun ProfileScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Engine Mode Selection
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isPremiumUser) {
+                        Color(0xFFFFD700).copy(alpha = 0.1f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    }
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = stringResource(R.string.subscription_status),
+                            style = MaterialTheme.typography.titleMedium
+                        )
+
+                        if (isPremiumUser) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFFFFD700).copy(alpha = 0.2f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Star,
+                                        contentDescription = null,
+                                        tint = Color(0xFFFFD700),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.premium),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFB8860B)
+                                    )
+                                }
+                            }
+                        } else {
+                            Text(
+                                text = stringResource(R.string.free),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    if (isPremiumUser) {
+                        customerInfo?.let { info ->
+                            val entitlement = info.entitlements[RevenueCatManager.ENTITLEMENT_ID]
+                            entitlement?.let { ent ->
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    if (ent.expirationDate != null) {
+                                        Text(
+                                            text = stringResource(
+                                                R.string.subscription_expires,
+                                                DateFormat.format(
+                                                    "dd MMM yyyy",
+                                                    ent.expirationDate
+                                                ).toString()
+                                            ),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    if (ent.willRenew) {
+                                        Text(
+                                            text = stringResource(R.string.subscription_will_renew),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    } else {
+                                        Text(
+                                            text = stringResource(R.string.subscription_will_not_renew),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        OutlinedButton(
+                            onClick = { showManageSubscriptionDialog = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !isSaving
+                        ) {
+                            Text(stringResource(R.string.manage_subscription))
+                        }
+                    } else {
+                        Text(
+                            text = stringResource(R.string.premium_benefits),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            PremiumBenefit(stringResource(R.string.benefit_server_engine))
+                            PremiumBenefit(stringResource(R.string.benefit_fast_analysis))
+                            PremiumBenefit(stringResource(R.string.benefit_deep_analysis))
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Button(
+                            onClick = { showPaywall = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !isSaving,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFFFD700),
+                                contentColor = Color.Black
+                            )
+                        ) {
+                            Icon(
+                                Icons.Default.Star,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = stringResource(R.string.upgrade_to_premium),
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
@@ -191,49 +355,88 @@ fun ProfileScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Server Mode
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable(enabled = !isSaving) {
-                                scope.launch {
-                                    try {
-                                        EngineClient.setAndroidContext(context.applicationContext)
-                                        EngineClient.setEngineMode(EngineClient.EngineMode.SERVER)
-                                    } catch (e: Exception) {
-                                        errorMessage = context.getString(
-                                            R.string.switch_error,
-                                            e.message ?: ""
-                                        )
+                                if (!isPremiumUser) {
+                                    showPaywall = true
+                                } else {
+                                    scope.launch {
+                                        try {
+                                            EngineClient.setAndroidContext(context.applicationContext)
+                                            EngineClient.setEngineMode(EngineClient.EngineMode.SERVER)
+                                        } catch (e: Exception) {
+                                            errorMessage = context.getString(
+                                                R.string.switch_error,
+                                                e.message ?: ""
+                                            )
+                                        }
                                     }
                                 }
                             }
                             .padding(vertical = 8.dp)
+                            .alpha(if (!isPremiumUser) 0.5f else 1f)
                     ) {
                         RadioButton(
                             selected = engineMode == EngineClient.EngineMode.SERVER,
                             onClick = {
-                                scope.launch {
-                                    try {
-                                        EngineClient.setAndroidContext(context.applicationContext)
-                                        EngineClient.setEngineMode(EngineClient.EngineMode.SERVER)
-                                    } catch (e: Exception) {
-                                        errorMessage = context.getString(
-                                            R.string.switch_error,
-                                            e.message ?: ""
-                                        )
+                                if (!isPremiumUser) {
+                                    showPaywall = true
+                                } else {
+                                    scope.launch {
+                                        try {
+                                            EngineClient.setAndroidContext(context.applicationContext)
+                                            EngineClient.setEngineMode(EngineClient.EngineMode.SERVER)
+                                        } catch (e: Exception) {
+                                            errorMessage = context.getString(
+                                                R.string.switch_error,
+                                                e.message ?: ""
+                                            )
+                                        }
                                     }
                                 }
                             },
-                            enabled = !isSaving
+                            enabled = !isSaving && isPremiumUser
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(
-                                text = stringResource(R.string.engine_server),
-                                style = MaterialTheme.typography.bodyLarge
-                            )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.engine_server),
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                if (!isPremiumUser) {
+                                    Surface(
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = Color(0xFFFFD700).copy(alpha = 0.2f)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Star,
+                                                contentDescription = null,
+                                                tint = Color(0xFFFFD700),
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                            Text(
+                                                text = stringResource(R.string.premium),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFFB8860B)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                             Text(
                                 text = stringResource(R.string.engine_server_desc),
                                 style = MaterialTheme.typography.bodySmall,
@@ -244,7 +447,6 @@ fun ProfileScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Local Mode
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
@@ -283,10 +485,28 @@ fun ProfileScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
-                            Text(
-                                text = stringResource(R.string.engine_local),
-                                style = MaterialTheme.typography.bodyLarge
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.engine_local),
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.free),
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+                            }
                             Text(
                                 text = stringResource(R.string.engine_local_desc),
                                 style = MaterialTheme.typography.bodySmall,
@@ -297,7 +517,6 @@ fun ProfileScreen(
                 }
             }
 
-            // Error Message
             if (errorMessage != null) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -316,7 +535,6 @@ fun ProfileScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Save Button
             Button(
                 onClick = {
                     if (email.trim().isEmpty() || nickname.trim().isEmpty()) {
@@ -330,7 +548,6 @@ fun ProfileScreen(
                                 val lichessTrimmed = lichessName.trim()
                                 val chessTrimmed = chessName.trim()
 
-                                // Проверка существования никнеймов
                                 if (lichessTrimmed.isNotEmpty()) {
                                     val lichessExists = checkLichessUserExists(lichessTrimmed)
                                     if (!lichessExists) {
@@ -359,15 +576,12 @@ fun ProfileScreen(
                                 if (user != null && uid != null) {
                                     val newEmail = email.trim()
 
-                                    // Update email if changed
                                     if (newEmail != user.email) {
                                         user.updateEmail(newEmail).await()
                                     }
 
-                                    // ✅ Проверяем, изменился ли язык
                                     val languageChanged = selectedLanguage.code != profile.language
 
-                                    // Update Firestore
                                     val data = mapOf(
                                         "nickname" to nickname.trim(),
                                         "lichessUsername" to lichessTrimmed,
@@ -381,7 +595,6 @@ fun ProfileScreen(
                                         .update(data)
                                         .await()
 
-                                    // Создаем обновленный профиль
                                     val updatedProfile = UserProfile(
                                         email = newEmail,
                                         nickname = nickname.trim(),
@@ -390,20 +603,16 @@ fun ProfileScreen(
                                         language = selectedLanguage.code
                                     )
 
-                                    // ✅ Сохраняем обновленный профиль
                                     onSave(updatedProfile)
 
-                                    // ✅ Если язык изменился, применяем его и перезапускаем Activity
                                     if (languageChanged) {
                                         withContext(Dispatchers.Main) {
                                             LocaleManager.setLocale(
                                                 context as ComponentActivity,
                                                 selectedLanguage
                                             )
-                                            // setLocale сам перезапустит Activity
                                         }
                                     } else {
-                                        // Если язык не менялся, просто возвращаемся назад
                                         isSaving = false
                                         withContext(Dispatchers.Main) {
                                             onBack()
@@ -445,7 +654,6 @@ fun ProfileScreen(
                 }
             }
 
-            // Logout Button
             OutlinedButton(
                 onClick = { if (!isSaving) onLogout() },
                 modifier = Modifier.fillMaxWidth(),
@@ -458,7 +666,6 @@ fun ProfileScreen(
         }
     }
 
-    // Language Selection Dialog
     if (showLanguageDialog) {
         AlertDialog(
             onDismissRequest = { showLanguageDialog = false },
@@ -499,6 +706,78 @@ fun ProfileScreen(
             }
         )
     }
+
+    if (showPaywall) {
+        PaywallDialog(
+            onDismiss = { showPaywall = false },
+            onPurchaseSuccess = {
+                showPaywall = false
+                scope.launch {
+                    isPremiumUser = RevenueCatManager.isPremiumUser()
+                    customerInfo = RevenueCatManager.getCustomerInfo()
+                }
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.premium_activated),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        )
+    }
+
+    if (showManageSubscriptionDialog) {
+        AlertDialog(
+            onDismissRequest = { showManageSubscriptionDialog = false },
+            title = { Text(stringResource(R.string.manage_subscription)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = stringResource(R.string.manage_subscription_description),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+
+                    if (isLoadingSubscription) {
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .align(Alignment.CenterHorizontally)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val intent = Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse("https://play.google.com/store/account/subscriptions")
+                        )
+                        context.startActivity(intent)
+                    },
+                    enabled = !isLoadingSubscription
+                ) {
+                    Text(stringResource(R.string.open_play_store))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        isLoadingSubscription = true
+                        scope.launch {
+                            RevenueCatManager.restorePurchases()
+                            isPremiumUser = RevenueCatManager.isPremiumUser()
+                            customerInfo = RevenueCatManager.getCustomerInfo()
+                            isLoadingSubscription = false
+                            showManageSubscriptionDialog = false
+                        }
+                    },
+                    enabled = !isLoadingSubscription
+                ) {
+                    Text(stringResource(R.string.restore_purchases))
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -507,5 +786,25 @@ private fun getLanguageDisplayName(language: LocaleManager.Language): String {
         LocaleManager.Language.RUSSIAN -> stringResource(R.string.lang_russian)
         LocaleManager.Language.ENGLISH -> stringResource(R.string.lang_english)
         LocaleManager.Language.SPANISH -> stringResource(R.string.lang_spanish)
+    }
+}
+
+@Composable
+private fun PremiumBenefit(text: String) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Default.CheckCircle,
+            contentDescription = null,
+            tint = Color(0xFF4CAF50),
+            modifier = Modifier.size(18.dp)
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface
+        )
     }
 }

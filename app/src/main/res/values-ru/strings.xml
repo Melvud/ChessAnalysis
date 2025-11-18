@@ -200,4 +200,53 @@
     <string name="display_settings">Настройки отображения</string>
     <string name="show_best_move_arrow">Показывать стрелку лучшего хода</string>
     <string name="loading_error">loading_error</string>
+
+
+
+        <!-- Premium Features -->
+        <string name="unlock_premium">Разблокировать Premium</string>
+        <string name="premium_subtitle">Получите быстрый анализ и расширенные функции</string>
+        <string name="upgrade_to_premium">Перейти на Premium</string>
+        <string name="premium">Premium</string>
+        <string name="free">Бесплатно</string>
+
+        <!-- Features -->
+        <string name="feature_fast_analysis">Молниеносный анализ</string>
+        <string name="feature_fast_analysis_desc">Серверный движок анализирует партии в 5 раз быстрее</string>
+        <string name="feature_server_engine">Доступ к серверному движку</string>
+        <string name="feature_server_engine_desc">Используйте мощный облачный движок Stockfish</string>
+        <string name="feature_deep_analysis">Глубокий анализ</string>
+        <string name="feature_deep_analysis_desc">Получайте более точные оценки с большей глубиной</string>
+
+        <!-- Benefits -->
+        <string name="benefit_server_engine">✓ Серверный движок</string>
+        <string name="benefit_fast_analysis">✓ Анализ в 5 раз быстрее</string>
+        <string name="benefit_deep_analysis">✓ Более глубокая оценка позиций</string>
+        <string name="premium_benefits">Преимущества Premium:</string>
+
+        <!-- Banner -->
+        <string name="faster_analysis_with_server">Получите анализ в 5 раз быстрее с серверным режимом</string>
+        <string name="upgrade">Улучшить</string>
+        <string name="upgrade_for_faster_analysis">⚡ Улучшите для более быстрого анализа</string>
+
+        <!-- Subscription Management -->
+        <string name="subscription_status">Статус подписки</string>
+        <string name="manage_subscription">Управление подпиской</string>
+        <string name="manage_subscription_description">Управляйте подпиской в Google Play Маркет или восстановите покупки</string>
+        <string name="open_play_store">Открыть Play Маркет</string>
+        <string name="restore_purchases">Восстановить покупки</string>
+        <string name="subscription_expires">Истекает: %s</string>
+        <string name="subscription_will_renew">Будет продлена автоматически</string>
+        <string name="subscription_will_not_renew">Не будет продлена (отменена)</string>
+
+        <!-- Purchase -->
+        <string name="subscribe_now">Подписаться</string>
+        <string name="premium_activated">Premium активирован! 🎉</string>
+        <string name="subscription_terms">Подписка продлевается автоматически. Отмените в любое время в настройках Google Play Маркет.</string>
+
+        <!-- Errors -->
+        <string name="load_products_error">Не удалось загрузить варианты подписки</string>
+        <string name="no_products_available">Нет доступных вариантов подписки</string>
+        <string name="unexpected_error">Произошла непредвиденная ошибка</string>
+
 </resources>

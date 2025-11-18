@@ -201,4 +201,52 @@
     <string name="display_settings">Display Settings</string>
     <string name="show_best_move_arrow">Show Best Move Arrow</string>
     <string name="loading_error">loading_error</string>
+
+
+        <!-- Premium Features -->
+        <string name="unlock_premium">Unlock Premium</string>
+        <string name="premium_subtitle">Get faster analysis and advanced features</string>
+        <string name="upgrade_to_premium">Upgrade to Premium</string>
+        <string name="premium">Premium</string>
+        <string name="free">Free</string>
+
+        <!-- Features -->
+        <string name="feature_fast_analysis">Lightning-Fast Analysis</string>
+        <string name="feature_fast_analysis_desc">Server-powered engine analyzes games 5x faster</string>
+        <string name="feature_server_engine">Server Engine Access</string>
+        <string name="feature_server_engine_desc">Use powerful cloud-based Stockfish engine</string>
+        <string name="feature_deep_analysis">Deep Analysis</string>
+        <string name="feature_deep_analysis_desc">Get more accurate evaluations with higher depth</string>
+
+        <!-- Benefits -->
+        <string name="benefit_server_engine">✓ Server-powered engine</string>
+        <string name="benefit_fast_analysis">✓ 5x faster analysis</string>
+        <string name="benefit_deep_analysis">✓ Deeper position evaluation</string>
+        <string name="premium_benefits">Premium Benefits:</string>
+
+        <!-- Banner -->
+        <string name="faster_analysis_with_server">Get 5x faster analysis with server mode</string>
+        <string name="upgrade">Upgrade</string>
+        <string name="upgrade_for_faster_analysis">⚡ Upgrade for faster analysis</string>
+
+        <!-- Subscription Management -->
+        <string name="subscription_status">Subscription Status</string>
+        <string name="manage_subscription">Manage Subscription</string>
+        <string name="manage_subscription_description">Manage your subscription in Google Play Store or restore purchases</string>
+        <string name="open_play_store">Open Play Store</string>
+        <string name="restore_purchases">Restore Purchases</string>
+        <string name="subscription_expires">Expires: %s</string>
+        <string name="subscription_will_renew">Will renew automatically</string>
+        <string name="subscription_will_not_renew">Will not renew (canceled)</string>
+
+        <!-- Purchase -->
+        <string name="subscribe_now">Subscribe Now</string>
+        <string name="premium_activated">Premium activated! 🎉</string>
+        <string name="subscription_terms">Subscription renews automatically. Cancel anytime in Google Play Store settings.</string>
+
+        <!-- Errors -->
+        <string name="load_products_error">Failed to load subscription options</string>
+        <string name="no_products_available">No subscription options available</string>
+        <string name="unexpected_error">An unexpected error occurred</string>
+
 </resources>
