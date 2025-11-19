@@ -77,8 +77,6 @@ import java.util.Date
 import java.util.Locale
 
 private const val TAG = "GamesListScreen"
-private const val PREFS_NAME = "games_list_prefs"
-private const val KEY_SHOW_EVAL_BAR = "show_eval_bar"
 
 enum class GameFilter { ALL, LICHESS, CHESSCOM, MANUAL }
 
@@ -109,8 +107,12 @@ fun GamesListScreen(
     val json = remember { Json { ignoreUnknownKeys = true; explicitNulls = false } }
     val repo = remember { context.gameRepository(json) }
 
-    val prefs = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
-    var showEvalBar by remember { mutableStateOf(prefs.getBoolean(KEY_SHOW_EVAL_BAR, false)) }
+    val billingPremium by GooglePlayBillingManager.isPremiumFlow.collectAsState()
+    val isPremiumUser = profile.isPremium || billingPremium
+    
+    var isBannerClosedSession by remember { mutableStateOf(com.github.movesense.App.isBannerDismissed) }
+    val showPremiumBanner = !isPremiumUser && !isBannerClosedSession
+
     var showSettingsDialog by remember { mutableStateOf(false) }
 
     var items by remember { mutableStateOf<List<GameHeader>>(emptyList()) }
@@ -148,11 +150,6 @@ fun GamesListScreen(
     var showAddDialog by remember { mutableStateOf(false) }
     var pastedPgn by remember { mutableStateOf("") }
 
-    var showReAnalyzeSheet by remember { mutableStateOf(false) }
-    var reAnalyzeDepth by remember { mutableStateOf(14) }
-    var reAnalyzeMultiPv by remember { mutableStateOf(2) }
-    var reAnalyzeTargetPgn by remember { mutableStateOf<String?>(null) }
-
     var isDeltaSyncing by remember { mutableStateOf(false) }
     var isFullSyncing by remember { mutableStateOf(false) }
     var fullSyncProgress by remember { mutableStateOf<Float?>(null) }
@@ -165,16 +162,7 @@ fun GamesListScreen(
 
     val dateFormatter = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
 
-    var isPremiumUser by remember { mutableStateOf(profile.isPremium) }
     var showPaywall by remember { mutableStateOf(false) }
-    var showPremiumBanner by remember { mutableStateOf(true) }
-
-    LaunchedEffect(profile.isPremium) {
-        isPremiumUser = profile.isPremium || GooglePlayBillingManager.isPremiumUser()
-        GooglePlayBillingManager.observePremiumStatus().collect { isPremium ->
-            isPremiumUser = profile.isPremium || isPremium
-        }
-    }
 
     fun playMoveSound(cls: MoveClass?, isCapture: Boolean) {
         val resId = when {
@@ -584,21 +572,32 @@ fun GamesListScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.games_list)) },
+                title = { 
+                    Text(
+                        stringResource(R.string.games_list),
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                },
                 actions = {
                     IconButton(onClick = { showSettingsDialog = true }) {
                         Icon(
                             Icons.Default.Settings,
-                            contentDescription = stringResource(R.string.settings)
+                            contentDescription = stringResource(R.string.settings),
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
                     IconButton(onClick = { showAddDialog = true }) {
                         Icon(
                             Icons.Default.Add,
-                            contentDescription = stringResource(R.string.add_game)
+                            contentDescription = stringResource(R.string.add_game),
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
-                }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                )
             )
         }
     ) { padding ->
@@ -608,8 +607,8 @@ fun GamesListScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     FilterChip(
                         selected = currentFilter == GameFilter.ALL,
@@ -618,9 +617,14 @@ fun GamesListScreen(
                             Text(
                                 context.getString(R.string.filter_all, items.size),
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.labelLarge
                             )
-                        }
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
                     )
                     FilterChip(
                         selected = currentFilter == GameFilter.LICHESS,
@@ -629,9 +633,14 @@ fun GamesListScreen(
                             Text(
                                 stringResource(R.string.filter_lichess),
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.labelLarge
                             )
-                        }
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
                     )
                     FilterChip(
                         selected = currentFilter == GameFilter.CHESSCOM,
@@ -640,9 +649,14 @@ fun GamesListScreen(
                             Text(
                                 stringResource(R.string.filter_chesscom),
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.labelLarge
                             )
-                        }
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
                     )
                     FilterChip(
                         selected = currentFilter == GameFilter.MANUAL,
@@ -651,17 +665,25 @@ fun GamesListScreen(
                             Text(
                                 stringResource(R.string.filter_manual),
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.labelLarge
                             )
-                        }
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
                     )
                 }
 
                 if (!isPremiumUser && showPremiumBanner && !showAnalysis) {
                     PremiumBanner(
                         onUpgradeClick = { showPaywall = true },
-                        onDismiss = { showPremiumBanner = false },
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                        onDismiss = {
+                            com.github.movesense.App.isBannerDismissed = true
+                            isBannerClosedSession = true
+                        },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                     )
                 }
 
@@ -749,12 +771,6 @@ fun GamesListScreen(
                                             }
                                         },
                                         onLongPress = {
-                                            if (analyzedReport != null) {
-                                                reAnalyzeTargetPgn = game.pgn
-                                                reAnalyzeDepth = 12
-                                                reAnalyzeMultiPv = 3
-                                                showReAnalyzeSheet = true
-                                            }
                                         }
                                     )
                                 }
@@ -784,16 +800,16 @@ fun GamesListScreen(
                 ) {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 12.dp),
-                        shape = RoundedCornerShape(20.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 16.dp),
+                        shape = RoundedCornerShape(24.dp),
                         modifier = Modifier
                             .padding(24.dp)
-                            .width(320.dp)
+                            .width(340.dp)
                     ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(20.dp),
+                                .padding(24.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
@@ -801,10 +817,10 @@ fun GamesListScreen(
                                 style = MaterialTheme.typography.headlineSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface,
-                                fontSize = 22.sp
+                                fontSize = 24.sp
                             )
 
-                            Spacer(Modifier.height(4.dp))
+                            Spacer(Modifier.height(6.dp))
 
                             if (analysisProgress > 0f) {
                                 Text(
@@ -826,20 +842,20 @@ fun GamesListScreen(
                                 )
                             }
 
-                            Spacer(Modifier.height(10.dp))
+                            Spacer(Modifier.height(12.dp))
 
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(10.dp)
-                                    .clip(RoundedCornerShape(5.dp))
+                                    .height(12.dp)
+                                    .clip(RoundedCornerShape(6.dp))
                                     .background(MaterialTheme.colorScheme.surfaceVariant)
                             ) {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxHeight()
                                         .fillMaxWidth(analysisProgress.coerceIn(0f, 1f))
-                                        .clip(RoundedCornerShape(5.dp))
+                                        .clip(RoundedCornerShape(6.dp))
                                         .background(
                                             Brush.horizontalGradient(
                                                 colors = listOf(
@@ -852,24 +868,13 @@ fun GamesListScreen(
                                 )
                             }
 
-                            Spacer(Modifier.height(16.dp))
+                            Spacer(Modifier.height(20.dp))
 
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.Center,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                if (showEvalBar && livePositions.isNotEmpty()) {
-                                    MiniEvalBar(
-                                        positions = livePositions,
-                                        currentPlyIndex = currentPlyForEval,
-                                        modifier = Modifier
-                                            .width(14.dp)
-                                            .height(280.dp)
-                                    )
-                                    Spacer(Modifier.width(12.dp))
-                                }
-
                                 Box(
                                     modifier = Modifier.size(280.dp),
                                     contentAlignment = Alignment.Center
@@ -917,28 +922,6 @@ fun GamesListScreen(
             title = { Text(stringResource(R.string.settings)) },
             text = {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(
-                            checked = showEvalBar,
-                            onCheckedChange = { checked ->
-                                showEvalBar = checked
-                                prefs.edit().putBoolean(KEY_SHOW_EVAL_BAR, checked).apply()
-                            }
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = stringResource(R.string.show_eval_bar_mini),
-                            style = MaterialTheme.typography.bodyLarge
-                        )
-                    }
-
-                    Divider(modifier = Modifier.padding(vertical = 12.dp))
-
                     Text(
                         stringResource(R.string.load_games_title),
                         style = MaterialTheme.typography.titleMedium
@@ -973,15 +956,27 @@ fun GamesListScreen(
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceAround
+                            horizontalArrangement = Arrangement.SpaceEvenly
                         ) {
-                            Button(onClick = { showDatePickerFrom = true }) {
-                                Text(dateFromMillis?.let { dateFormatter.format(Date(it)) }
-                                    ?: stringResource(R.string.date_from))
+                            Button(
+                                onClick = { showDatePickerFrom = true },
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text(
+                                    dateFromMillis?.let { dateFormatter.format(Date(it)) }
+                                        ?: stringResource(R.string.date_from),
+                                    style = MaterialTheme.typography.labelMedium
+                                )
                             }
-                            Button(onClick = { showDatePickerUntil = true }) {
-                                Text(dateUntilMillis?.let { dateFormatter.format(Date(it)) }
-                                    ?: stringResource(R.string.date_until))
+                            Button(
+                                onClick = { showDatePickerUntil = true },
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text(
+                                    dateUntilMillis?.let { dateFormatter.format(Date(it)) }
+                                        ?: stringResource(R.string.date_until),
+                                    style = MaterialTheme.typography.labelMedium
+                                )
                             }
                         }
 
@@ -994,22 +989,34 @@ fun GamesListScreen(
                                     loadFromLocal()
                                 }
                             },
-                            enabled = dateFromMillis != null || dateUntilMillis != null
+                            enabled = dateFromMillis != null || dateUntilMillis != null,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(stringResource(R.string.load_date_range))
+                            Text(
+                                stringResource(R.string.load_date_range),
+                                style = MaterialTheme.typography.labelLarge
+                            )
                         }
 
                         Spacer(Modifier.height(12.dp))
                         Divider()
                         Spacer(Modifier.height(12.dp))
 
-                        Button(onClick = {
-                            scope.launch {
-                                fullSyncWithRemote(null, null)
-                                loadFromLocal()
-                            }
-                        }) {
-                            Text(stringResource(R.string.load_all_games))
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    fullSyncWithRemote(null, null)
+                                    loadFromLocal()
+                                }
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                stringResource(R.string.load_all_games),
+                                style = MaterialTheme.typography.labelLarge
+                            )
                         }
                     }
                 }
@@ -1089,61 +1096,6 @@ fun GamesListScreen(
                 }
             }
         )
-    }
-
-    if (showReAnalyzeSheet) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ModalBottomSheet(
-            onDismissRequest = { showReAnalyzeSheet = false },
-            sheetState = sheetState
-        ) {
-            Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                Text(
-                    stringResource(R.string.reanalyze_title),
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Spacer(Modifier.height(12.dp))
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.depth_label), modifier = Modifier.width(80.dp))
-                    OutlinedTextField(
-                        value = reAnalyzeDepth.toString(),
-                        onValueChange = { s ->
-                            reAnalyzeDepth = s.filter { it.isDigit() }.toIntOrNull()?.coerceIn(6, 40) ?: reAnalyzeDepth
-                        },
-                        singleLine = true,
-                        modifier = Modifier.width(120.dp)
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.multipv_label), modifier = Modifier.width(80.dp))
-                    OutlinedTextField(
-                        value = reAnalyzeMultiPv.toString(),
-                        onValueChange = { s ->
-                            reAnalyzeMultiPv = s.filter { it.isDigit() }.toIntOrNull()?.coerceIn(1, 5) ?: reAnalyzeMultiPv
-                        },
-                        singleLine = true,
-                        modifier = Modifier.width(120.dp)
-                    )
-                }
-
-                Spacer(Modifier.height(16.dp))
-                Button(
-                    onClick = {
-                        val pgn = reAnalyzeTargetPgn
-                        if (!pgn.isNullOrBlank()) {
-                            showReAnalyzeSheet = false
-                            startAnalysis(pgn, depth = reAnalyzeDepth, multiPv = reAnalyzeMultiPv)
-                        } else {
-                            showReAnalyzeSheet = false
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text(stringResource(R.string.reanalyze)) }
-                Spacer(Modifier.height(24.dp))
-            }
-        }
     }
 
     if (showDatePickerFrom) {
@@ -1485,10 +1437,10 @@ private fun CompactGameCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(
-                start = 12.dp,
-                end = 12.dp,
-                top = if (isWinVsTitled) 18.dp else 4.dp,
-                bottom = 4.dp
+                start = 16.dp,
+                end = 16.dp,
+                top = if (isWinVsTitled) 20.dp else 6.dp,
+                bottom = 6.dp
             )
             .scale(scale)
             .combinedClickable(
@@ -1500,16 +1452,17 @@ private fun CompactGameCard(
         Card(
             colors = CardDefaults.cardColors(
                 containerColor = when {
-                    userWon -> Color(0xFFDFF0D8)
-                    userLost -> Color(0xFFF2DEDE)
-                    else -> MaterialTheme.colorScheme.surface
+                    userWon -> Color(0xFFE8F5E9)
+                    userLost -> Color(0xFFFFEBEE)
+                    else -> MaterialTheme.colorScheme.surfaceVariant
                 }
             ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
             border = if (isWinVsTitled) BorderStroke(2.dp, Color(0xFFFFD700)) else null,
+            shape = RoundedCornerShape(16.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .height(if (endText.isNotBlank()) 168.dp else 148.dp)
+                .height(if (endText.isNotBlank()) 172.dp else 152.dp)
         ) {
             val siteName = when (game.site) {
                 Provider.LICHESS -> stringResource(R.string.filter_lichess)
@@ -1519,7 +1472,7 @@ private fun CompactGameCard(
             }
             val (modeLabel, openingLine) = deriveModeAndOpening(game, context)
 
-            Column(Modifier.padding(10.dp)) {
+            Column(Modifier.padding(12.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1538,22 +1491,25 @@ private fun CompactGameCard(
                         overflow = TextOverflow.Ellipsis
                     )
                     if (isAnalyzed) {
-                        Badge(containerColor = Color(0xFF4CAF50), contentColor = Color.White) {
+                        Badge(
+                            containerColor = Color(0xFF4CAF50), 
+                            contentColor = Color.White
+                        ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Icon(
                                     Icons.Default.CheckCircle,
                                     contentDescription = null,
                                     tint = Color.White,
-                                    modifier = Modifier.size(12.dp)
+                                    modifier = Modifier.size(14.dp)
                                 )
-                                Spacer(Modifier.width(4.dp))
                                 Text(
                                     stringResource(R.string.analyzed),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.SemiBold
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
                                 )
                             }
                         }
@@ -1624,8 +1580,8 @@ private fun CompactGameCard(
                     )
                 }
 
-                Spacer(Modifier.height(6.dp))
-                Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(8.dp)) {
+                Spacer(Modifier.height(8.dp))
+                Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(12.dp)) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()

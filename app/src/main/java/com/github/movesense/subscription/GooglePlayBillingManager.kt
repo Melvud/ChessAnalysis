@@ -268,4 +268,14 @@ object GooglePlayBillingManager {
             }
         } ?: continuation.resume(false)
     }
+
+    fun observePremiumStatus(): Flow<Boolean> = callbackFlow {
+        trySend(_isPremiumFlow.value)
+        val job = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+            _isPremiumFlow.collect { isPremium ->
+                trySend(isPremium)
+            }
+        }
+        awaitClose { job.cancel() }
+    }
 }
