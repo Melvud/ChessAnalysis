@@ -5,40 +5,38 @@ import android.content.Context
 import android.util.Log
 import com.android.billingclient.api.*
 import com.android.billingclient.api.BillingClient.BillingResponseCode
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.FirebaseFirestore
 
 /**
  * Менеджер для работы с Google Play Billing
- * Заменяет RevenueCat для Android-only приложения
+ * Поддерживает выбор тарифных планов (OfferToken) и синхронизацию с Firebase
  */
 object GooglePlayBillingManager {
 
     private const val TAG = "BillingManager"
 
-    // Product ID твоей подписки в Google Play Console
-    // Измени на свой Product ID!
+    // Твой ID продукта (подписки) в консоли
     const val PREMIUM_PRODUCT_ID = "chess_premium_annual"
 
     private var billingClient: BillingClient? = null
     private var productDetails: ProductDetails? = null
 
-    // StateFlow для отслеживания premium статуса
+    // StateFlow для реактивного отслеживания статуса в приложении
     private val _isPremiumFlow = MutableStateFlow(false)
     val isPremiumFlow: StateFlow<Boolean> = _isPremiumFlow
 
     /**
-     * Инициализация Billing Client
-     * Вызывай в Application.onCreate() или MainActivity.onCreate()
+     * Инициализация Billing Client.
+     * Вызывать в MainActivity.onCreate() или Application.onCreate()
      */
     fun initialize(context: Context, onReady: () -> Unit = {}) {
         if (billingClient != null) {
@@ -50,6 +48,10 @@ object GooglePlayBillingManager {
             .setListener { billingResult, purchases ->
                 if (billingResult.responseCode == BillingResponseCode.OK && purchases != null) {
                     handlePurchases(purchases)
+                } else if (billingResult.responseCode == BillingResponseCode.USER_CANCELED) {
+                    Log.i(TAG, "User canceled purchase flow.")
+                } else {
+                    Log.e(TAG, "Purchase error: ${billingResult.debugMessage}")
                 }
             }
             .enablePendingPurchases()
@@ -58,33 +60,33 @@ object GooglePlayBillingManager {
         startConnection(onReady)
     }
 
-    /**
-     * Подключение к Google Play
-     */
     private fun startConnection(onReady: () -> Unit) {
         billingClient?.startConnection(object : BillingClientStateListener {
             override fun onBillingSetupFinished(billingResult: BillingResult) {
                 if (billingResult.responseCode == BillingResponseCode.OK) {
                     Log.d(TAG, "✅ Billing client connected")
-                    loadProducts()
-                    checkPremiumStatus()
-                    onReady()
+                    // Сначала загружаем детали продукта
+                    loadProducts {
+                        // Потом проверяем, куплен ли он уже
+                        checkPremiumStatus()
+                        onReady()
+                    }
                 } else {
                     Log.e(TAG, "❌ Billing setup failed: ${billingResult.debugMessage}")
                 }
             }
 
             override fun onBillingServiceDisconnected() {
-                Log.w(TAG, "⚠️ Billing service disconnected, will retry...")
-                // Автоматически переподключится при следующем вызове
+                Log.w(TAG, "⚠️ Billing service disconnected. Will retry on next request.")
+                // Можно добавить логику ретрая с задержкой, если критично
             }
         })
     }
 
     /**
-     * Загрузка информации о продукте
+     * Загружает детали продукта (цены, периоды) из Google Play
      */
-    private fun loadProducts() {
+    private fun loadProducts(onLoaded: () -> Unit = {}) {
         val productList = listOf(
             QueryProductDetailsParams.Product.newBuilder()
                 .setProductId(PREMIUM_PRODUCT_ID)
@@ -101,140 +103,86 @@ object GooglePlayBillingManager {
                 productDetails = productDetailsList.firstOrNull()
                 if (productDetails != null) {
                     Log.d(TAG, "✅ Product loaded: ${productDetails?.title}")
+                    Log.d(TAG, "   Offers: ${productDetails?.subscriptionOfferDetails?.size}")
                 } else {
-                    Log.e(TAG, "❌ No products found for ID: $PREMIUM_PRODUCT_ID")
-                    Log.e(TAG, "   Check Product ID in Google Play Console!")
+                    Log.e(TAG, "❌ No products found for ID: $PREMIUM_PRODUCT_ID. Check Google Play Console!")
                 }
             } else {
                 Log.e(TAG, "❌ Failed to load products: ${billingResult.debugMessage}")
             }
+            onLoaded()
         }
     }
 
     /**
-     * Получить информацию о продукте (для отображения в UI)
+     * Получить ProductDetails для UI (suspend)
      */
     suspend fun getProductDetails(): ProductDetails? = suspendCancellableCoroutine { continuation ->
         if (productDetails != null) {
             continuation.resume(productDetails)
-            return@suspendCancellableCoroutine
-        }
-
-        // Если еще не загружено - загрузим
-        val productList = listOf(
-            QueryProductDetailsParams.Product.newBuilder()
-                .setProductId(PREMIUM_PRODUCT_ID)
-                .setProductType(BillingClient.ProductType.SUBS)
-                .build()
-        )
-
-        val params = QueryProductDetailsParams.newBuilder()
-            .setProductList(productList)
-            .build()
-
-        billingClient?.queryProductDetailsAsync(params) { billingResult, productDetailsList ->
-            if (billingResult.responseCode == BillingResponseCode.OK) {
-                productDetails = productDetailsList.firstOrNull()
+        } else {
+            // Если null, пробуем загрузить еще раз
+            loadProducts {
                 continuation.resume(productDetails)
-            } else {
-                Log.e(TAG, "Failed to get product details: ${billingResult.debugMessage}")
-                continuation.resume(null)
             }
-        } ?: continuation.resume(null)
+        }
     }
 
     /**
-     * Запуск процесса покупки
+     * ✅ НОВЫЙ МЕТОД: Запуск покупки с конкретным offerToken (Год или Месяц)
      */
-    fun launchPurchaseFlow(activity: Activity, onResult: (Boolean, String?) -> Unit) {
+    fun launchPurchaseFlow(activity: Activity, offerToken: String, onResult: (Boolean, String?) -> Unit) {
         val currentProductDetails = productDetails
-
         if (currentProductDetails == null) {
-            Log.e(TAG, "Product details not loaded")
-            onResult(false, "Product not available")
+            onResult(false, "Product details not loaded")
             return
         }
 
-        val client = billingClient
-        if (client == null || !client.isReady) {
-            Log.e(TAG, "Billing client not ready")
-            onResult(false, "Billing not ready")
-            return
-        }
-
-        // Получаем offer token (для подписок)
-        val offerToken = currentProductDetails.subscriptionOfferDetails?.firstOrNull()?.offerToken
-
-        if (offerToken == null) {
-            Log.e(TAG, "No offer token available")
-            onResult(false, "Subscription offer not available")
-            return
-        }
-
-        val productDetailsParams = BillingFlowParams.ProductDetailsParams.newBuilder()
+        val params = BillingFlowParams.ProductDetailsParams.newBuilder()
             .setProductDetails(currentProductDetails)
-            .setOfferToken(offerToken)
+            .setOfferToken(offerToken) // Используем выбранный токен!
             .build()
 
         val billingFlowParams = BillingFlowParams.newBuilder()
-            .setProductDetailsParamsList(listOf(productDetailsParams))
+            .setProductDetailsParamsList(listOf(params))
             .build()
 
-        val billingResult = client.launchBillingFlow(activity, billingFlowParams)
+        val responseCode = billingClient?.launchBillingFlow(activity, billingFlowParams)?.responseCode
 
-        if (billingResult.responseCode != BillingResponseCode.OK) {
-            Log.e(TAG, "Failed to launch billing flow: ${billingResult.debugMessage}")
-            onResult(false, billingResult.debugMessage)
+        if (responseCode != BillingResponseCode.OK) {
+            onResult(false, "Failed to launch flow: $responseCode")
         }
-        // Результат придет в PurchasesUpdatedListener
+        // Успешный запуск не означает успешную покупку. Результат придет в listener.
     }
 
     /**
-     * Обработка покупок
+     * Обработка списка покупок
      */
     private fun handlePurchases(purchases: List<Purchase>) {
+        var isPremiumFound = false
+
         purchases.forEach { purchase ->
             if (purchase.purchaseState == Purchase.PurchaseState.PURCHASED) {
+                // 1. Подтверждаем покупку (Acknowledge), если еще не подтверждена
                 if (!purchase.isAcknowledged) {
                     acknowledgePurchase(purchase)
                 }
 
-                // Обновляем статус premium
+                // 2. Проверяем, относится ли покупка к нашей подписке
                 if (purchase.products.contains(PREMIUM_PRODUCT_ID)) {
-                    _isPremiumFlow.value = true
-                    Log.d(TAG, "✅ User is now premium!")
-
-                    // Синхронизируем с Firebase
-                    syncPremiumStatusToFirebase(true)
+                    isPremiumFound = true
                 }
             }
         }
-    }
 
-    /**
-     * Синхронизация статуса премиума с Firebase
-     */
-    private fun syncPremiumStatusToFirebase(isPremium: Boolean) {
-        val userId = FirebaseAuth.getInstance().currentUser?.uid
-        if (userId != null) {
-            FirebaseFirestore.getInstance()
-                .collection("users")
-                .document(userId)
-                .update("isPremium", isPremium)
-                .addOnSuccessListener {
-                    Log.d(TAG, "✅ Premium status synced to Firebase: $isPremium")
-                }
-                .addOnFailureListener { e ->
-                    Log.e(TAG, "❌ Failed to sync premium status to Firebase", e)
-                }
-        } else {
-            Log.w(TAG, "⚠️ Cannot sync premium status: User not logged in")
+        // 3. Обновляем локальный статус и Firebase
+        if (isPremiumFound) {
+            Log.d(TAG, "✅ Premium subscription active")
+            _isPremiumFlow.value = true
+            syncPremiumStatusToFirebase(true)
         }
     }
 
-    /**
-     * Acknowledge покупки (обязательно!)
-     */
     private fun acknowledgePurchase(purchase: Purchase) {
         val params = AcknowledgePurchaseParams.newBuilder()
             .setPurchaseToken(purchase.purchaseToken)
@@ -242,15 +190,14 @@ object GooglePlayBillingManager {
 
         billingClient?.acknowledgePurchase(params) { billingResult ->
             if (billingResult.responseCode == BillingResponseCode.OK) {
-                Log.d(TAG, "✅ Purchase acknowledged")
-            } else {
-                Log.e(TAG, "❌ Failed to acknowledge: ${billingResult.debugMessage}")
+                Log.d(TAG, "✅ Purchase acknowledged: ${purchase.orderId}")
             }
         }
     }
 
     /**
-     * Проверка статуса подписки
+     * Проверка активных подписок.
+     * Важно: Вызывать в onResume()
      */
     fun checkPremiumStatus() {
         val params = QueryPurchasesParams.newBuilder()
@@ -259,23 +206,38 @@ object GooglePlayBillingManager {
 
         billingClient?.queryPurchasesAsync(params) { billingResult, purchases ->
             if (billingResult.responseCode == BillingResponseCode.OK) {
-                val isPremium = purchases.any { purchase ->
+                // Ищем активную подписку
+                val isPremiumActive = purchases.any { purchase ->
                     purchase.products.contains(PREMIUM_PRODUCT_ID) &&
                             purchase.purchaseState == Purchase.PurchaseState.PURCHASED
                 }
 
-                _isPremiumFlow.value = isPremium
-                Log.d(TAG, "Premium status: $isPremium")
+                _isPremiumFlow.value = isPremiumActive
+                Log.d(TAG, "Checking status... Premium Active: $isPremiumActive")
+
+                // ✅ СИНХРОНИЗАЦИЯ: Обновляем Firebase всегда (и true, и false)
+                // Это отключит премиум в базе, если подписка истекла.
+                syncPremiumStatusToFirebase(isPremiumActive)
+
             } else {
                 Log.e(TAG, "Failed to query purchases: ${billingResult.debugMessage}")
-                _isPremiumFlow.value = false
             }
         }
     }
 
-    /**
-     * Проверка является ли пользователь premium (suspend функция)
-     */
+    private fun syncPremiumStatusToFirebase(isPremium: Boolean) {
+        val user = FirebaseAuth.getInstance().currentUser
+        if (user != null) {
+            FirebaseFirestore.getInstance()
+                .collection("users")
+                .document(user.uid)
+                .update("isPremium", isPremium)
+                .addOnFailureListener { e ->
+                    Log.e(TAG, "Failed to sync premium status: ${e.message}")
+                }
+        }
+    }
+
     suspend fun isPremiumUser(): Boolean = suspendCancellableCoroutine { continuation ->
         val params = QueryPurchasesParams.newBuilder()
             .setProductType(BillingClient.ProductType.SUBS)
@@ -283,43 +245,14 @@ object GooglePlayBillingManager {
 
         billingClient?.queryPurchasesAsync(params) { billingResult, purchases ->
             if (billingResult.responseCode == BillingResponseCode.OK) {
-                val isPremium = purchases.any { purchase ->
-                    purchase.products.contains(PREMIUM_PRODUCT_ID) &&
-                            purchase.purchaseState == Purchase.PurchaseState.PURCHASED
-                }
+                val isPremium = purchases.any { it.products.contains(PREMIUM_PRODUCT_ID) && it.purchaseState == Purchase.PurchaseState.PURCHASED }
                 continuation.resume(isPremium)
             } else {
-                Log.e(TAG, "Error checking premium status: ${billingResult.debugMessage}")
                 continuation.resume(false)
             }
         } ?: continuation.resume(false)
     }
 
-    /**
-     * Flow для реактивного отслеживания premium статуса
-     */
-    fun observePremiumStatus(): Flow<Boolean> = callbackFlow {
-        // Отправляем текущее значение
-        trySend(_isPremiumFlow.value)
-
-        // Подписываемся на изменения
-        val job = kotlinx.coroutines.GlobalScope.launch {
-            _isPremiumFlow.collect { isPremium ->
-                trySend(isPremium)
-            }
-        }
-
-        // Периодически проверяем статус
-        checkPremiumStatus()
-
-        awaitClose {
-            job.cancel()
-        }
-    }
-
-    /**
-     * Восстановление покупок
-     */
     suspend fun restorePurchases(): Boolean = suspendCancellableCoroutine { continuation ->
         val params = QueryPurchasesParams.newBuilder()
             .setProductType(BillingClient.ProductType.SUBS)
@@ -327,29 +260,12 @@ object GooglePlayBillingManager {
 
         billingClient?.queryPurchasesAsync(params) { billingResult, purchases ->
             if (billingResult.responseCode == BillingResponseCode.OK) {
-                handlePurchases(purchases)
-
-                val isPremium = purchases.any { purchase ->
-                    purchase.products.contains(PREMIUM_PRODUCT_ID) &&
-                            purchase.purchaseState == Purchase.PurchaseState.PURCHASED
-                }
-
-                Log.d(TAG, "Purchases restored. Premium: $isPremium")
+                handlePurchases(purchases) // Это обновит статус и Firebase
+                val isPremium = purchases.any { it.products.contains(PREMIUM_PRODUCT_ID) && it.purchaseState == Purchase.PurchaseState.PURCHASED }
                 continuation.resume(true)
             } else {
-                Log.e(TAG, "Failed to restore purchases: ${billingResult.debugMessage}")
                 continuation.resume(false)
             }
         } ?: continuation.resume(false)
-    }
-
-    /**
-     * Освобождение ресурсов
-     */
-    fun destroy() {
-        billingClient?.endConnection()
-        billingClient = null
-        productDetails = null
-        Log.d(TAG, "Billing client destroyed")
     }
 }

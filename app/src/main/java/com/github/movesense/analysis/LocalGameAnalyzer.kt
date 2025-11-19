@@ -124,15 +124,13 @@ class LocalGameAnalyzer(
 
         notify(progressId, total, total, "postprocess", startedAt, onProgress, null, null, null, null, null, null, null)
 
-        // ✅ КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Определяем режим работы
         val isLocalEngine = EngineClient.engineMode.value == EngineClient.EngineMode.LOCAL
 
         // Конвертируем позиции в PositionEval
         val positionEvals: List<PositionEval> = positions.mapIndexed { idx, pos ->
             val currentFen = allFens[idx]
 
-            // ✅ Нормализация ТОЛЬКО для локального движка!
-            // Серверные данные УЖЕ нормализованы - просто конвертируем
+
             if (isLocalEngine) {
                 normalizeToWhitePOV(
                     fen = currentFen,
@@ -141,7 +139,6 @@ class LocalGameAnalyzer(
                     isLast = idx == positions.lastIndex
                 )
             } else {
-                // ✅ Серверные данные УЖЕ нормализованы - просто конвертируем
                 convertToPositionEval(
                     fen = currentFen,
                     pos = pos,
@@ -476,12 +473,6 @@ class LocalGameAnalyzer(
         )
     }
 
-    /**
-     * ✅ Правильная обработка mate: 0 для матовых позиций
-     * Нормализует весь PositionDTO в белую перспективу по КОНКРЕТНОМУ FEN позиции:
-     * если ход чёрных — инвертируем знаки у cp и mate для всех линий.
-     * Используется ТОЛЬКО для ЛОКАЛЬНОГО движка.
-     */
     private fun normalizeToWhitePOV(
         fen: String,
         pos: EngineClient.PositionDTO,
