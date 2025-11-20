@@ -72,6 +72,7 @@ import kotlin.math.roundToLong
 import com.github.movesense.R
 import com.github.movesense.subscription.GooglePlayBillingManager
 import com.github.movesense.ui.components.PremiumBanner
+import com.github.movesense.ui.screens.PaywallDialog
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -1143,7 +1144,6 @@ fun GamesListScreen(
             onDismiss = { showPaywall = false },
             onPurchaseSuccess = {
                 showPaywall = false
-                isPremiumUser = true
                 Toast.makeText(
                     context,
                     context.getString(R.string.premium_activated),
