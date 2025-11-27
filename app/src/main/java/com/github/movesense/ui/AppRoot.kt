@@ -15,6 +15,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import com.github.movesense.R
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -26,6 +31,7 @@ import com.github.movesense.ui.screens.HomeWithBottomNav
 import com.github.movesense.ui.screens.LoginScreen
 import com.github.movesense.ui.screens.ProfileScreen
 import com.github.movesense.ui.screens.ReportScreen
+import com.github.movesense.ui.screens.admin.AdminPanelScreen
 import com.github.movesense.util.LocaleManager
 import com.google.android.gms.tasks.Task
 import kotlinx.serialization.encodeToString
@@ -35,6 +41,9 @@ import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 
 @Composable
 fun AppRoot() {
@@ -46,6 +55,7 @@ fun AppRoot() {
     var games by rememberSaveable { mutableStateOf<List<GameHeader>>(emptyList()) }
     var openingFens by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
     var isFirstLoad by rememberSaveable { mutableStateOf(true) }
+    var giftNotification by rememberSaveable { mutableStateOf<String?>(null) }
 
     val json = remember {
         Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -83,8 +93,19 @@ fun AppRoot() {
                     lichessUsername = doc.getString("lichessUsername") ?: "",
                     chessUsername = doc.getString("chessUsername") ?: "",
                     language = languageCode ?: LocaleManager.Language.ENGLISH.code,
-                    isPremium = doc.getBoolean("isPremium") ?: false
+                    isPremium = doc.getBoolean("isPremium") ?: false,
+                    isAdmin = doc.getBoolean("isAdmin") ?: false
                 )
+
+                val gift = doc.getString("giftNotification")
+                if (!gift.isNullOrBlank()) {
+                    giftNotification = gift
+                    // Удаляем поле, чтобы не показывать снова
+                    FirebaseFirestore.getInstance()
+                        .collection("users")
+                        .document(user.uid)
+                        .update("giftNotification", null)
+                }
             } else {
                 currentUserProfile = null
 
@@ -110,6 +131,19 @@ fun AppRoot() {
             CircularProgressIndicator()
         }
         return
+    }
+
+    if (giftNotification != null) {
+        AlertDialog(
+            onDismissRequest = { giftNotification = null },
+            title = { Text("Подарок!") },
+            text = { Text(giftNotification!!) },
+            confirmButton = {
+                TextButton(onClick = { giftNotification = null }) {
+                    Text("OK")
+                }
+            }
+        )
     }
 
     NavHost(
@@ -167,8 +201,37 @@ fun AppRoot() {
                         rootNav.navigate("login") {
                             popUpTo("home") { inclusive = true }
                         }
-                    }
+                    },
+                    onAdminClick = { rootNav.navigate("admin_panel") }
                 )
+
+                if (giftNotification != null) {
+                    AlertDialog(
+                        onDismissRequest = {
+                            // Clear notification
+                            val user = FirebaseAuth.getInstance().currentUser
+                            if (user != null) {
+                                FirebaseFirestore.getInstance().collection("users").document(user.uid)
+                                    .update("giftNotification", null)
+                            }
+                            giftNotification = null
+                        },
+                        title = { Text(stringResource(R.string.gift_dialog_title)) },
+                        text = { Text(giftNotification!!) },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                val user = FirebaseAuth.getInstance().currentUser
+                                if (user != null) {
+                                    FirebaseFirestore.getInstance().collection("users").document(user.uid)
+                                        .update("giftNotification", null)
+                                }
+                                giftNotification = null
+                            }) {
+                                Text(stringResource(R.string.ok))
+                            }
+                        }
+                    )
+                }
             }
         }
 
@@ -194,7 +257,8 @@ fun AppRoot() {
                             popUpTo("home") { inclusive = true }
                         }
                     },
-                    onBack = { rootNav.popBackStack() }
+                    onBack = { rootNav.popBackStack() },
+                    onAdminClick = { rootNav.navigate("admin_panel") }
                 )
             }
         }
@@ -245,6 +309,18 @@ fun AppRoot() {
             } else {
                 GameReportScreen(
                     report = report,
+                    onBack = { rootNav.popBackStack() }
+                )
+            }
+        }
+
+        // --- ADMIN PANEL ---
+        composable("admin_panel") {
+            val profile = currentUserProfile
+            if (profile == null || !profile.isAdmin) {
+                rootNav.popBackStack()
+            } else {
+                AdminPanelScreen(
                     onBack = { rootNav.popBackStack() }
                 )
             }

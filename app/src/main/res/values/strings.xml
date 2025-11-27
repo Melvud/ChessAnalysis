@@ -278,4 +278,27 @@
     <string name="benefit_unlimited">♾️ Unlimited Usage</string>
     <string name="benefit_no_ads">🚫 No Ads</string>
     <string name="benefit_priority_support">💬 Priority Support</string>
+
+    <!-- Admin Panel -->
+    <string name="admin_panel_button">Admin Panel</string>
+    <string name="admin_panel_title">Admin Panel</string>
+    <string name="search_hint">Search by nickname...</string>
+    <string name="random_gift">Random Gift</string>
+    <string name="user_list_loading_error">Error loading users: %s</string>
+    <string name="search_error">Search error: %s</string>
+    <string name="gift_sent">Gift sent to %s!</string>
+    <string name="gift_no_user">No eligible user found for gift</string>
+    <string name="gift_error">Gift error: %s</string>
+    <string name="granted_subscription">Granted %1$s to %2$s</string>
+    <string name="cancelled_subscription">Cancelled subscription for %s</string>
+    <string name="subscription_error">Error: %s</string>
+    <string name="gift_notification_message">You won a random gift! 1 Month of Premium!</string>
+    <string name="gift_dialog_title">Gift!</string>
+    <string name="manage_subscription_title">Manage Subscription</string>
+    <string name="user_label">User: %s</string>
+    <string name="cancel_subscription">Cancel Subscription</string>
+    <string name="extend_change_label">Or extend/change:</string>
+    <string name="grant_month">Grant 1 Month</string>
+    <string name="grant_year">Grant 1 Year</string>
+    <string name="grant_forever">Grant Forever</string>
 </resources>

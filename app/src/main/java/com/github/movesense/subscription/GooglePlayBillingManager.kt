@@ -151,8 +151,10 @@ object GooglePlayBillingManager {
 
         if (responseCode != BillingResponseCode.OK) {
             onResult(false, "Failed to launch flow: $responseCode")
+        } else {
+            // Flow launched successfully
+            onResult(true, null)
         }
-        // Успешный запуск не означает успешную покупку. Результат придет в listener.
     }
 
     /**

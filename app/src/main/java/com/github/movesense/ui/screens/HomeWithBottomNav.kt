@@ -40,7 +40,8 @@ fun HomeWithBottomNav(
     onFirstLoadComplete: () -> Unit,
     onOpenReport: (FullReport) -> Unit,
     onSaveProfile: (UserProfile) -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    onAdminClick: () -> Unit
 ) {
     val tabsNav = rememberNavController()
 
@@ -115,7 +116,8 @@ fun HomeWithBottomNav(
                         popUpTo(TAB_GAMES) { inclusive = false }
                         launchSingleTop = true
                     }
-                }
+                },
+                onAdminClick = onAdminClick
             )
         }
     }
@@ -151,14 +153,16 @@ private fun NavGraphBuilder.addProfileTab(
     profile: UserProfile,
     onSave: (UserProfile) -> Unit,
     onLogout: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onAdminClick: () -> Unit
 ) {
     composable(TAB_PROFILE) {
         ProfileScreen(
             profile = profile,
             onSave = onSave,
             onLogout = onLogout,
-            onBack = onBack
+            onBack = onBack,
+            onAdminClick = onAdminClick
         )
     }
 }

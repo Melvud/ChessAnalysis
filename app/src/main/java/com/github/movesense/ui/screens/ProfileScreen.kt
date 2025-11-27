@@ -26,9 +26,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.github.movesense.R
 import com.github.movesense.EngineClient
 import com.github.movesense.EngineClient.setEngineMode
-import com.github.movesense.R
+
 import com.github.movesense.subscription.GooglePlayBillingManager
 import com.github.movesense.ui.UserProfile
 import com.github.movesense.util.LocaleManager
@@ -48,7 +49,8 @@ fun ProfileScreen(
     profile: UserProfile,
     onSave: (UserProfile) -> Unit,
     onLogout: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onAdminClick: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -195,6 +197,29 @@ fun ProfileScreen(
                         color = MaterialTheme.colorScheme.onErrorContainer,
                         modifier = Modifier.padding(16.dp),
                         style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+
+            // Admin Panel Button
+            if (profile.isAdmin) {
+                Button(
+                    onClick = onAdminClick,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .height(56.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondary
+                    )
+                ) {
+                    Icon(Icons.Default.AdminPanelSettings, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        stringResource(R.string.admin_panel_button),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }

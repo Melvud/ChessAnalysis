@@ -19,7 +19,7 @@ android {
         applicationId = "com.github.movesense"
         minSdk = 24
         targetSdk = 36
-        versionCode = 11
+        versionCode = 12
         versionName = "0.0.4"
 
     }

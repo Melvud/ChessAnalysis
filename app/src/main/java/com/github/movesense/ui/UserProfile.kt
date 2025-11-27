@@ -16,5 +16,6 @@ data class UserProfile(
     val lichessUsername: String = "",
     val chessUsername: String = "",
     val language: String = "ru",
-    val isPremium: Boolean = false
+    val isPremium: Boolean = false,
+    val isAdmin: Boolean = false
 ) : Parcelable

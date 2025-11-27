@@ -289,4 +289,27 @@
     <string name="benefit_unlimited">♾️ Неограниченное использование</string>
     <string name="benefit_no_ads">🚫 Без рекламы</string>
     <string name="benefit_priority_support">💬 Приоритетная поддержка</string>
+
+    <!-- Admin Panel -->
+    <string name="admin_panel_button">Админ Панель</string>
+    <string name="admin_panel_title">Админ Панель</string>
+    <string name="search_hint">Поиск по никнейму...</string>
+    <string name="random_gift">Случайный подарок</string>
+    <string name="user_list_loading_error">Ошибка загрузки пользователей: %s</string>
+    <string name="search_error">Ошибка поиска: %s</string>
+    <string name="gift_sent">Подарок отправлен пользователю %s!</string>
+    <string name="gift_no_user">Не найден подходящий пользователь для подарка</string>
+    <string name="gift_error">Ошибка подарка: %s</string>
+    <string name="granted_subscription">Выдано %1$s пользователю %2$s</string>
+    <string name="cancelled_subscription">Подписка отменена для %s</string>
+    <string name="subscription_error">Ошибка: %s</string>
+    <string name="gift_notification_message">Вы выиграли случайный подарок! 1 Месяц Премиума!</string>
+    <string name="gift_dialog_title">Подарок!</string>
+    <string name="manage_subscription_title">Управление подпиской</string>
+    <string name="user_label">Пользователь: %s</string>
+    <string name="cancel_subscription">Отменить подписку</string>
+    <string name="extend_change_label">Или продлить/изменить:</string>
+    <string name="grant_month">Выдать на Месяц</string>
+    <string name="grant_year">Выдать на Год</string>
+    <string name="grant_forever">Выдать Навсегда</string>
 </resources>

@@ -1609,15 +1609,19 @@ private fun CompactGameCard(
         }
 
         if (isWinVsTitled) {
+            /*
+            /*
             Image(
                 painter = painterResource(id = R.drawable.icon_crown),
                 contentDescription = stringResource(id = R.string.victory_vs_titled),
                 modifier = Modifier
                     .zIndex(1f)
-                    .size(28.dp)
+                    .size(24.dp)
                     .align(Alignment.TopCenter)
-                    .offset(y = (-14).dp)
+                    .offset(y = (-12).dp)
             )
+            */
+            */
         }
     }
 }

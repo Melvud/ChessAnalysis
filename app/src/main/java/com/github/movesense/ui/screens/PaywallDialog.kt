@@ -104,7 +104,10 @@ fun PaywallDialog(
 
     Dialog(
         onDismissRequest = { if (!isPurchasing) onDismiss() },
-        properties = DialogProperties(usePlatformDefaultWidth = false) // На весь экран
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
     ) {
         Surface(
             modifier = Modifier.fillMaxSize(),
@@ -163,7 +166,7 @@ fun PaywallDialog(
                         PremiumFeatureRow(
                             icon = Icons.Default.Bolt,
                             title = stringResource(R.string.feature_server_engine),
-                            subtitle = "Stockfish 16 on cloud servers"
+                            subtitle = "Fast Stockfish 17.1 on cloud servers"
                         )
                         PremiumFeatureRow(
                             icon = Icons.Default.Psychology,
