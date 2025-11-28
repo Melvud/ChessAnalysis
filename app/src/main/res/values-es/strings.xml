@@ -126,12 +126,31 @@
     <!-- GamesListScreen -->
     <string name="analysis_error">Error de análisis: %s</string>
     <string name="pgn_not_found">PGN no encontrado</string>
+    <string name="no_nicknames_error">Por favor, configure su nombre de usuario de Lichess o Chess.com en el Perfil primero.</string>
 
     <!-- LoginScreen -->
     <string name="show_password">Mostrar contraseña</string>
     <string name="hide_password">Ocultar contraseña</string>
     <string name="profile_load_error">Error al cargar el perfil</string>
     <string name="profile_save_error">Error al guardar el perfil</string>
+    <string name="reset_email_sent">Correo de restablecimiento enviado</string>
+    <string name="error_sending_reset">Error al enviar correo: %s</string>
+    <string name="sign_in_with_google">Iniciar sesión con Google</string>
+    <string name="link_google">Vincular cuenta de Google</string>
+    <string name="unlink_google">Desvincular cuenta de Google</string>
+    <string name="google_linked">Cuenta de Google vinculada</string>
+    <string name="google_unlinked">Cuenta de Google desvinculada</string>
+    <string name="link_error">Error al vincular: %s</string>
+    <string name="forgot_password">¿Olvidaste la contraseña?</string>
+    <string name="reset_password">Restablecer contraseña</string>
+    <string name="enter_email">Introduce tu email</string>
+    <string name="send_reset_link">Enviar enlace</string>
+    <string name="reset_link_sent">Enlace enviado a %s</string>
+    <string name="reset_error">Error al enviar: %s</string>
+    <string name="verification_sent">Verificación enviada a %s</string>
+    <string name="verify_email">Verifica tu email</string>
+    <string name="default_web_client_id">YOUR_WEB_CLIENT_ID</string>
+    <string name="sign_in_google">Iniciar sesión con Google</string>
 
     <!-- ProfileScreen -->
     <string name="engine_mode">Modo de motor</string>
@@ -267,6 +286,7 @@
     <string name="premium_status">Premium Status</string>
     <string name="premium_active">Premium Active</string>
     <string name="premium_expires">Valid until: %s</string>
+    <string name="premium_until">Premium hasta: %s</string>
 
     <string name="purchase_error">Purchase Error</string>
     <string name="restore_failed">Failed to restore purchases</string>
@@ -301,4 +321,8 @@
     <string name="grant_month">Conceder 1 mes</string>
     <string name="grant_year">Conceder 1 año</string>
     <string name="grant_forever">Conceder para siempre</string>
+
+    <string name="complete_registration">Complete Registration</string>
+    <string name="complete_registration_desc">Please confirm your nickname and optional chess usernames to complete your account setup.</string>
+    <string name="error_google_already_linked">This Google account is already linked to another user.</string>
 </resources>

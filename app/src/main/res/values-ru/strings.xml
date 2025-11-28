@@ -125,12 +125,31 @@
     <!-- GamesListScreen -->
     <string name="analysis_error">Ошибка анализа: %s</string>
     <string name="pgn_not_found">PGN не найден</string>
+    <string name="no_nicknames_error">Пожалуйста, сначала укажите никнейм Lichess или Chess.com в Профиле.</string>
 
     <!-- LoginScreen -->
     <string name="show_password">Показать пароль</string>
     <string name="hide_password">Скрыть пароль</string>
     <string name="profile_load_error">Ошибка загрузки профиля</string>
     <string name="profile_save_error">Ошибка сохранения профиля</string>
+    <string name="reset_email_sent">Письмо для сброса отправлено</string>
+    <string name="error_sending_reset">Ошибка отправки письма: %s</string>
+    <string name="sign_in_with_google">Войти через Google</string>
+    <string name="link_google">Привязать Google аккаунт</string>
+    <string name="unlink_google">Отвязать Google аккаунт</string>
+    <string name="google_linked">Google аккаунт привязан</string>
+    <string name="google_unlinked">Google аккаунт отвязан</string>
+    <string name="link_error">Ошибка привязки: %s</string>
+    <string name="forgot_password">Забыли пароль?</string>
+    <string name="reset_password">Сброс пароля</string>
+    <string name="enter_email">Введите email</string>
+    <string name="send_reset_link">Отправить ссылку</string>
+    <string name="reset_link_sent">Ссылка отправлена на %s</string>
+    <string name="reset_error">Ошибка отправки: %s</string>
+    <string name="verification_sent">Письмо отправлено на %s</string>
+    <string name="verify_email">Подтвердите ваш email</string>
+    <string name="default_web_client_id">YOUR_WEB_CLIENT_ID</string>
+    <string name="sign_in_google">Войти через Google</string>
 
     <!-- ProfileScreen -->
     <string name="engine_mode">Режим движка</string>
@@ -276,6 +295,7 @@
     <string name="premium_status">Premium статус</string>
     <string name="premium_active">Premium активен</string>
     <string name="premium_expires">Действителен до: %s</string>
+    <string name="premium_until">Премиум до: %s</string>
 
     <!-- Additional Errors -->
     <string name="purchase_error">Ошибка покупки</string>
@@ -312,4 +332,9 @@
     <string name="grant_month">Выдать на Месяц</string>
     <string name="grant_year">Выдать на Год</string>
     <string name="grant_forever">Выдать Навсегда</string>
+
+    <!-- Google Registration Dialog -->
+    <string name="complete_registration">Завершение регистрации</string>
+    <string name="complete_registration_desc">Пожалуйста, подтвердите ваш никнейм и укажите логины шахматных сайтов для завершения настройки аккаунта.</string>
+    <string name="error_google_already_linked">Этот Google аккаунт уже связан с другим пользователем.</string>
 </resources>

@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
-    package="com.github.movesense">
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Для Ktor и работы с сетью -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -20,7 +19,6 @@
         android:theme="@style/Theme.ChessAnalyzer"
         android:configChanges="orientation|screenSize|locale|layoutDirection"
         android:usesCleartextTraffic="true"
-        android:extractNativeLibs="true"
         android:enableOnBackInvokedCallback="true"
         android:networkSecurityConfig="@xml/network_security_config"
         android:screenOrientation="portrait"

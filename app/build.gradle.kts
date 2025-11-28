@@ -138,6 +138,7 @@ dependencies {
     implementation("com.patrykandpatrick.vico:core:2.1.3")
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     implementation("androidx.datastore:datastore-preferences-core:1.0.0")
+    implementation("com.google.android.gms:play-services-auth:21.2.0")
 
     implementation("com.android.billingclient:billing-ktx:6.1.0")
     testImplementation("junit:junit:4.13.2")

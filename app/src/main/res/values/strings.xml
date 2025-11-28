@@ -125,13 +125,32 @@
 
 <!-- GamesListScreen -->
 <string name="analysis_error">Analysis error: %s</string>
-<string name="pgn_not_found">PGN not found</string>
+    <string name="pgn_not_found">PGN not found</string>
+    <string name="no_nicknames_error">Please set your Lichess or Chess.com username in Profile first.</string>
 
 <!-- LoginScreen -->
 <string name="show_password">Show password</string>
 <string name="hide_password">Hide password</string>
 <string name="profile_load_error">Profile loading error</string>
 <string name="profile_save_error">Profile save error</string>
+    <string name="sign_in_with_google">Sign in with Google</string>
+    <string name="link_google">Link Google Account</string>
+    <string name="unlink_google">Unlink Google Account</string>
+    <string name="google_linked">Google Account Linked</string>
+    <string name="google_unlinked">Google Account Unlinked</string>
+    <string name="link_error">Error linking account: %s</string>
+    <string name="forgot_password">Forgot password?</string>
+    <string name="reset_password">Reset Password</string>
+    <string name="enter_email">Enter your email</string>
+    <string name="send_reset_link">Send Reset Link</string>
+    <string name="reset_link_sent">Reset link sent to %s</string>
+    <string name="reset_error">Error sending reset link: %s</string>
+    <string name="verification_sent">Verification email sent to %s</string>
+    <string name="verify_email">Please verify your email</string>
+    <string name="default_web_client_id">YOUR_WEB_CLIENT_ID</string>
+    <string name="sign_in_google">Sign in with Google</string>
+    <string name="reset_email_sent">Reset email sent</string>
+    <string name="error_sending_reset">Error sending reset email: %s</string>
 
 <!-- ProfileScreen -->
 <string name="engine_mode">Engine Mode</string>
@@ -267,6 +286,7 @@
     <string name="premium_status">Premium Status</string>
     <string name="premium_active">Premium Active</string>
     <string name="premium_expires">Valid until: %s</string>
+    <string name="premium_until">Premium until: %s</string>
 
     <string name="purchase_error">Purchase Error</string>
     <string name="restore_failed">Failed to restore purchases</string>
@@ -301,4 +321,9 @@
     <string name="grant_month">Grant 1 Month</string>
     <string name="grant_year">Grant 1 Year</string>
     <string name="grant_forever">Grant Forever</string>
+
+    <!-- Google Registration Dialog -->
+    <string name="complete_registration">Complete Registration</string>
+    <string name="complete_registration_desc">Please confirm your nickname and optional chess usernames to complete your account setup.</string>
+    <string name="error_google_already_linked">This Google account is already linked to another user.</string>
 </resources>

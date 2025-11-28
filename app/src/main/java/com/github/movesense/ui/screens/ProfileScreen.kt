@@ -5,6 +5,7 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -42,6 +43,12 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
+import com.google.firebase.auth.GoogleAuthProvider
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,6 +80,40 @@ fun ProfileScreen(
     val isPremiumUser = profile.isPremium || googlePlayPremium
     var showPaywall by remember { mutableStateOf(false) }
     var showManageSubscriptionDialog by remember { mutableStateOf(false) }
+
+    var isGoogleLinked by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        val user = FirebaseAuth.getInstance().currentUser
+        isGoogleLinked = user?.providerData?.any { it.providerId == GoogleAuthProvider.PROVIDER_ID } == true
+    }
+
+    val googleSignInLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+        try {
+            val account = task.getResult(ApiException::class.java)
+            account?.idToken?.let { token ->
+                val credential = GoogleAuthProvider.getCredential(token, null)
+                FirebaseAuth.getInstance().currentUser?.linkWithCredential(credential)
+                    ?.addOnSuccessListener {
+                        isGoogleLinked = true
+                        Toast.makeText(context, context.getString(R.string.google_linked), Toast.LENGTH_SHORT).show()
+                    }
+                    ?.addOnFailureListener { e ->
+                        if (e.message?.contains("ERROR_CREDENTIAL_ALREADY_ASSOCIATED") == true ||
+                            e.message?.contains("already associated") == true) {
+                            errorMessage = context.getString(R.string.error_google_already_linked)
+                        } else {
+                            Toast.makeText(context, context.getString(R.string.link_error, e.message), Toast.LENGTH_LONG).show()
+                        }
+                    }
+            }
+        } catch (e: ApiException) {
+            Toast.makeText(context, "Google Sign-In failed: ${e.statusCode}", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     // Validation functions
     suspend fun checkLichessUserExists(username: String): Boolean = withContext(Dispatchers.IO) {
@@ -175,6 +216,25 @@ fun ProfileScreen(
                 onChessNameChange = { chessName = it },
                 onLanguageClick = { showLanguageDialog = true },
                 isSaving = isSaving,
+                isGoogleLinked = isGoogleLinked,
+                onLinkGoogle = {
+                    val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                        .requestIdToken(context.getString(R.string.default_web_client_id))
+                        .requestEmail()
+                        .build()
+                    val googleSignInClient = GoogleSignIn.getClient(context, gso)
+                    googleSignInLauncher.launch(googleSignInClient.signInIntent)
+                },
+                onUnlinkGoogle = {
+                    FirebaseAuth.getInstance().currentUser?.unlink(GoogleAuthProvider.PROVIDER_ID)
+                        ?.addOnSuccessListener {
+                            isGoogleLinked = false
+                            Toast.makeText(context, context.getString(R.string.google_unlinked), Toast.LENGTH_SHORT).show()
+                        }
+                        ?.addOnFailureListener { e ->
+                            Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
+                },
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
 
@@ -591,6 +651,17 @@ private fun PremiumCard(
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                         )
+                        )
+                        
+                        if (isPremium && profile.premiumUntil != -1L && profile.premiumUntil > System.currentTimeMillis()) {
+                             val date = java.text.SimpleDateFormat("dd MMM yyyy", java.util.Locale.getDefault())
+                                .format(java.util.Date(profile.premiumUntil))
+                             Text(
+                                text = stringResource(R.string.premium_until, date),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                             )
+                        }
                     }
                 }
 
@@ -840,6 +911,9 @@ private fun ProfileInfoSection(
     onChessNameChange: (String) -> Unit,
     onLanguageClick: () -> Unit,
     isSaving: Boolean,
+    isGoogleLinked: Boolean,
+    onLinkGoogle: () -> Unit,
+    onUnlinkGoogle: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -941,6 +1015,26 @@ private fun ProfileInfoSection(
                     disabledTrailingIconColor = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             )
+
+            // Google Account Link/Unlink
+            OutlinedButton(
+                onClick = {
+                    if (isGoogleLinked) onUnlinkGoogle() else onLinkGoogle()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = if (isGoogleLinked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                ),
+                border = BorderStroke(
+                    1.dp,
+                    if (isGoogleLinked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                )
+            ) {
+                Text(
+                    text = if (isGoogleLinked) stringResource(R.string.unlink_google) else stringResource(R.string.link_google)
+                )
+            }
         }
     }
 }

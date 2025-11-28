@@ -109,7 +109,45 @@ fun GamesListScreen(
     val repo = remember { context.gameRepository(json) }
 
     val billingPremium by GooglePlayBillingManager.isPremiumFlow.collectAsState()
-    val isPremiumUser = profile.isPremium || billingPremium
+    
+    // Local state for profile premium to allow updates
+    var localProfilePremium by remember(profile) { mutableStateOf(profile.isPremium) }
+    
+    val isPremiumUser = localProfilePremium || billingPremium
+    
+    // Check for gifted subscription updates
+    LaunchedEffect(Unit) {
+        val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
+        val user = auth.currentUser
+        if (user != null) {
+            val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+            val docRef = db.collection("users").document(user.uid)
+            
+            docRef.addSnapshotListener { snapshot, e ->
+                if (e != null) {
+                    Log.w(TAG, "Listen failed.", e)
+                    return@addSnapshotListener
+                }
+
+                if (snapshot != null && snapshot.exists()) {
+                    val isPremium = snapshot.getBoolean("isPremium") ?: false
+                    val premiumUntil = snapshot.getLong("premiumUntil") ?: -1L
+                    
+                    if (isPremium && premiumUntil != -1L) {
+                        if (System.currentTimeMillis() > premiumUntil) {
+                            // Expired!
+                            docRef.update("isPremium", false)
+                            localProfilePremium = false
+                        } else {
+                            localProfilePremium = true
+                        }
+                    } else {
+                        localProfilePremium = isPremium
+                    }
+                }
+            }
+        }
+    }
     
     var isBannerClosedSession by remember { mutableStateOf(com.github.movesense.App.isBannerDismissed) }
     val showPremiumBanner = !isPremiumUser && !isBannerClosedSession
@@ -234,6 +272,15 @@ fun GamesListScreen(
 
     suspend fun deltaSyncWithRemote() {
         try {
+            if (profile.lichessUsername.isBlank() && profile.chessUsername.isBlank()) {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.no_nicknames_error),
+                    Toast.LENGTH_LONG
+                ).show()
+                return
+            }
+
             var addedCount = 0
 
             if (profile.lichessUsername.isNotEmpty()) {
@@ -281,6 +328,16 @@ fun GamesListScreen(
             isFullSyncing = true
             fullSyncProgress = null
             fullSyncMessage = context.getString(R.string.loading_lichess)
+
+            if (profile.lichessUsername.isBlank() && profile.chessUsername.isBlank()) {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.no_nicknames_error),
+                    Toast.LENGTH_LONG
+                ).show()
+                return
+            }
+
             var addedCount = 0
 
             if (profile.lichessUsername.isNotEmpty()) {

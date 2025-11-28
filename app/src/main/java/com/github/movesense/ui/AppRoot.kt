@@ -94,8 +94,22 @@ fun AppRoot() {
                     chessUsername = doc.getString("chessUsername") ?: "",
                     language = languageCode ?: LocaleManager.Language.ENGLISH.code,
                     isPremium = doc.getBoolean("isPremium") ?: false,
+                    premiumUntil = doc.getLong("premiumUntil") ?: -1L,
                     isAdmin = doc.getBoolean("isAdmin") ?: false
                 )
+
+                // Check for expiration
+                if (currentUserProfile?.isPremium == true && currentUserProfile?.premiumUntil != -1L) {
+                    if (System.currentTimeMillis() > currentUserProfile!!.premiumUntil) {
+                        // Expired!
+                        FirebaseFirestore.getInstance()
+                            .collection("users")
+                            .document(user.uid)
+                            .update("isPremium", false)
+                        
+                        currentUserProfile = currentUserProfile!!.copy(isPremium = false)
+                    }
+                }
 
                 val gift = doc.getString("giftNotification")
                 if (!gift.isNullOrBlank()) {
@@ -148,23 +162,44 @@ fun AppRoot() {
 
     NavHost(
         navController = rootNav,
-        startDestination = if (currentUserProfile == null) "login" else "home"
+        startDestination = if (currentUserProfile == null) "welcome" else "home"
     ) {
-        // --- LOGIN ---
-        composable("login") {
-            LoginScreen(
+        // --- WELCOME ---
+        composable("welcome") {
+            com.github.movesense.ui.screens.WelcomeScreen(
+                onNavigateToLogin = { isLogin ->
+                    rootNav.navigate("login/$isLogin")
+                },
                 onLoginSuccess = { profile ->
                     currentUserProfile = profile
                     isFirstLoad = true
                     rootNav.navigate("home") {
-                        popUpTo("login") { inclusive = true }
+                        popUpTo("welcome") { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        // --- LOGIN ---
+        composable(
+            route = "login/{isLogin}",
+            arguments = listOf(androidx.navigation.navArgument("isLogin") { type = androidx.navigation.NavType.BoolType })
+        ) { backStackEntry ->
+            val isLogin = backStackEntry.arguments?.getBoolean("isLogin") ?: true
+            LoginScreen(
+                initialLoginMode = isLogin,
+                onLoginSuccess = { profile ->
+                    currentUserProfile = profile
+                    isFirstLoad = true
+                    rootNav.navigate("home") {
+                        popUpTo("welcome") { inclusive = true }
                     }
                 },
                 onRegisterSuccess = { profile ->
                     currentUserProfile = profile
                     isFirstLoad = true
                     rootNav.navigate("home") {
-                        popUpTo("login") { inclusive = true }
+                        popUpTo("welcome") { inclusive = true }
                     }
                 }
             )

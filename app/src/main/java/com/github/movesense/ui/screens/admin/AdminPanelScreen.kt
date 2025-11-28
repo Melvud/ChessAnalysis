@@ -60,6 +60,7 @@ fun AdminPanelScreen(
                     chessUsername = doc.getString("chessUsername") ?: "",
                     language = doc.getString("language") ?: "ru",
                     isPremium = doc.getBoolean("isPremium") ?: false,
+                    premiumUntil = doc.getLong("premiumUntil") ?: -1L,
                     isAdmin = doc.getBoolean("isAdmin") ?: false
                 )
                 AdminUser(doc.id, profile)
@@ -98,6 +99,7 @@ fun AdminPanelScreen(
                         chessUsername = doc.getString("chessUsername") ?: "",
                         language = doc.getString("language") ?: "ru",
                         isPremium = doc.getBoolean("isPremium") ?: false,
+                        premiumUntil = doc.getLong("premiumUntil") ?: -1L,
                         isAdmin = doc.getBoolean("isAdmin") ?: false
                     )
                     AdminUser(doc.id, profile)
