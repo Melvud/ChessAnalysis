@@ -7,16 +7,13 @@ import android.util.Log
 import com.github.movesense.FullReport
 import com.github.movesense.GameHeader
 import com.github.movesense.Provider
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
-class GameRepository(
-    private val db: AppDatabase,
-    private val json: Json
-) {
+class GameRepository(private val db: AppDatabase, private val json: Json) {
     companion object {
         private const val TAG = "GameRepository"
     }
@@ -24,44 +21,45 @@ class GameRepository(
     // ---------------- BOT-игры ----------------
 
     suspend fun insertBotGame(
-        pgn: String,
-        white: String,
-        black: String,
-        result: String,
-        dateIso: String
+            pgn: String,
+            white: String,
+            black: String,
+            result: String,
+            dateIso: String
     ): String {
         val hash = pgnHash(pgn)
         val timestamp = parseGameTimestamp(pgn, dateIso)
         Log.d(TAG, "Inserting bot game: $white vs $black, timestamp=$timestamp")
-        db.gameDao().insertBotGame(
-            BotGameEntity(
-                pgnHash = hash,
-                pgn = pgn,
-                white = white,
-                black = black,
-                result = result,
-                dateIso = dateIso,
-                gameTimestamp = timestamp,
-                addedTimestamp = System.currentTimeMillis()
-            )
-        )
+        db.gameDao()
+                .insertBotGame(
+                        BotGameEntity(
+                                pgnHash = hash,
+                                pgn = pgn,
+                                white = white,
+                                black = black,
+                                result = result,
+                                dateIso = dateIso,
+                                gameTimestamp = timestamp,
+                                addedTimestamp = System.currentTimeMillis()
+                        )
+                )
         return hash
     }
 
     suspend fun getBotGamesAsHeaders(): List<GameHeader> =
-        db.gameDao().getAllBotGames().map { e ->
-            GameHeader(
-                site = Provider.BOT,
-                pgn = e.pgn,
-                white = e.white,
-                black = e.black,
-                result = e.result,
-                date = e.dateIso,
-                sideToView = null,
-                opening = null,
-                eco = null
-            )
-        }
+            db.gameDao().getAllBotGames().map { e ->
+                GameHeader(
+                        site = Provider.BOT,
+                        pgn = e.pgn,
+                        white = e.white,
+                        black = e.black,
+                        result = e.result,
+                        date = e.dateIso,
+                        sideToView = null,
+                        opening = null,
+                        eco = null
+                )
+            }
 
     // --------------- Внешние игры (Lichess/Chess.com) ----------------
 
@@ -69,9 +67,8 @@ class GameRepository(
         Log.d(TAG, "mergeExternal: provider=$provider, incoming size=${incoming.size}")
 
         // СОРТИРУЕМ ВХОДЯЩИЕ ИГРЫ ОТ НОВЫХ К СТАРЫМ
-        val sortedIncoming = incoming.sortedByDescending { gh ->
-            parseGameTimestamp(gh.pgn ?: "", gh.date)
-        }
+        val sortedIncoming =
+                incoming.sortedByDescending { gh -> parseGameTimestamp(gh.pgn ?: "", gh.date) }
 
         var added = 0
         for (gh in sortedIncoming) {
@@ -82,19 +79,20 @@ class GameRepository(
 
             if (existing == null) {
                 val gameTimestamp = parseGameTimestamp(gh.pgn ?: "", gh.date)
-                val e = ExternalGameEntity(
-                    headerKey = key,
-                    provider = provider.name,
-                    dateIso = gh.date,
-                    result = gh.result,
-                    white = gh.white,
-                    black = gh.black,
-                    opening = gh.opening,
-                    eco = gh.eco,
-                    pgn = gh.pgn,
-                    gameTimestamp = gameTimestamp,
-                    addedTimestamp = System.currentTimeMillis()
-                )
+                val e =
+                        ExternalGameEntity(
+                                headerKey = key,
+                                provider = provider.name,
+                                dateIso = gh.date,
+                                result = gh.result,
+                                white = gh.white,
+                                black = gh.black,
+                                opening = gh.opening,
+                                eco = gh.eco,
+                                pgn = gh.pgn,
+                                gameTimestamp = gameTimestamp,
+                                addedTimestamp = System.currentTimeMillis()
+                        )
                 val rowId = db.gameDao().insertExternalIgnore(e)
                 if (rowId != -1L) {
                     added++
@@ -104,20 +102,23 @@ class GameRepository(
                 }
             } else {
                 // Обновляем до более полного PGN, если он короче/пустой в БД
-                if (gh.pgn != null && (existing.pgn == null || existing.pgn!!.length < gh.pgn!!.length)) {
+                if (gh.pgn != null &&
+                                (existing.pgn == null || existing.pgn!!.length < gh.pgn!!.length)
+                ) {
                     val gameTimestamp = parseGameTimestamp(gh.pgn!!, gh.date)
-                    db.gameDao().updateExternal(
-                        existing.copy(
-                            dateIso = gh.date ?: existing.dateIso,
-                            result = gh.result ?: existing.result,
-                            white = gh.white ?: existing.white,
-                            black = gh.black ?: existing.black,
-                            opening = gh.opening ?: existing.opening,
-                            eco = gh.eco ?: existing.eco,
-                            pgn = gh.pgn,
-                            gameTimestamp = gameTimestamp
-                        )
-                    )
+                    db.gameDao()
+                            .updateExternal(
+                                    existing.copy(
+                                            dateIso = gh.date ?: existing.dateIso,
+                                            result = gh.result ?: existing.result,
+                                            white = gh.white ?: existing.white,
+                                            black = gh.black ?: existing.black,
+                                            opening = gh.opening ?: existing.opening,
+                                            eco = gh.eco ?: existing.eco,
+                                            pgn = gh.pgn,
+                                            gameTimestamp = gameTimestamp
+                                    )
+                            )
                     Log.d(TAG, "✓ Updated existing game PGN: ${gh.white} vs ${gh.black}")
                 } else {
                     Log.d(TAG, "⏭ Game already exists (skipped): ${gh.white} vs ${gh.black}")
@@ -153,20 +154,21 @@ class GameRepository(
 
         return rows.map { r ->
             GameHeader(
-                site = when (r.provider) {
-                    Provider.LICHESS.name -> Provider.LICHESS
-                    Provider.CHESSCOM.name -> Provider.CHESSCOM
-                    Provider.BOT.name -> Provider.BOT
-                    else -> Provider.LICHESS
-                },
-                pgn = r.pgn,
-                white = r.white,
-                black = r.black,
-                result = r.result,
-                date = r.dateIso,
-                sideToView = null,
-                opening = r.opening,
-                eco = r.eco
+                    site =
+                            when (r.provider) {
+                                Provider.LICHESS.name -> Provider.LICHESS
+                                Provider.CHESSCOM.name -> Provider.CHESSCOM
+                                Provider.BOT.name -> Provider.BOT
+                                else -> Provider.LICHESS
+                            },
+                    pgn = r.pgn,
+                    white = r.white,
+                    black = r.black,
+                    result = r.result,
+                    date = r.dateIso,
+                    sideToView = null,
+                    opening = r.opening,
+                    eco = r.eco
             )
         }
     }
@@ -179,15 +181,40 @@ class GameRepository(
         return runCatching { json.decodeFromString<FullReport>(row.reportJson) }.getOrNull()
     }
 
+    suspend fun getCachedReports(pgns: List<String>): Map<String, FullReport> {
+        if (pgns.isEmpty()) return emptyMap()
+
+        val hashToPgn = pgns.associateBy { pgnHash(it) }
+        val hashes = hashToPgn.keys.toList()
+
+        val rows = db.gameDao().getReportsByHashes(hashes)
+
+        val result = mutableMapOf<String, FullReport>()
+        for (row in rows) {
+            val report =
+                    runCatching { json.decodeFromString<FullReport>(row.reportJson) }.getOrNull()
+            if (report != null) {
+                // Find original PGN hash to map back
+                // We need to map hash back to original PGN string?
+                // Actually, the caller probably wants Map<PgnHash, Report> or Map<PgnString,
+                // Report>
+                // Let's return Map<PgnHash, FullReport> to be consistent with GamesListScreen usage
+                result[row.pgnHash] = report
+            }
+        }
+        return result
+    }
+
     suspend fun saveReport(pgn: String, report: FullReport) {
         val hash = pgnHash(pgn)
-        db.gameDao().upsertReport(
-            ReportCacheEntity(
-                pgnHash = hash,
-                reportJson = json.encodeToString(report),
-                createdAtMillis = System.currentTimeMillis()
-            )
-        )
+        db.gameDao()
+                .upsertReport(
+                        ReportCacheEntity(
+                                pgnHash = hash,
+                                reportJson = json.encodeToString(report),
+                                createdAtMillis = System.currentTimeMillis()
+                        )
+                )
         Log.d(TAG, "Saved analysis report for game")
     }
 
@@ -198,17 +225,18 @@ class GameRepository(
     fun headerKeyFor(provider: Provider, gh: GameHeader): String {
         val extId = gh.pgn?.let { extractExternalIdFromPgn(it) }
 
-        val raw = if (!extId.isNullOrBlank()) {
-            "${provider.name}|id:$extId"
-        } else {
-            buildString {
-                append(provider.name).append('|')
-                append(gh.date ?: "").append('|')
-                append(gh.white?.trim()?.lowercase() ?: "").append('|')
-                append(gh.black?.trim()?.lowercase() ?: "").append('|')
-                append(gh.result ?: "")
-            }
-        }
+        val raw =
+                if (!extId.isNullOrBlank()) {
+                    "${provider.name}|id:$extId"
+                } else {
+                    buildString {
+                        append(provider.name).append('|')
+                        append(gh.date ?: "").append('|')
+                        append(gh.white?.trim()?.lowercase() ?: "").append('|')
+                        append(gh.black?.trim()?.lowercase() ?: "").append('|')
+                        append(gh.result ?: "")
+                    }
+                }
 
         val key = sha256Hex(raw)
         Log.d(TAG, "Generated key: $key for ${gh.white} vs ${gh.black}")
@@ -223,13 +251,24 @@ class GameRepository(
 
     private fun extractExternalIdFromPgn(pgn: String): String? {
         Regex("""\[(?:Site|Link)\s+"[^"]*lichess\.org/([a-zA-Z0-9]{8})""")
-            .find(pgn)?.groupValues?.getOrNull(1)?.let { return it }
+                .find(pgn)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.let {
+                    return it
+                }
 
         Regex("""\[(?:Site|Link)\s+"https?://(?:www\.)?chess\.com/game/(?:live|daily)/(\d+)""")
-            .find(pgn)?.groupValues?.getOrNull(1)?.let { return it }
+                .find(pgn)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.let {
+                    return it
+                }
 
-        Regex("""\[GameId\s+"([^"]+)"]""")
-            .find(pgn)?.groupValues?.getOrNull(1)?.let { return it }
+        Regex("""\[GameId\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)?.let {
+            return it
+        }
 
         return null
     }
@@ -258,11 +297,12 @@ class GameRepository(
 
             // Fallback на переданный dateIso
             if (!dateIso.isNullOrBlank()) {
-                val formats = listOf(
-                    SimpleDateFormat("yyyy.MM.dd", Locale.US),
-                    SimpleDateFormat("yyyy-MM-dd", Locale.US),
-                    SimpleDateFormat("dd.MM.yyyy", Locale.US)
-                )
+                val formats =
+                        listOf(
+                                SimpleDateFormat("yyyy.MM.dd", Locale.US),
+                                SimpleDateFormat("yyyy-MM-dd", Locale.US),
+                                SimpleDateFormat("dd.MM.yyyy", Locale.US)
+                        )
                 for (format in formats) {
                     try {
                         return format.parse(dateIso)?.time ?: continue
@@ -279,4 +319,4 @@ class GameRepository(
 }
 
 fun Context.gameRepository(json: Json): GameRepository =
-    GameRepository(AppDatabase.getInstance(this), json)
+        GameRepository(AppDatabase.getInstance(this), json)

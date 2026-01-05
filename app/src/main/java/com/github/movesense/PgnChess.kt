@@ -41,10 +41,13 @@ object PgnChess {
             else                     -> null
         }
 
+        val whiteTitle = tags["WhiteTitle"]
+        val blackTitle = tags["BlackTitle"]
+
         return GameHeader(
             site = provider,
-            white = tags["White"],
-            black = tags["Black"],
+            white = if (whiteTitle != null) "$whiteTitle ${tags["White"]}" else tags["White"],
+            black = if (blackTitle != null) "$blackTitle ${tags["Black"]}" else tags["Black"],
             result = tags["Result"],
             date = tags["UTCDate"] ?: tags["Date"],
             eco = tags["ECO"],
@@ -101,10 +104,13 @@ object PgnChess {
         val ml: MoveList = game.halfMoves
 
         val tags = parseTags(p)
+        val whiteTitle = tags["WhiteTitle"]
+        val blackTitle = tags["BlackTitle"]
+
         val header = GameHeader(
             site = if ((tags["Site"] ?: "").contains("lichess", true)) Provider.LICHESS else null,
-            white = tags["White"],
-            black = tags["Black"],
+            white = if (whiteTitle != null) "$whiteTitle ${tags["White"]}" else tags["White"],
+            black = if (blackTitle != null) "$blackTitle ${tags["Black"]}" else tags["Black"],
             result = tags["Result"],
             date = tags["UTCDate"] ?: tags["Date"],
             eco = tags["ECO"],

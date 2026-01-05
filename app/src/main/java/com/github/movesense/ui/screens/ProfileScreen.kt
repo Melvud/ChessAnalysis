@@ -188,7 +188,9 @@ fun ProfileScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Premium Card Section
+            // Premium Card Section
             PremiumCard(
+                profile = profile,
                 isPremium = isPremiumUser,
                 onUpgradeClick = { showPaywall = true },
                 onManageClick = { showManageSubscriptionDialog = true },
@@ -558,6 +560,7 @@ fun ProfileScreen(
 
 @Composable
 private fun PremiumCard(
+    profile: UserProfile,
     isPremium: Boolean,
     onUpgradeClick: () -> Unit,
     onManageClick: () -> Unit,
@@ -651,7 +654,7 @@ private fun PremiumCard(
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                         )
-                        )
+
                         
                         if (isPremium && profile.premiumUntil != -1L && profile.premiumUntil > System.currentTimeMillis()) {
                              val date = java.text.SimpleDateFormat("dd MMM yyyy", java.util.Locale.getDefault())

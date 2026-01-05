@@ -13,7 +13,8 @@
 
     <!-- Login Screen -->
     <string name="welcome">Bienvenido</string>
-    <string name="login_title">Login en MoveSense</string>
+    <string name="welcome_title">Bienvenido</string>
+    <string name="login_title">Iniciar sesión en MoveSense</string>
     <string name="email">Email</string>
     <string name="password">Contraseña</string>
     <string name="login">Login</string>
@@ -199,7 +200,8 @@
     <string name="date_from">From</string>
     <string name="date_until">Until</string>
     <string name="load_date_range">Load Range</string>
-    <string name="load_all_games">Load All Games</string>
+    <string name="load_all_games">Cargar todas</string>
+    <string name="load_game">Cargar partida</string>
 
     <string name="victory_vs_titled">Victory vs. Titled Player</string>
 
@@ -325,4 +327,15 @@
     <string name="complete_registration">Complete Registration</string>
     <string name="complete_registration_desc">Please confirm your nickname and optional chess usernames to complete your account setup.</string>
     <string name="error_google_already_linked">This Google account is already linked to another user.</string>
+    <string name="switched_to_server_mode">Switch to server mode</string>
+    <string name="welcome_desc_no_accounts">Parece que aún no has conectado ninguna cuenta. Puedes subir un archivo PGN o ir a tu perfil para conectar Lichess/Chess.com.</string>
+    <string name="go_to_profile">Ir al Perfil</string>
+    <string name="upload_pgn">Subir PGN</string>
+    <string name="games">Partidas</string>
+    <string name="welcome_load_games_title">¡Bienvenido a MoveSense!</string>
+    <string name="welcome_load_games_desc">Has conectado tus cuentas. Por favor, selecciona un rango de fechas para cargar tus partidas.</string>
+    <string name="loading_progress_fmt">Cargadas %1$d / %2$d partidas</string>
+    <string name="loading_calculating_total">Calculando total de partidas...</string>
+    <string name="loading_progress_unknown">Cargadas %1$d partidas</string>
+    <string name="select_date_range">Seleccionar rango de fechas</string>
 </resources>

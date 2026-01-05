@@ -23,3 +23,11 @@ fun AppTheme(content: @Composable () -> Unit) {
         content = content
     )
 }
+
+@Composable
+fun DatePickerTheme(content: @Composable () -> Unit) {
+    MaterialTheme(
+        colorScheme = lightColorScheme(),
+        content = content
+    )
+}

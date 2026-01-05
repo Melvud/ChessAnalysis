@@ -1,10 +1,9 @@
 package com.github.movesense.ui.screens
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -28,141 +27,148 @@ private const val TAB_GAMES = "tab/games"
 private const val TAB_PROFILE = "tab/profile"
 
 /**
- * Внутренний граф для нижней навигации «Партии»/«Профиль».
- * Снаружи (в AppRoot) остаются маршруты отчётов.
+ * Внутренний граф для нижней навигации «Партии»/«Профиль». Снаружи (в AppRoot) остаются маршруты
+ * отчётов.
  */
 @Composable
 fun HomeWithBottomNav(
-    profile: UserProfile,
-    games: List<GameHeader>,
-    openingFens: Set<String>,
-    isFirstLoad: Boolean,
-    onFirstLoadComplete: () -> Unit,
-    onOpenReport: (FullReport) -> Unit,
-    onSaveProfile: (UserProfile) -> Unit,
-    onLogout: () -> Unit,
-    onAdminClick: () -> Unit
+        profile: UserProfile,
+        games: List<GameHeader>,
+        openingFens: Set<String>,
+        isFirstLoad: Boolean,
+        onFirstLoadComplete: () -> Unit,
+        onOpenReport: (FullReport) -> Unit,
+        onSaveProfile: (UserProfile) -> Unit,
+        onLogout: () -> Unit,
+        onAdminClick: () -> Unit,
+        shouldShowDateSelection: Boolean,
+        onDateSelectionShown: () -> Unit
 ) {
     val tabsNav = rememberNavController()
+    val navBackStackEntry by tabsNav.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
 
-    val items = listOf(
-        BottomItem(
-            route = TAB_GAMES,
-            labelRes = R.string.nav_games,
-            icon = { Icon(Icons.Default.List, contentDescription = stringResource(R.string.nav_games)) }
-        ),
-        BottomItem(
-            route = TAB_PROFILE,
-            labelRes = R.string.nav_profile,
-            icon = { Icon(Icons.Default.AccountCircle, contentDescription = stringResource(R.string.nav_profile)) }
-        )
-    )
+    val items =
+            listOf(
+                    BottomItem(
+                            TAB_GAMES,
+                            R.string.games,
+                            { Icon(Icons.Default.List, contentDescription = null) }
+                    ),
+                    BottomItem(
+                            TAB_PROFILE,
+                            R.string.profile,
+                            { Icon(Icons.Default.Person, contentDescription = null) }
+                    )
+            )
 
-    // Отслеживаем текущий маршрут для BackHandler
-    val backStack by tabsNav.currentBackStackEntryAsState()
-    val currentRoute = backStack?.destination?.route
-
-    // Обработка кнопки "Назад": возвращает на вкладку "Партии"
-    BackHandler(enabled = currentRoute != TAB_GAMES) {
-        if (currentRoute == TAB_PROFILE) {
-            tabsNav.navigate(TAB_GAMES) {
-                popUpTo(TAB_GAMES) { inclusive = false }
-                launchSingleTop = true
-            }
+    val onNavigateToProfile = {
+        tabsNav.navigate(TAB_PROFILE) {
+            popUpTo(TAB_GAMES) { inclusive = false }
+            launchSingleTop = true
         }
     }
 
     Scaffold(
-        bottomBar = {
-            NavigationBar {
-                items.forEach { item ->
-                    NavigationBarItem(
-                        selected = currentRoute == item.route,
-                        onClick = {
-                            if (currentRoute != item.route) {
-                                tabsNav.navigate(item.route) {
-                                    popUpTo(TAB_GAMES) { inclusive = false }
-                                    launchSingleTop = true
-                                }
-                            }
-                        },
-                        icon = item.icon,
-                        label = { Text(stringResource(item.labelRes)) }
-                    )
+            bottomBar = {
+                NavigationBar {
+                    items.forEach { item ->
+                        NavigationBarItem(
+                                selected = currentRoute == item.route,
+                                onClick = {
+                                    if (currentRoute != item.route) {
+                                        tabsNav.navigate(item.route) {
+                                            popUpTo(TAB_GAMES) { inclusive = false }
+                                            launchSingleTop = true
+                                        }
+                                    }
+                                },
+                                icon = item.icon,
+                                label = { Text(stringResource(item.labelRes)) }
+                        )
+                    }
                 }
             }
-        }
     ) { innerPadding ->
         NavHost(
-            navController = tabsNav,
-            startDestination = TAB_GAMES,
-            modifier = Modifier.padding(innerPadding)
+                navController = tabsNav,
+                startDestination = TAB_GAMES,
+                modifier = Modifier.padding(innerPadding)
         ) {
             addGamesTab(
-                profile = profile,
-                games = games,
-                openingFens = openingFens,
-                isFirstLoad = isFirstLoad,
-                onFirstLoadComplete = onFirstLoadComplete,
-                onOpenReport = onOpenReport
+                    profile = profile,
+                    games = games,
+                    openingFens = openingFens,
+                    isFirstLoad = isFirstLoad,
+                    onFirstLoadComplete = onFirstLoadComplete,
+                    onOpenReport = onOpenReport,
+                    shouldShowDateSelection = shouldShowDateSelection,
+                    onDateSelectionShown = onDateSelectionShown,
+                    onNavigateToProfile = onNavigateToProfile
             )
             addProfileTab(
-                profile = profile,
-                onSave = onSaveProfile,
-                onLogout = onLogout,
-                onBack = {
-                    // При нажатии "Назад" в профиле возвращаемся на партии
-                    tabsNav.navigate(TAB_GAMES) {
-                        popUpTo(TAB_GAMES) { inclusive = false }
-                        launchSingleTop = true
-                    }
-                },
-                onAdminClick = onAdminClick
+                    profile = profile,
+                    onSave = onSaveProfile,
+                    onLogout = onLogout,
+                    onBack = {
+                        // При нажатии "Назад" в профиле возвращаемся на партии
+                        tabsNav.navigate(TAB_GAMES) {
+                            popUpTo(TAB_GAMES) { inclusive = false }
+                            launchSingleTop = true
+                        }
+                    },
+                    onAdminClick = onAdminClick
             )
         }
     }
 }
 
 private data class BottomItem(
-    val route: String,
-    val labelRes: Int,
-    val icon: @Composable () -> Unit
+        val route: String,
+        val labelRes: Int,
+        val icon: @Composable () -> Unit
 )
 
 private fun NavGraphBuilder.addGamesTab(
-    profile: UserProfile,
-    games: List<GameHeader>,
-    openingFens: Set<String>,
-    isFirstLoad: Boolean,
-    onFirstLoadComplete: () -> Unit,
-    onOpenReport: (FullReport) -> Unit
+        profile: UserProfile,
+        games: List<GameHeader>,
+        openingFens: Set<String>,
+        isFirstLoad: Boolean,
+        onFirstLoadComplete: () -> Unit,
+        onOpenReport: (FullReport) -> Unit,
+        shouldShowDateSelection: Boolean,
+        onDateSelectionShown: () -> Unit,
+        onNavigateToProfile: () -> Unit
 ) {
     composable(TAB_GAMES) {
         GamesListScreen(
-            profile = profile,
-            games = games,
-            openingFens = openingFens,
-            isFirstLoad = isFirstLoad,
-            onFirstLoadComplete = onFirstLoadComplete,
-            onOpenReport = onOpenReport
+                profile = profile,
+                games = games,
+                openingFens = openingFens,
+                isFirstLoad = isFirstLoad,
+                onFirstLoadComplete = onFirstLoadComplete,
+                onOpenReport = onOpenReport,
+                shouldShowDateSelection = shouldShowDateSelection,
+                onDateSelectionShown = onDateSelectionShown,
+                onNavigateToProfile = onNavigateToProfile
         )
     }
 }
 
 private fun NavGraphBuilder.addProfileTab(
-    profile: UserProfile,
-    onSave: (UserProfile) -> Unit,
-    onLogout: () -> Unit,
-    onBack: () -> Unit,
-    onAdminClick: () -> Unit
+        profile: UserProfile,
+        onSave: (UserProfile) -> Unit,
+        onLogout: () -> Unit,
+        onBack: () -> Unit,
+        onAdminClick: () -> Unit
 ) {
     composable(TAB_PROFILE) {
         ProfileScreen(
-            profile = profile,
-            onSave = onSave,
-            onLogout = onLogout,
-            onBack = onBack,
-            onAdminClick = onAdminClick
+                profile = profile,
+                onSave = onSave,
+                onLogout = onLogout,
+                onBack = onBack,
+                onAdminClick = onAdminClick
         )
     }
 }

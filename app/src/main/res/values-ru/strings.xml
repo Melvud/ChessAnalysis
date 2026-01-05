@@ -13,6 +13,12 @@
 
     <!-- Login Screen -->
     <string name="welcome">Добро пожаловать</string>
+    <string name="welcome_title">Добро пожаловать</string>
+    <string name="welcome_desc_no_accounts">Похоже, вы еще не подключили аккаунты. Вы можете загрузить PGN файл или перейти в профиль для подключения Lichess/Chess.com.</string>
+    <string name="go_to_profile">В профиль</string>
+    <string name="upload_pgn">Загрузить PGN</string>
+    <string name="games">Партии</string>
+    <string name="profile">Профиль</string>
     <string name="login_title">Вход в MoveSense</string>
     <string name="email">Email</string>
     <string name="password">Пароль</string>
@@ -24,7 +30,6 @@
     <string name="register_error">Ошибка регистрации: %s</string>
 
     <!-- Profile Screen -->
-    <string name="profile">Профиль</string>
     <string name="nickname">Никнейм</string>
     <string name="lichess_username">Lichess логин</string>
     <string name="chesscom_username">Chess.com логин</string>
@@ -199,6 +204,7 @@
     <string name="date_until">До</string>
     <string name="load_date_range">Загрузить диапазон</string>
     <string name="load_all_games">Загрузить все</string>
+    <string name="load_game">Загрузить партию</string>
 
     <string name="victory_vs_titled">Победа над титулованным игроком</string>
 
@@ -337,4 +343,11 @@
     <string name="complete_registration">Завершение регистрации</string>
     <string name="complete_registration_desc">Пожалуйста, подтвердите ваш никнейм и укажите логины шахматных сайтов для завершения настройки аккаунта.</string>
     <string name="error_google_already_linked">Этот Google аккаунт уже связан с другим пользователем.</string>
+    <string name="switched_to_server_mode">Переключить на серверный режим</string>
+    <string name="welcome_load_games_title">Добро пожаловать в MoveSense!</string>
+    <string name="welcome_load_games_desc">Вы подключили аккаунты. Пожалуйста, выберите диапазон дат для загрузки ваших партий.</string>
+    <string name="loading_progress_fmt">Загружено %1$d / %2$d партий</string>
+    <string name="loading_calculating_total">Подсчет общего количества партий...</string>
+    <string name="loading_progress_unknown">Загружено %1$d партий</string>
+    <string name="select_date_range">Выберите диапазон дат</string>
 </resources>
