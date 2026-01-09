@@ -64,33 +64,36 @@ fun WelcomeScreen(
                                 userRef.get().addOnSuccessListener { document ->
                                     if (document.exists()) {
                                         // User exists, load profile
+                                        val currentLocalLang = LocaleManager.getLocale(context).code
+                                        val profileLang = document.getString("language") ?: "ru"
+                                        
+                                        // If local language differs from profile, update profile to match local
+                                        if (currentLocalLang != profileLang) {
+                                            userRef.update("language", currentLocalLang)
+                                        }
+
                                         val profile = UserProfile(
                                             email = user.email ?: "",
-                                            nickname = document.getString("nickname") ?: "",
                                             lichessUsername = document.getString("lichessUsername") ?: "",
                                             chessUsername = document.getString("chessUsername") ?: "",
-                                            language = document.getString("language") ?: "ru"
+                                            language = currentLocalLang // Use local language
                                         )
-                                        LocaleManager.setLocale(
-                                            context,
-                                            LocaleManager.Language.fromCode(profile.language)
-                                        )
+                                        // Do NOT call setLocale here, as it restarts activity and breaks login
                                         onLoginSuccess(profile)
                                     } else {
                                         // New user, create profile
+                                        val currentLocalLang = LocaleManager.getLocale(context).code
                                         val newProfile = hashMapOf(
-                                            "nickname" to (user.displayName ?: "User"),
                                             "lichessUsername" to "",
                                             "chessUsername" to "",
-                                            "language" to "ru"
+                                            "language" to currentLocalLang // Use local language
                                         )
                                         userRef.set(newProfile).addOnSuccessListener {
                                             val profile = UserProfile(
                                                 email = user.email ?: "",
-                                                nickname = user.displayName ?: "User",
                                                 lichessUsername = "",
                                                 chessUsername = "",
-                                                language = "ru"
+                                                language = currentLocalLang // Use local language
                                             )
                                             onLoginSuccess(profile)
                                         }.addOnFailureListener { e ->
@@ -126,6 +129,51 @@ fun WelcomeScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // Language Selection
+            val currentLanguage = LocaleManager.getLocale(context)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 32.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val languages = listOf(
+                    Triple(LocaleManager.Language.ENGLISH, "🇺🇸", "English"),
+                    Triple(LocaleManager.Language.RUSSIAN, "🇷🇺", "Русский"),
+                    Triple(LocaleManager.Language.SPANISH, "🇪🇸", "Español")
+                )
+
+                languages.forEach { (lang, flag, name) ->
+                    val isSelected = currentLanguage == lang
+                    Surface(
+                        onClick = { LocaleManager.setLocale(context, lang) },
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (isSelected) primaryColor else MaterialTheme.colorScheme.surfaceVariant,
+                        border = if (isSelected) null else BorderStroke(1.dp, Color.Gray.copy(alpha = 0.3f)),
+                        modifier = Modifier.height(70.dp).width(90.dp)
+                    ) {
+                        Column(
+                            verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(8.dp)
+                        ) {
+                            Text(
+                                text = flag,
+                                fontSize = 24.sp
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = name,
+                                fontSize = 12.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) Color.White else textColor
+                            )
+                        }
+                    }
+                }
+            }
+
             // Logo/Header
             Text(
                 text = stringResource(R.string.app_name),

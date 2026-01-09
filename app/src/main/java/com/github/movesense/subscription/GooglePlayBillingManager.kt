@@ -58,6 +58,7 @@ object GooglePlayBillingManager {
                                 Log.e(TAG, "Purchase error: ${billingResult.debugMessage}")
                             }
                         }
+                        .enablePendingPurchases()
                         .build()
 
         startConnection(onReady)
@@ -277,6 +278,24 @@ object GooglePlayBillingManager {
                                     it.purchaseState == Purchase.PurchaseState.PURCHASED
                         }
                 continuation.resume(true)
+            } else {
+                continuation.resume(false)
+            }
+        }
+                ?: continuation.resume(false)
+    }
+
+    suspend fun hasPurchaseHistory(): Boolean = suspendCancellableCoroutine { continuation ->
+        val params =
+                QueryPurchaseHistoryParams.newBuilder()
+                        .setProductType(BillingClient.ProductType.SUBS)
+                        .build()
+
+        billingClient?.queryPurchaseHistoryAsync(params) { billingResult, purchasesList ->
+            if (billingResult.responseCode == BillingResponseCode.OK) {
+                val hasHistory =
+                        purchasesList?.any { it.products.contains(PREMIUM_PRODUCT_ID) } == true
+                continuation.resume(hasHistory)
             } else {
                 continuation.resume(false)
             }

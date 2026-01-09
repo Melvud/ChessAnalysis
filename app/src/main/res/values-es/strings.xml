@@ -26,7 +26,6 @@
 
     <!-- Profile Screen -->
     <string name="profile">Perfil</string>
-    <string name="nickname">Nickname</string>
     <string name="lichess_username">Usuario de Lichess</string>
     <string name="chesscom_username">Usuario de Chess.com</string>
     <string name="language">Idioma</string>
@@ -150,7 +149,7 @@
     <string name="reset_error">Error al enviar: %s</string>
     <string name="verification_sent">Verificación enviada a %s</string>
     <string name="verify_email">Verifica tu email</string>
-    <string name="default_web_client_id">YOUR_WEB_CLIENT_ID</string>
+
     <string name="sign_in_google">Iniciar sesión con Google</string>
 
     <!-- ProfileScreen -->
@@ -201,6 +200,9 @@
     <string name="date_until">Until</string>
     <string name="load_date_range">Load Range</string>
     <string name="load_all_games">Cargar todas</string>
+    <string name="load_all_warning_title">¿Cargar todas las partidas?</string>
+    <string name="load_all_warning_message">Cargar todas las partidas puede llevar mucho tiempo si tienes un historial grande. ¿Estás seguro de que quieres continuar?</string>
+    <string name="load_all_confirm">Cargar todas</string>
     <string name="load_game">Cargar partida</string>
 
     <string name="victory_vs_titled">Victory vs. Titled Player</string>
@@ -248,7 +250,7 @@
         <!-- Banner -->
         <string name="faster_analysis_with_server">Get 5x faster analysis with server mode</string>
         <string name="upgrade">Upgrade</string>
-        <string name="upgrade_for_faster_analysis">⚡ Upgrade for faster analysis</string>
+        <string name="upgrade_for_faster_analysis">⚡ Mejora para análisis casi instantáneo (2-3 seg)</string>
 
         <!-- Subscription Management -->
         <string name="subscription_status">Subscription Status</string>
@@ -338,4 +340,20 @@
     <string name="loading_calculating_total">Calculando total de partidas...</string>
     <string name="loading_progress_unknown">Cargadas %1$d partidas</string>
     <string name="select_date_range">Seleccionar rango de fechas</string>
+
+    <!-- Rate Us Dialog -->
+    <string name="rate_us_title">¿Te gusta MoveSense?</string>
+    <string name="rate_us_message">Si te gusta usar nuestra aplicación, por favor tómate un momento para calificarla. No tomará más de un minuto. ¡Gracias por tu apoyo!</string>
+    <string name="rate_now">Calificar ahora</string>
+    <string name="maybe_later">Quizás más tarde</string>
+
+    <!-- Retention Notifications -->
+    <string name="notif_title_1">¿Jugaste ajedrez hoy?</string>
+    <string name="notif_msg_1">¡No olvides analizar tus partidas recientes para mejorar!</string>
+    <string name="notif_title_2">¡Hora de mejorar!</string>
+    <string name="notif_msg_2">Analiza tus errores y aprende de ellos.</string>
+    <string name="notif_title_3">Revisa tu rating</string>
+    <string name="notif_msg_3">Mira cómo mejora tu rendimiento.</string>
+    <string name="notif_title_4">¿Resolver un problema?</string>
+    <string name="notif_msg_4">Mantén tu mente ágil con análisis de ajedrez.</string>
 </resources>

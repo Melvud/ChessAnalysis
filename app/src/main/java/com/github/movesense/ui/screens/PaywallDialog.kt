@@ -36,7 +36,10 @@ data class SubscriptionOfferUiModel(
         val offerToken: String,
         val price: String,
         val periodCode: String, // "P1Y" или "P1M"
-        val priceMicros: Long
+        val priceMicros: Long,
+        val currencyCode: String,
+        val originalPrice: String? = null,
+        val originalPriceMicros: Long? = null
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -72,14 +75,21 @@ fun PaywallDialog(onDismiss: () -> Unit, onPurchaseSuccess: () -> Unit) {
                                         offerToken = offer.offerToken,
                                         price = phase.formattedPrice,
                                         periodCode = phase.billingPeriod,
-                                        priceMicros = phase.priceAmountMicros
+                                        priceMicros = phase.priceAmountMicros,
+                                        currencyCode = phase.priceCurrencyCode
                                 )
 
                         // P1Y = Год, P1M = Месяц (ISO 8601)
                         if (phase.billingPeriod.contains("Y")) {
-                            yearlyOffer = model
+                            // Keep the lowest price offer (best value)
+                            if (yearlyOffer == null || model.priceMicros < yearlyOffer!!.priceMicros) {
+                                yearlyOffer = model
+                            }
                         } else if (phase.billingPeriod.contains("M")) {
-                            monthlyOffer = model
+                            // Keep the lowest price offer (e.g. promo)
+                            if (monthlyOffer == null || model.priceMicros < monthlyOffer!!.priceMicros) {
+                                monthlyOffer = model
+                            }
                         }
                     }
                 }
@@ -205,6 +215,14 @@ fun PaywallDialog(onDismiss: () -> Unit, onPurchaseSuccess: () -> Unit) {
                             yearlyOffer?.let { offer ->
                                 val isSelected = selectedOfferToken == offer.offerToken
                                 val monthlyPriceCalc = offer.priceMicros / 12 / 1000000.0
+                                val currencySymbol =
+                                        try {
+                                            java.util.Currency.getInstance(offer.currencyCode)
+                                                    .symbol
+                                        } catch (e: Exception) {
+                                            offer.currencyCode
+                                        }
+
                                 // Грубый подсчет скидки для UI
                                 val savings =
                                         if (monthlyOffer != null) {
@@ -218,10 +236,10 @@ fun PaywallDialog(onDismiss: () -> Unit, onPurchaseSuccess: () -> Unit) {
                                         } else "50%"
 
                                 PlanCard(
-                                        title = "Annual",
+                                        title = "Yearly",
                                         price = offer.price,
-                                        subtitle =
-                                                "Just ~${String.format("%.2f", monthlyPriceCalc)} / month",
+                                        originalPrice = offer.originalPrice,
+                                        subtitle = "Best value",
                                         badge = "SAVE $savings",
                                         isSelected = isSelected,
                                         isBestValue = true,
@@ -237,8 +255,9 @@ fun PaywallDialog(onDismiss: () -> Unit, onPurchaseSuccess: () -> Unit) {
                                 PlanCard(
                                         title = "Monthly",
                                         price = offer.price,
+                                        originalPrice = offer.originalPrice,
                                         subtitle = "Billed every month",
-                                        badge = null,
+                                        badge = "50% OFF 1st Mo", // Added discount badge
                                         isSelected = isSelected,
                                         isBestValue = false,
                                         onClick = { selectedOfferToken = offer.offerToken }
@@ -377,6 +396,7 @@ fun PaywallDialog(onDismiss: () -> Unit, onPurchaseSuccess: () -> Unit) {
 fun PlanCard(
         title: String,
         price: String,
+        originalPrice: String? = null,
         subtitle: String,
         badge: String?,
         isSelected: Boolean,
@@ -428,6 +448,15 @@ fun PlanCard(
             }
 
             Column(horizontalAlignment = Alignment.End) {
+                if (originalPrice != null) {
+                    Text(
+                        text = originalPrice,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                    )
+                }
                 Text(
                         text = price,
                         style = MaterialTheme.typography.titleMedium,

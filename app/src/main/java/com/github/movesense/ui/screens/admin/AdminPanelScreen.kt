@@ -55,7 +55,7 @@ fun AdminPanelScreen(
             users = snapshot.documents.mapNotNull { doc ->
                 val profile = UserProfile(
                     email = doc.getString("email") ?: "",
-                    nickname = doc.getString("nickname") ?: "",
+
                     lichessUsername = doc.getString("lichessUsername") ?: "",
                     chessUsername = doc.getString("chessUsername") ?: "",
                     language = doc.getString("language") ?: "ru",
@@ -84,8 +84,8 @@ fun AdminPanelScreen(
                     db.collection("users").limit(50).get().await()
                 } else {
                     db.collection("users")
-                        .whereGreaterThanOrEqualTo("nickname", query)
-                        .whereLessThan("nickname", query + "\uf8ff")
+                        .whereGreaterThanOrEqualTo("email", query)
+                        .whereLessThan("email", query + "\uf8ff")
                         .limit(50)
                         .get()
                         .await()
@@ -94,7 +94,7 @@ fun AdminPanelScreen(
                 users = snapshot.documents.mapNotNull { doc ->
                     val profile = UserProfile(
                         email = doc.getString("email") ?: "",
-                        nickname = doc.getString("nickname") ?: "",
+
                         lichessUsername = doc.getString("lichessUsername") ?: "",
                         chessUsername = doc.getString("chessUsername") ?: "",
                         language = doc.getString("language") ?: "ru",
@@ -143,7 +143,7 @@ fun AdminPanelScreen(
                 // Update local list
                 users = users.map { if (it.id == user.id) it.copy(profile = it.profile.copy(isPremium = true)) else it }
                 selectedUser = null
-                Toast.makeText(context, context.getString(R.string.granted_subscription, durationLabel, user.profile.nickname), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.granted_subscription, durationLabel, user.profile.email), Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 Toast.makeText(context, context.getString(R.string.subscription_error, e.message), Toast.LENGTH_SHORT).show()
             }
@@ -162,7 +162,7 @@ fun AdminPanelScreen(
                 
                 users = users.map { if (it.id == user.id) it.copy(profile = it.profile.copy(isPremium = false)) else it }
                 selectedUser = null
-                Toast.makeText(context, context.getString(R.string.cancelled_subscription, user.profile.nickname), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.cancelled_subscription, user.profile.email), Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 Toast.makeText(context, context.getString(R.string.subscription_error, e.message), Toast.LENGTH_SHORT).show()
             }
@@ -202,7 +202,7 @@ fun AdminPanelScreen(
                 }
 
                 if (winnerDoc != null) {
-                    val nickname = winnerDoc.getString("nickname") ?: "User"
+                    val email = winnerDoc.getString("email") ?: "User"
                     
                     // Grant 1 month premium
                     val updates = mapOf(
@@ -213,7 +213,7 @@ fun AdminPanelScreen(
                     
                     db.collection("users").document(winnerDoc.id).update(updates).await()
                     
-                    Toast.makeText(context, context.getString(R.string.gift_sent, nickname), Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, context.getString(R.string.gift_sent, email), Toast.LENGTH_LONG).show()
                     
                     // Refresh list if needed
                     performSearch(searchQuery)

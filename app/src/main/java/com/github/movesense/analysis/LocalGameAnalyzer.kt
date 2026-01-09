@@ -230,23 +230,34 @@ class LocalGameAnalyzer(
         val whiteToPlayAfter = afterFen.split(" ").getOrNull(1) == "w"
         val topLine = posAfter.lines.firstOrNull()
 
-        // ✅ Нормализация оценок с учетом мата
-        val cpAfter = if (whiteToPlayAfter) topLine?.cp else topLine?.cp?.let { -it }
-        val mateAfter = topLine?.mate?.let { m ->
-            when {
-                m == 0 && whiteToPlayAfter -> -1  // Белые заматованы
-                m == 0 && !whiteToPlayAfter -> 1  // Чёрные заматованы
-                !whiteToPlayAfter -> -m
-                else -> m
-            }
-        }
+        Log.d(TAG, "🔍 analyzeMoveRealtimeDetailed: afterFen=$afterFen")
+        Log.d(TAG, "🔍 analyzeMoveRealtimeDetailed: whiteToPlayAfter=$whiteToPlayAfter")
+        Log.d(TAG, "🔍 analyzeMoveRealtimeDetailed: RAW cp=${topLine?.cp}, mate=${topLine?.mate}")
+
+        // Используем ту же логику нормализации, что и в normalizeToWhitePOV
+        val normalizedPos = normalizeToWhitePOV(afterFen, posAfter, 0, false)
+        val normalizedTopLine = normalizedPos.lines.firstOrNull()
+
+        Log.d(TAG, "🔍 analyzeMoveRealtimeDetailed: NORMALIZED cp=${normalizedTopLine?.cp}, mate=${normalizedTopLine?.mate}")
 
         val evalAfter = when {
-            mateAfter != null -> {
-                if (mateAfter > 0) 100f else -100f
+            normalizedTopLine?.mate != null -> {
+                if (normalizedTopLine.mate!! > 0) 100f else -100f
             }
-            cpAfter != null -> cpAfter / 100f
+            normalizedTopLine?.cp != null -> normalizedTopLine.cp!! / 100f
             else -> 0f
+        }
+
+        // Конвертируем LineEval обратно в LineDTO (так как MoveRealtimeResult требует LineDTO)
+        // Это немного неэффективно, но гарантирует консистентность
+        val linesAfter = normalizedPos.lines.map { line ->
+            EngineClient.LineDTO(
+                pv = line.pv,
+                cp = line.cp,
+                mate = line.mate,
+                depth = line.depth,
+                multiPv = line.multiPv
+            )
         }
 
         val classification = classifyMoveUsingMoveClassifier(beforeFen, afterFen, posBefore, posAfter, uciMove)
@@ -255,7 +266,7 @@ class LocalGameAnalyzer(
             evalAfter = evalAfter,
             moveClass = classification,
             bestMove = posBefore.bestMove,
-            lines = posAfter.lines
+            lines = linesAfter
         )
     }
 

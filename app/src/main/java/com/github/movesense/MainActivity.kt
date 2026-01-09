@@ -8,9 +8,24 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import com.github.movesense.ui.AppRoot
+import com.github.movesense.ui.AppRoot
 import com.github.movesense.util.LocaleManager
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.ExistingPeriodicWorkPolicy
+import com.github.movesense.worker.RetentionWorker
+import java.util.concurrent.TimeUnit
+import android.os.Build
+import androidx.activity.result.contract.ActivityResultContracts
+import android.Manifest
 
 class MainActivity : ComponentActivity() {
+
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        // Permission result handled here if needed
+    }
 
     /**
      * ✅ Применяем локаль ДО создания контекста Activity
@@ -35,7 +50,28 @@ class MainActivity : ComponentActivity() {
         // Запускаем UI
         setContent {
             AppRoot()
+            AppRoot()
         }
+
+        // Schedule Retention Worker
+        scheduleRetentionWorker()
+
+        // Request Notification Permission (Android 13+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private fun scheduleRetentionWorker() {
+        val workRequest = PeriodicWorkRequestBuilder<RetentionWorker>(24, TimeUnit.HOURS)
+            .setInitialDelay(24, TimeUnit.HOURS) // Start first check after 24h
+            .build()
+
+        WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
+            RetentionWorker.WORK_NAME,
+            ExistingPeriodicWorkPolicy.UPDATE, // UPDATE resets the timer if already scheduled!
+            workRequest
+        )
     }
 
     /**

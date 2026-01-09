@@ -25,7 +25,7 @@
 
 <!-- Profile Screen -->
 <string name="profile">Profile</string>
-<string name="nickname">Nickname</string>
+
 <string name="lichess_username">Lichess username</string>
 <string name="chesscom_username">Chess.com username</string>
 <string name="language">Language</string>
@@ -147,7 +147,7 @@
     <string name="reset_error">Error sending reset link: %s</string>
     <string name="verification_sent">Verification email sent to %s</string>
     <string name="verify_email">Please verify your email</string>
-    <string name="default_web_client_id">YOUR_WEB_CLIENT_ID</string>
+
     <string name="sign_in_google">Sign in with Google</string>
     <string name="reset_email_sent">Reset email sent</string>
     <string name="error_sending_reset">Error sending reset email: %s</string>
@@ -200,6 +200,9 @@
     <string name="date_until">Until</string>
     <string name="load_date_range">Load Range</string>
     <string name="load_all_games">Load All Games</string>
+    <string name="load_all_warning_title">Load All Games?</string>
+    <string name="load_all_warning_message">Loading all games may take a significant amount of time if you have a large history. Are you sure you want to proceed?</string>
+    <string name="load_all_confirm">Load All</string>
     <string name="load_game">Load Game</string>
 
     <string name="victory_vs_titled">Victory vs. Titled Player</string>
@@ -247,7 +250,7 @@
         <!-- Banner -->
         <string name="faster_analysis_with_server">Get 5x faster analysis with server mode</string>
         <string name="upgrade">Upgrade</string>
-        <string name="upgrade_for_faster_analysis">⚡ Upgrade for faster analysis</string>
+        <string name="upgrade_for_faster_analysis">⚡ Upgrade for almost instant analysis (2-3 sec)</string>
 
         <!-- Subscription Management -->
         <string name="subscription_status">Subscription Status</string>
@@ -303,7 +306,7 @@
     <!-- Admin Panel -->
     <string name="admin_panel_button">Admin Panel</string>
     <string name="admin_panel_title">Admin Panel</string>
-    <string name="search_hint">Search by nickname...</string>
+    <string name="search_hint">Search game...</string>
     <string name="random_gift">Random Gift</string>
     <string name="user_list_loading_error">Error loading users: %s</string>
     <string name="search_error">Search error: %s</string>
@@ -325,7 +328,7 @@
 
     <!-- Google Registration Dialog -->
     <string name="complete_registration">Complete Registration</string>
-    <string name="complete_registration_desc">Please confirm your nickname and optional chess usernames to complete your account setup.</string>
+    <string name="complete_registration_desc">Please confirm your optional chess usernames to complete your account setup.</string>
     <string name="error_google_already_linked">This Google account is already linked to another user.</string>
     <string name="switched_to_server_mode">Switch to server mode</string>
     <string name="welcome_title">Welcome</string>
@@ -339,4 +342,20 @@
     <string name="loading_calculating_total">Calculating total games...</string>
     <string name="loading_progress_unknown">Loaded %1$d games</string>
     <string name="select_date_range">Select Date Range</string>
+
+    <!-- Rate Us Dialog -->
+    <string name="rate_us_title">Enjoying MoveSense?</string>
+    <string name="rate_us_message">If you like using our app, please take a moment to rate it. It won\'t take more than a minute. Thanks for your support!</string>
+    <string name="rate_now">Rate Now</string>
+    <string name="maybe_later">Maybe Later</string>
+
+    <!-- Retention Notifications -->
+    <string name="notif_title_1">Played chess today?</string>
+    <string name="notif_msg_1">Don\'t forget to analyze your recent games to improve!</string>
+    <string name="notif_title_2">Time to improve!</string>
+    <string name="notif_msg_2">Analyze your mistakes and learn from them.</string>
+    <string name="notif_title_3">Check your rating</string>
+    <string name="notif_msg_3">See how your performance is improving.</string>
+    <string name="notif_title_4">Solve a puzzle?</string>
+    <string name="notif_msg_4">Keep your mind sharp with some chess analysis.</string>
 </resources>

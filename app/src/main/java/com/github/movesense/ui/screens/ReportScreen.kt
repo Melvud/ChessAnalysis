@@ -35,6 +35,9 @@ import com.github.movesense.MoveClass
 import com.github.movesense.net.AvatarRepository
 import kotlin.collections.get
 import com.github.movesense.R
+import com.github.movesense.ui.components.RateUsDialog
+import android.content.Intent
+import android.net.Uri
 
 private val ScreenBg = Color(0xFF121212)
 private val CardBg   = Color(0xFF2B2A27)
@@ -48,6 +51,45 @@ fun ReportScreen(
     onBack: () -> Unit,
     onOpenBoard: (() -> Unit)? = null
 ) {
+    val context = LocalContext.current
+    var showRateUsDialog by remember { mutableStateOf(false) }
+
+    // Logic for Rate Us Dialog
+    LaunchedEffect(Unit) {
+        val prefs = context.getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE)
+        val isRated = prefs.getBoolean("is_rated", false)
+        
+        if (!isRated) {
+            val count = prefs.getInt("analysis_count", 0) + 1
+            prefs.edit().putInt("analysis_count", count).apply()
+            
+            if (count == 5) {
+                showRateUsDialog = true
+            }
+        }
+    }
+
+    if (showRateUsDialog) {
+        RateUsDialog(
+            onDismiss = { showRateUsDialog = false },
+            onRateNow = {
+                showRateUsDialog = false
+                val prefs = context.getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE)
+                prefs.edit().putBoolean("is_rated", true).apply()
+                
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=${context.packageName}"))
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                } catch (e: Exception) {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=${context.packageName}"))
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(

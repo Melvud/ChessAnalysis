@@ -63,7 +63,7 @@ fun ProfileScreen(
     val scope = rememberCoroutineScope()
 
     var email by remember { mutableStateOf(profile.email) }
-    var nickname by remember { mutableStateOf(profile.nickname) }
+
     var lichessName by remember { mutableStateOf(profile.lichessUsername) }
     var chessName by remember { mutableStateOf(profile.chessUsername) }
     var selectedLanguage by remember {
@@ -208,12 +208,12 @@ fun ProfileScreen(
             // Profile Information Section
             ProfileInfoSection(
                 email = email,
-                nickname = nickname,
+
                 lichessName = lichessName,
                 chessName = chessName,
                 selectedLanguage = selectedLanguage,
                 onEmailChange = { email = it },
-                onNicknameChange = { nickname = it },
+
                 onLichessNameChange = { lichessName = it },
                 onChessNameChange = { chessName = it },
                 onLanguageClick = { showLanguageDialog = true },
@@ -295,7 +295,7 @@ fun ProfileScreen(
 
                         try {
                             // Validate usernames
-                            if (email.isBlank() || nickname.isBlank()) {
+                            if (email.isBlank()) {
                                 errorMessage = context.getString(R.string.empty_fields_error)
                                 isSaving = false
                                 return@launch
@@ -327,7 +327,7 @@ fun ProfileScreen(
                                     .update(
                                         mapOf(
                                             "email" to email,
-                                            "nickname" to nickname,
+
                                             "lichessUsername" to lichessName,
                                             "chessUsername" to chessName,
                                             "language" to selectedLanguage.code
@@ -337,7 +337,7 @@ fun ProfileScreen(
 
                                 val updatedProfile = profile.copy(
                                     email = email,
-                                    nickname = nickname,
+
                                     lichessUsername = lichessName,
                                     chessUsername = chessName,
                                     language = selectedLanguage.code
@@ -904,12 +904,12 @@ private fun EngineModeOption(
 @Composable
 private fun ProfileInfoSection(
     email: String,
-    nickname: String,
+
     lichessName: String,
     chessName: String,
     selectedLanguage: LocaleManager.Language,
     onEmailChange: (String) -> Unit,
-    onNicknameChange: (String) -> Unit,
+
     onLichessNameChange: (String) -> Unit,
     onChessNameChange: (String) -> Unit,
     onLanguageClick: () -> Unit,
@@ -957,15 +957,7 @@ private fun ProfileInfoSection(
                 shape = RoundedCornerShape(12.dp)
             )
 
-            OutlinedTextField(
-                value = nickname,
-                onValueChange = onNicknameChange,
-                label = { Text(stringResource(R.string.nickname)) },
-                leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !isSaving,
-                shape = RoundedCornerShape(12.dp)
-            )
+
 
             OutlinedTextField(
                 value = lichessName,

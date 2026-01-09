@@ -25,8 +25,16 @@ class App : Application() {
         val isFirstLaunch = prefs.getBoolean("first_launch", true)
 
         if (isFirstLaunch) {
+            // Determine default language based on system locale
+            val systemLocale = Locale.getDefault().language
+            val defaultLanguage = when (systemLocale) {
+                "ru" -> LocaleManager.Language.RUSSIAN.code
+                "es" -> LocaleManager.Language.SPANISH.code
+                else -> LocaleManager.Language.ENGLISH.code
+            }
+
             prefs.edit()
-                .putString("selected_language", LocaleManager.Language.ENGLISH.code)
+                .putString("selected_language", defaultLanguage)
                 .putBoolean("first_launch", false)
                 .apply()
         }

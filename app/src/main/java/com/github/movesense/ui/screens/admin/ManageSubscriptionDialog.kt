@@ -41,7 +41,7 @@ fun ManageSubscriptionDialog(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = stringResource(R.string.user_label, user.nickname),
+                    text = stringResource(R.string.user_label, user.email),
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Spacer(modifier = Modifier.height(24.dp))

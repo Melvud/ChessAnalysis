@@ -55,15 +55,11 @@ fun AdminUserItem(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = user.nickname.ifBlank { "No Nickname" },
+                    text = user.email.ifBlank { "No Email" },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
-                Text(
-                    text = user.email,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+
             }
 
             if (user.isPremium) {

@@ -26,7 +26,8 @@ import com.github.movesense.R
 fun PremiumBanner(
     onUpgradeClick: () -> Unit,
     onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isPromo: Boolean = false
 ) {
     var isVisible by remember { mutableStateOf(true) }
 
@@ -49,12 +50,22 @@ fun PremiumBanner(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(
-                        Brush.horizontalGradient(
-                            colors = listOf(
-                                Color(0xFFFFD700),
-                                Color(0xFFFFE55C)
+                        if (isPromo) {
+                            Brush.horizontalGradient(
+                                colors = listOf(
+                                    Color(0xFFFFD700), // Gold
+                                    Color(0xFFFFC107), // Amber
+                                    Color(0xFFFF9800)  // Orange
+                                )
                             )
-                        )
+                        } else {
+                            Brush.horizontalGradient(
+                                colors = listOf(
+                                    Color(0xFFFFD700),
+                                    Color(0xFFFFE55C)
+                                )
+                            )
+                        }
                     )
             ) {
                 IconButton(
@@ -103,17 +114,18 @@ fun PremiumBanner(
                         modifier = Modifier.weight(1f)
                     ) {
                         Text(
-                            text = stringResource(R.string.upgrade_to_premium),
+                            text = if (isPromo) "50% OFF First Month!" else stringResource(R.string.upgrade_to_premium),
                             style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Bold,
+                                fontWeight = if (isPromo) FontWeight.ExtraBold else FontWeight.Bold,
                                 color = Color.Black
                             ),
-                            fontSize = 16.sp
+                            fontSize = if (isPromo) 18.sp else 16.sp
                         )
                         Text(
                             text = stringResource(R.string.faster_analysis_with_server),
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.Black.copy(alpha = 0.7f),
+                            color = Color.Black.copy(alpha = 0.8f),
+                            fontWeight = FontWeight.Medium,
                             fontSize = 13.sp
                         )
                     }
@@ -129,8 +141,8 @@ fun PremiumBanner(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                     ) {
                         Text(
-                            text = stringResource(R.string.upgrade),
-                            fontWeight = FontWeight.Bold,
+                            text = if (isPromo) "CLAIM OFFER" else stringResource(R.string.upgrade),
+                            fontWeight = if (isPromo) FontWeight.Black else FontWeight.Bold,
                             fontSize = 14.sp
                         )
                     }

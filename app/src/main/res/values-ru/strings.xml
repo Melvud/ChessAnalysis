@@ -30,7 +30,6 @@
     <string name="register_error">Ошибка регистрации: %s</string>
 
     <!-- Profile Screen -->
-    <string name="nickname">Никнейм</string>
     <string name="lichess_username">Lichess логин</string>
     <string name="chesscom_username">Chess.com логин</string>
     <string name="language">Язык</string>
@@ -153,7 +152,7 @@
     <string name="reset_error">Ошибка отправки: %s</string>
     <string name="verification_sent">Письмо отправлено на %s</string>
     <string name="verify_email">Подтвердите ваш email</string>
-    <string name="default_web_client_id">YOUR_WEB_CLIENT_ID</string>
+
     <string name="sign_in_google">Войти через Google</string>
 
     <!-- ProfileScreen -->
@@ -204,6 +203,9 @@
     <string name="date_until">До</string>
     <string name="load_date_range">Загрузить диапазон</string>
     <string name="load_all_games">Загрузить все</string>
+    <string name="load_all_warning_title">Загрузить все партии?</string>
+    <string name="load_all_warning_message">Загрузка всех партий может занять много времени, если у вас большая история игр. Вы уверены, что хотите продолжить?</string>
+    <string name="load_all_confirm">Загрузить</string>
     <string name="load_game">Загрузить партию</string>
 
     <string name="victory_vs_titled">Победа над титулованным игроком</string>
@@ -252,7 +254,7 @@
         <!-- Banner -->
         <string name="faster_analysis_with_server">Получите анализ в 5 раз быстрее с серверным режимом</string>
         <string name="upgrade">Улучшить</string>
-        <string name="upgrade_for_faster_analysis">⚡ Улучшите для более быстрого анализа</string>
+        <string name="upgrade_for_faster_analysis">⚡ Улучшите для почти мгновенного анализа (2-3 сек)</string>
 
         <!-- Subscription Management -->
         <string name="subscription_status">Статус подписки</string>
@@ -319,7 +321,7 @@
     <!-- Admin Panel -->
     <string name="admin_panel_button">Админ Панель</string>
     <string name="admin_panel_title">Админ Панель</string>
-    <string name="search_hint">Поиск по никнейму...</string>
+    <string name="search_hint">Поиск игры...</string>
     <string name="random_gift">Случайный подарок</string>
     <string name="user_list_loading_error">Ошибка загрузки пользователей: %s</string>
     <string name="search_error">Ошибка поиска: %s</string>
@@ -350,4 +352,20 @@
     <string name="loading_calculating_total">Подсчет общего количества партий...</string>
     <string name="loading_progress_unknown">Загружено %1$d партий</string>
     <string name="select_date_range">Выберите диапазон дат</string>
+
+    <!-- Rate Us Dialog -->
+    <string name="rate_us_title">Нравится MoveSense?</string>
+    <string name="rate_us_message">Если вам нравится наше приложение, пожалуйста, оцените его. Это займет не больше минуты. Спасибо за поддержку!</string>
+    <string name="rate_now">Оценить</string>
+    <string name="maybe_later">Позже</string>
+
+    <!-- Retention Notifications -->
+    <string name="notif_title_1">Играли в шахматы сегодня?</string>
+    <string name="notif_msg_1">Не забудьте проанализировать свои партии, чтобы стать лучше!</string>
+    <string name="notif_title_2">Время улучшать игру!</string>
+    <string name="notif_msg_2">Разберите свои ошибки и учитесь на них.</string>
+    <string name="notif_title_3">Проверьте свой рейтинг</string>
+    <string name="notif_msg_3">Посмотрите, как улучшается ваша игра.</string>
+    <string name="notif_title_4">Решите задачу?</string>
+    <string name="notif_msg_4">Держите ум в тонусе с анализом позиций.</string>
 </resources>

@@ -85,9 +85,10 @@ fun AppRoot() {
                             if (!languageCode.isNullOrBlank()) {
                                 val savedLanguageCode = LocaleManager.getSavedLanguageCode(context)
                                 if (savedLanguageCode != languageCode) {
-                                    val language = LocaleManager.Language.fromCode(languageCode)
-                                    LocaleManager.setLocale(context as ComponentActivity, language)
+                                    // val language = LocaleManager.Language.fromCode(languageCode)
+                                    // LocaleManager.setLocale(context as ComponentActivity, language)
                                     // Activity might restart, but we continue processing for now
+                                    // DISABLED: This causes restart loops during login if local lang != profile lang.
                                 }
                             }
 
@@ -107,7 +108,7 @@ fun AppRoot() {
                             val newProfile =
                                     UserProfile(
                                             email = user.email ?: "",
-                                            nickname = snapshot.getString("nickname") ?: "",
+
                                             lichessUsername = snapshot.getString("lichessUsername")
                                                             ?: "",
                                             chessUsername = snapshot.getString("chessUsername")
@@ -215,14 +216,15 @@ fun AppRoot() {
                                             val savedLanguageCode =
                                                     LocaleManager.getSavedLanguageCode(context)
                                             if (savedLanguageCode != languageCode) {
-                                                val language =
-                                                        LocaleManager.Language.fromCode(
-                                                                languageCode
-                                                        )
-                                                LocaleManager.setLocale(
-                                                        context as ComponentActivity,
-                                                        language
-                                                )
+                                                // val language =
+                                                //         LocaleManager.Language.fromCode(
+                                                //                 languageCode
+                                                //         )
+                                                // LocaleManager.setLocale(
+                                                //         context as ComponentActivity,
+                                                //         language
+                                                // )
+                                                // DISABLED: This causes restart loops/reverts during login.
                                             }
                                         }
 
@@ -243,8 +245,7 @@ fun AppRoot() {
                                         val newProfile =
                                                 UserProfile(
                                                         email = user.email ?: "",
-                                                        nickname = snapshot.getString("nickname")
-                                                                        ?: "",
+
                                                         lichessUsername =
                                                                 snapshot.getString(
                                                                         "lichessUsername"

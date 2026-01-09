@@ -45,7 +45,7 @@ fun LoginScreen(
     val context = LocalContext.current
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var nickname by remember { mutableStateOf("") }
+
     var lichessName by remember { mutableStateOf("") }
     var chessName by remember { mutableStateOf("") }
     var isLoginMode by remember { mutableStateOf(initialLoginMode) }
@@ -84,7 +84,7 @@ fun LoginScreen(
                                         // User exists, load profile
                                         val profile = UserProfile(
                                             email = user.email ?: "",
-                                            nickname = document.getString("nickname") ?: "",
+
                                             lichessUsername = document.getString("lichessUsername") ?: "",
                                             chessUsername = document.getString("chessUsername") ?: "",
                                             language = document.getString("language") ?: "ru"
@@ -97,7 +97,7 @@ fun LoginScreen(
                                     } else {
                                         // New user, create profile
                                         val newProfile = hashMapOf(
-                                            "nickname" to (user.displayName ?: "User"),
+
                                             "lichessUsername" to "",
                                             "chessUsername" to "",
                                             "language" to "ru"
@@ -105,7 +105,7 @@ fun LoginScreen(
                                         userRef.set(newProfile).addOnSuccessListener {
                                             val profile = UserProfile(
                                                 email = user.email ?: "",
-                                                nickname = user.displayName ?: "User",
+
                                                 lichessUsername = "",
                                                 chessUsername = "",
                                                 language = "ru"
@@ -291,24 +291,8 @@ fun LoginScreen(
 
                     // Registration Fields
                     if (!isLoginMode) {
-                        OutlinedTextField(
-                            value = nickname,
-                            onValueChange = { nickname = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            label = { Text(stringResource(R.string.nickname)) },
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedTextColor = textColor,
-                                unfocusedTextColor = textColor,
-                                focusedBorderColor = primaryColor,
-                                unfocusedBorderColor = textColor.copy(alpha = 0.5f),
-                                focusedLabelColor = primaryColor,
-                                unfocusedLabelColor = textColor.copy(alpha = 0.7f),
-                                cursorColor = primaryColor
-                            )
-                        )
 
-                        Spacer(modifier = Modifier.height(16.dp))
+
 
                         OutlinedTextField(
                             value = lichessName,
@@ -371,8 +355,7 @@ fun LoginScreen(
 
                     // Submit Button
                     Button(
-                        enabled = !isLoading && email.isNotBlank() && password.isNotBlank() &&
-                                (isLoginMode || nickname.isNotBlank()),
+                        enabled = !isLoading && email.isNotBlank() && password.isNotBlank(),
                         onClick = {
                             errorMessage = null
                             isLoading = true
@@ -393,10 +376,6 @@ fun LoginScreen(
                                                     .addOnSuccessListener { doc ->
                                                         val profile = UserProfile(
                                                             email = email.trim(),
-                                                            nickname = doc.getString("nickname")
-                                                                ?: "",
-                                                            lichessUsername = doc.getString("lichessUsername")
-                                                                ?: "",
                                                             chessUsername = doc.getString("chessUsername")
                                                                 ?: "",
                                                             language = doc.getString("language")
@@ -431,7 +410,7 @@ fun LoginScreen(
                                             val firebaseUser = task.result?.user
                                             if (firebaseUser != null) {
                                                 val profileData = hashMapOf(
-                                                    "nickname" to nickname.trim(),
+
                                                     "lichessUsername" to lichessName.trim(),
                                                     "chessUsername" to chessName.trim(),
                                                     "language" to "ru"
@@ -453,7 +432,7 @@ fun LoginScreen(
 
                                                         val profile = UserProfile(
                                                             email = email.trim(),
-                                                            nickname = nickname.trim(),
+
                                                             lichessUsername = lichessName.trim(),
                                                             chessUsername = chessName.trim(),
                                                             language = "ru"

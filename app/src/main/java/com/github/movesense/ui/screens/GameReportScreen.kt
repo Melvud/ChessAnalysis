@@ -189,39 +189,7 @@ private suspend fun fetchLichessClocks(gameId: String): ClockData? =
             }
         }
 
-private fun normalizeLinesToWhitePOV(
-        lines: List<EngineClient.LineDTO>,
-        fen: String
-): List<EngineClient.LineDTO> {
-    val fenParts = fen.split(" ")
-    val whiteToPlay = fenParts.getOrNull(1) == "w"
 
-    return lines.map { line ->
-        val normalizedCp =
-                if (whiteToPlay) {
-                    line.cp
-                } else {
-                    line.cp?.let { -it }
-                }
-
-        val normalizedMate =
-                line.mate?.let { m ->
-                    when {
-                        m == 0 -> if (whiteToPlay) -1 else 1
-                        whiteToPlay -> m
-                        else -> -m
-                    }
-                }
-
-        EngineClient.LineDTO(
-                pv = line.pv,
-                cp = normalizedCp,
-                mate = normalizedMate,
-                depth = line.depth,
-                multiPv = line.multiPv
-        )
-    }
-}
 
 @SuppressLint("UnrememberedMutableState")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -410,8 +378,45 @@ fun GameReportScreen(report: FullReport, onBack: () -> Unit) {
                                 currentDepth = receivedDepth
 
                                 if (receivedDepth >= savedDepth && linesList.isNotEmpty()) {
-                                    val normalizedLines =
-                                            normalizeLinesToWhitePOV(linesList, positionFen)
+                                    // ИСПРАВЛЕНИЕ: EngineClient теперь всегда возвращает нормализованные линии (White POV)
+                                    // для evaluateFenDetailedStreamingForcedLocal (так как это локальный движок, но мы нормализуем в EngineClient/LocalEngine если нужно,
+                                    // но wait... evaluateFenDetailedStreamingForcedLocal вызывает LocalEngine.evaluateFenDetailedStreamingLocal
+                                    // А LocalEngine.evaluateFenDetailedStreamingLocal возвращает сырые данные?
+                                    // Давайте проверим EngineClient.kt.
+                                    // LocalEngine.evaluateFenDetailedStreamingLocal возвращает сырые данные.
+                                    // А мы хотим чтобы GameReportScreen работал с нормализованными.
+                                    // В implementation plan мы решили стандартизировать EngineClient.
+                                    // Но мы поменяли только LocalGameAnalyzer.analyzeMoveRealtimeDetailed.
+                                    // А здесь используется EngineClient.evaluateFenDetailedStreamingForcedLocal -> LocalEngine.evaluateFenDetailedStreamingLocal.
+                                    // LocalEngine мы не меняли (он возвращает сырые).
+                                    // Значит тут НУЖНА нормализация, НО мы удалили функцию normalizeLinesToWhitePOV.
+                                    // ОЙ.
+                                    // Стоп. LocalGameAnalyzer используется для вариаций (analyzeMoveRealtimeDetailed).
+                                    // А здесь (строка 403) используется evaluateFenDetailedStreamingForcedLocal для анализа текущей позиции из отчета.
+                                    // И тут мы удалили нормализацию.
+                                    // Значит надо ВЕРНУТЬ нормализацию или добавить ее сюда inline, или (лучше) сделать так чтобы EngineClient возвращал нормализованные данные.
+                                    
+                                    // В EngineClient.kt для LOCAL режима в evaluatePositionsBatchWithProgress мы делаем нормализацию (строки 406-417).
+                                    // А в evaluateFenDetailedStreamingForcedLocal мы просто вызываем LocalEngine.
+                                    
+                                    // Давайте добавим нормализацию прямо сюда, раз уж удалили функцию.
+                                    // Или лучше восстановить функцию? Нет, план был "Remove normalizeLinesToWhitePOV".
+                                    // Значит надо инлайнить.
+                                    
+                                    val fenParts = positionFen.split(" ")
+                                    val whiteToPlay = fenParts.getOrNull(1) == "w"
+                                    
+                                    val normalizedLines = linesList.map { line ->
+                                        val normalizedCp = if (whiteToPlay) line.cp else line.cp?.let { -it }
+                                        val normalizedMate = line.mate?.let { m ->
+                                            when {
+                                                m == 0 -> if (whiteToPlay) -1 else 1
+                                                whiteToPlay -> m
+                                                else -> -m
+                                            }
+                                        }
+                                        EngineClient.LineDTO(line.pv, normalizedCp, normalizedMate, line.depth, line.multiPv)
+                                    }
 
                                     val lineEvals =
                                             normalizedLines.map { dto: EngineClient.LineDTO ->
@@ -605,15 +610,16 @@ fun GameReportScreen(report: FullReport, onBack: () -> Unit) {
 
                 // Fix Eval POV: Engine returns side-to-move, we want White POV
                 val isWhiteToMove = afterFen.split(" ").getOrNull(1) == "w"
-                variationEval =
-                        if (isWhiteToMove) result.evalAfter else result.evalAfter?.let { -it }
+                // result.evalAfter is ALREADY normalized to White POV by LocalGameAnalyzer/EngineClient
+                variationEval = result.evalAfter
+                Log.d(TAG, "🔍 handleSquareClick: variationEval=$variationEval (isWhiteToMove=$isWhiteToMove)")
 
                 variationMoveClass = result.moveClass
                 variationBestUci = result.bestMove
 
-                val normalizedLines = normalizeLinesToWhitePOV(result.lines, afterFen)
+                // result.lines are ALREADY normalized to White POV by LocalGameAnalyzer/EngineClient
                 variationLines =
-                        normalizedLines.map { dto ->
+                        result.lines.map { dto ->
                             LineEval(
                                     pv = dto.pv,
                                     cp = dto.cp,
@@ -697,15 +703,16 @@ fun GameReportScreen(report: FullReport, onBack: () -> Unit) {
 
                 // Fix Eval POV: Engine returns side-to-move, we want White POV
                 val isWhiteToMove = after.split(" ").getOrNull(1) == "w"
-                variationEval =
-                        if (isWhiteToMove) result.evalAfter else result.evalAfter?.let { -it }
+                // result.evalAfter is ALREADY normalized to White POV by LocalGameAnalyzer/EngineClient
+                variationEval = result.evalAfter
+                Log.d(TAG, "🔍 onClickPvMove: variationEval=$variationEval (isWhiteToMove=$isWhiteToMove)")
 
                 variationMoveClass = result.moveClass
                 variationBestUci = result.bestMove
 
-                val normalizedLines = normalizeLinesToWhitePOV(result.lines, after)
+                // result.lines are ALREADY normalized to White POV by LocalGameAnalyzer/EngineClient
                 variationLines =
-                        normalizedLines.map { dto ->
+                        result.lines.map { dto ->
                             LineEval(
                                     pv = dto.pv,
                                     cp = dto.cp,

@@ -20,14 +20,17 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -138,7 +141,16 @@ fun GamesListScreen(
         }
         val showPremiumBanner = !isPremiumUser && !isBannerClosedSession
 
+        // Check purchase history to decide banner type (Promo vs Standard)
+        var hasPurchaseHistory by remember { mutableStateOf(false) } // Default to false (show promo) until loaded
+        LaunchedEffect(Unit) {
+            hasPurchaseHistory = GooglePlayBillingManager.hasPurchaseHistory()
+        }
+
+
+
         var showSettingsDialog by remember { mutableStateOf(false) }
+        var showLoadAllWarning by remember { mutableStateOf(false) }
         var showNoAccountsDialog by remember { mutableStateOf(false) }
 
         val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
@@ -159,6 +171,7 @@ fun GamesListScreen(
         var analyzedGames by remember { mutableStateOf<Map<String, FullReport>>(emptyMap()) }
 
         var currentFilter by remember { mutableStateOf(GameFilter.ALL) }
+        var searchQuery by remember { mutableStateOf("") }
 
         var showAnalysis by remember { mutableStateOf(false) }
         var analysisJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -866,14 +879,28 @@ fun GamesListScreen(
         }
 
         val filteredItems =
-                remember(items, currentFilter) {
-                        when (currentFilter) {
+                remember(items, currentFilter, searchQuery) {
+                        val baseList = when (currentFilter) {
                                 GameFilter.ALL -> items
                                 GameFilter.LICHESS -> items.filter { it.site == Provider.LICHESS }
                                 GameFilter.CHESSCOM -> items.filter { it.site == Provider.CHESSCOM }
                                 GameFilter.MANUAL -> items.filter { it.site == Provider.MANUAL }
                         }
+                        if (searchQuery.isBlank()) {
+                                baseList
+                        } else {
+                                baseList.filter {
+                                        (it.white?.contains(searchQuery, ignoreCase = true) == true) ||
+                                                (it.black?.contains(searchQuery, ignoreCase = true) == true)
+                                }
+                        }
                 }
+
+        val listState = rememberLazyListState()
+
+        LaunchedEffect(filteredItems) {
+            listState.scrollToItem(0)
+        }
 
         Scaffold(
                 topBar = {
@@ -918,13 +945,54 @@ fun GamesListScreen(
         ) { padding ->
                 Box(modifier = Modifier.fillMaxSize().padding(padding)) {
                         Column(Modifier.fillMaxSize()) {
+                                OutlinedTextField(
+                                        value = searchQuery,
+                                        onValueChange = { searchQuery = it },
+                                        modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                                        placeholder = {
+                                                Text(
+                                                        stringResource(R.string.search_hint),
+                                                        style = MaterialTheme.typography.bodyLarge
+                                                )
+                                        },
+                                        leadingIcon = {
+                                                Icon(
+                                                        Icons.Default.Search,
+                                                        contentDescription = null,
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                        },
+                                        trailingIcon = {
+                                                if (searchQuery.isNotEmpty()) {
+                                                        IconButton(onClick = { searchQuery = "" }) {
+                                                                Icon(
+                                                                        Icons.Default.Close,
+                                                                        contentDescription = stringResource(R.string.close),
+                                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                                )
+                                                        }
+                                                }
+                                        },
+                                        shape = CircleShape,
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                                unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                                                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                                unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                                        ),
+                                        singleLine = true
+                                )
+
                                 Row(
                                         modifier =
                                                 Modifier.fillMaxWidth()
                                                         .horizontalScroll(rememberScrollState())
                                                         .padding(
-                                                                horizontal = 16.dp,
-                                                                vertical = 12.dp
+                                                                start = 16.dp,
+                                                                end = 16.dp,
+                                                                bottom = 12.dp
                                                         ),
                                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
@@ -1043,7 +1111,8 @@ fun GamesListScreen(
                                                         Modifier.padding(
                                                                 horizontal = 16.dp,
                                                                 vertical = 8.dp
-                                                        )
+                                                        ),
+                                                isPromo = !hasPurchaseHistory
                                         )
                                 }
 
@@ -1084,7 +1153,10 @@ fun GamesListScreen(
                                                         }
                                                 }
                                                 else -> {
-                                                        LazyColumn(Modifier.fillMaxSize()) {
+                                                        LazyColumn(
+                                                                modifier = Modifier.fillMaxSize(),
+                                                                state = listState
+                                                        ) {
                                                                 itemsIndexed(
                                                                         filteredItems,
                                                                         key = { _, g ->
@@ -1826,17 +1898,7 @@ fun GamesListScreen(
                                         Spacer(Modifier.height(12.dp))
 
                                         OutlinedButton(
-                                                onClick = {
-                                                        scope.launch {
-                                                                fullSyncWithRemote(
-                                                                        null,
-                                                                        null,
-                                                                        loadLichess,
-                                                                        loadChessCom
-                                                                )
-                                                                loadFromLocal()
-                                                        }
-                                                },
+                                                onClick = { showLoadAllWarning = true },
                                                 enabled = loadLichess || loadChessCom,
                                                 shape = RoundedCornerShape(12.dp),
                                                 modifier = Modifier.fillMaxWidth().height(50.dp)
@@ -1847,6 +1909,68 @@ fun GamesListScreen(
                                                                         R.string.load_all_games
                                                                 ),
                                                         style = MaterialTheme.typography.titleMedium
+                                                )
+                                        }
+
+                                        if (showLoadAllWarning) {
+                                                AlertDialog(
+                                                        onDismissRequest = {
+                                                                showLoadAllWarning = false
+                                                        },
+                                                        title = {
+                                                                Text(
+                                                                        stringResource(
+                                                                                R.string
+                                                                                        .load_all_warning_title
+                                                                        )
+                                                                )
+                                                        },
+                                                        text = {
+                                                                Text(
+                                                                        stringResource(
+                                                                                R.string
+                                                                                        .load_all_warning_message
+                                                                        )
+                                                                )
+                                                        },
+                                                        confirmButton = {
+                                                                TextButton(
+                                                                        onClick = {
+                                                                                showLoadAllWarning =
+                                                                                        false
+                                                                                scope.launch {
+                                                                                        fullSyncWithRemote(
+                                                                                                null,
+                                                                                                null,
+                                                                                                loadLichess,
+                                                                                                loadChessCom
+                                                                                        )
+                                                                                        loadFromLocal()
+                                                                                }
+                                                                        }
+                                                                ) {
+                                                                        Text(
+                                                                                stringResource(
+                                                                                        R.string
+                                                                                                .load_all_confirm
+                                                                                )
+                                                                        )
+                                                                }
+                                                        },
+                                                        dismissButton = {
+                                                                TextButton(
+                                                                        onClick = {
+                                                                                showLoadAllWarning =
+                                                                                        false
+                                                                        }
+                                                                ) {
+                                                                        Text(
+                                                                                stringResource(
+                                                                                        R.string.cancel
+                                                                                )
+                                                                        )
+                                                                }
+                                                        }
                                                 )
                                         }
 
@@ -2341,7 +2465,7 @@ private fun getUserTitle(
 ): String? {
         val me =
                 listOf(
-                                profile.nickname.trim(),
+
                                 profile.lichessUsername.trim(),
                                 profile.chessUsername.trim()
                         )
@@ -2805,7 +2929,7 @@ private fun UserBubble(
 private fun guessMySide(profile: UserProfile, game: GameHeader): Boolean? {
         val me =
                 listOf(
-                                profile.nickname.trim(),
+
                                 profile.lichessUsername.trim(),
                                 profile.chessUsername.trim()
                         )
