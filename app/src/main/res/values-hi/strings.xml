@@ -340,7 +340,7 @@
     <string name="complete_registration_desc">कृपया अपना खाता सेटअप पूरा करने के लिए अपने उपनाम और वैकल्पिक शतरंज उपयोगकर्ता नामों की पुष्टि करें।</string>
     <string name="error_google_already_linked">यह Google खाता पहले से ही किसी अन्य उपयोगकर्ता से जुड़ा हुआ है।</string>
     <string name="switched_to_server_mode">सर्वर मोड पर स्विच करें</string>
-    <string name="welcome_desc_no_accounts">ऐसा लगता है कि आपने अभी तक कोई खाता कनेक्ट नहीं किया है। आप PGN फ़ाइल अपलोड कर सकते हैं या Lichess/Chess.com कनेक्ट करने के लिए अपनी प्रोफ़ाइल पर जा सकते हैं।</string>
+    <string name="welcome_desc_no_accounts">हमने आपके लिए मैग्नस कार्लसन के टेस्ट गेम्स लोड किए हैं। अपने खुद के गेम लोड करने के लिए, ऊपर \'गेम लोड करें\' बटन पर क्लिक करें और अपना Lichess/Chess.com उपयोगकर्ता नाम दर्ज करें या PGN फ़ाइल अपलोड करें।</string>
     <string name="go_to_profile">प्रोफ़ाइल पर जाएं</string>
     <string name="upload_pgn">PGN अपलोड करें</string>
     <string name="games">खेल</string>
@@ -372,4 +372,12 @@
     <string name="notif_msg_brilliant_2">आपका हालिया खेल प्रभावशाली था। इसे जारी रखें!</string>
     <string name="notif_title_brilliant_3">ग्रैंडमास्टर चालें?</string>
     <string name="notif_msg_brilliant_3">आपको एक शानदार विचार मिला। अधिक खेलों का विश्लेषण करें!</string>
+
+    <!-- Guest Mode -->
+    <string name="continue_as_guest">अतिथि के रूप में जारी रखें</string>
+    <string name="guest_mode_title">अतिथि मोड</string>
+    <string name="guest_mode_desc">आप अतिथि के रूप में ऐप का उपयोग कर रहे हैं। आपका डेटा स्थानीय रूप से सहेजा जाता है। अपने डेटा को सिंक करने और प्रीमियम सुविधाओं तक पहुंचने के लिए एक खाता बनाएं।</string>
+    <string name="create_account">खाता बनाएं</string>
+    <string name="guest_user">अतिथि उपयोगकर्ता</string>
+    <string name="exit_guest_mode">अतिथि मोड से बाहर निकलें</string>
 </resources>

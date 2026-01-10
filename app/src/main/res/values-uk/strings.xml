@@ -340,7 +340,7 @@
     <string name="complete_registration_desc">Будь ласка, підтвердіть ваш нік та необов\'язкові імена користувачів шахових сайтів, щоб завершити налаштування акаунту.</string>
     <string name="error_google_already_linked">Цей акаунт Google вже прив\'язаний до іншого користувача.</string>
     <string name="switched_to_server_mode">Переключено в серверний режим</string>
-    <string name="welcome_desc_no_accounts">Схоже, ви ще не підключили жодного акаунту. Ви можете завантажити файл PGN або перейти в профіль, щоб підключити Lichess/Chess.com.</string>
+    <string name="welcome_desc_no_accounts">Ми завантажили для вас тестові партії Магнуса Карлсена. Щоб завантажити власні партії, натисніть кнопку \'Завантажити ігри\' вгорі та введіть своє ім\'я користувача Lichess/Chess.com або завантажте файл PGN.</string>
     <string name="go_to_profile">У профіль</string>
     <string name="upload_pgn">Завантажити PGN</string>
     <string name="games">Ігри</string>
@@ -372,4 +372,12 @@
     <string name="notif_msg_brilliant_2">Ваша остання гра була вражаючою. Так тримати!</string>
     <string name="notif_title_brilliant_3">Ходи гросмейстера?</string>
     <string name="notif_msg_brilliant_3">У вас була фантастична ідея. Аналізуйте більше ігор!</string>
+
+    <!-- Guest Mode -->
+    <string name="continue_as_guest">Продовжити як гість</string>
+    <string name="guest_mode_title">Режим гостя</string>
+    <string name="guest_mode_desc">Ви використовуєте додаток як гість. Ваші дані зберігаються локально. Створіть акаунт, щоб синхронізувати дані та отримати доступ до преміум-функцій.</string>
+    <string name="create_account">Створити акаунт</string>
+    <string name="guest_user">Користувач гість</string>
+    <string name="exit_guest_mode">Вийти з режиму гостя</string>
 </resources>

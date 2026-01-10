@@ -26,9 +26,11 @@ import androidx.navigation.compose.rememberNavController
 import com.github.movesense.FullReport
 import com.github.movesense.GameHeader
 import com.github.movesense.R
+import com.github.movesense.data.local.GuestPreferences
 import com.github.movesense.ui.screens.GameReportScreen
 import com.github.movesense.ui.screens.HomeWithBottomNav
 import com.github.movesense.ui.screens.LoginScreen
+import com.github.movesense.ui.screens.OnboardingScreen
 import com.github.movesense.ui.screens.ProfileScreen
 import com.github.movesense.ui.screens.ReportScreen
 import com.github.movesense.ui.screens.admin.AdminPanelScreen
@@ -63,128 +65,7 @@ fun AppRoot() {
         }
     }
 
-    // В LaunchedEffect при загрузке профиля:
-    LaunchedEffect(Unit) {
-        val auth = FirebaseAuth.getInstance()
-        val user = auth.currentUser
 
-        if (user != null) {
-            val docRef = FirebaseFirestore.getInstance().collection("users").document(user.uid)
-
-            // ✅ Real-time listener
-            val registration =
-                    docRef.addSnapshotListener { snapshot, e ->
-                        if (e != null) {
-                            // Handle error if needed
-                            return@addSnapshotListener
-                        }
-
-                        if (snapshot != null && snapshot.exists()) {
-                            val languageCode = snapshot.getString("language")
-
-                            if (!languageCode.isNullOrBlank()) {
-                                val savedLanguageCode = LocaleManager.getSavedLanguageCode(context)
-                                if (savedLanguageCode != languageCode) {
-                                    // val language = LocaleManager.Language.fromCode(languageCode)
-                                    // LocaleManager.setLocale(context as ComponentActivity, language)
-                                    // Activity might restart, but we continue processing for now
-                                    // DISABLED: This causes restart loops during login if local lang != profile lang.
-                                }
-                            }
-
-                            val isPremium = snapshot.getBoolean("isPremium") ?: false
-                            val premiumUntil = snapshot.getLong("premiumUntil") ?: -1L
-                            var finalIsPremium = isPremium
-
-                            // Check for expiration
-                            if (isPremium && premiumUntil != -1L) {
-                                if (System.currentTimeMillis() > premiumUntil) {
-                                    // Expired!
-                                    docRef.update("isPremium", false)
-                                    finalIsPremium = false
-                                }
-                            }
-
-                            val newProfile =
-                                    UserProfile(
-                                            email = user.email ?: "",
-
-                                            lichessUsername = snapshot.getString("lichessUsername")
-                                                            ?: "",
-                                            chessUsername = snapshot.getString("chessUsername")
-                                                            ?: "",
-                                            language = languageCode
-                                                            ?: LocaleManager.Language.ENGLISH.code,
-                                            isPremium = finalIsPremium,
-                                            premiumUntil = premiumUntil,
-                                            isAdmin = snapshot.getBoolean("isAdmin") ?: false
-                                    )
-
-                            // ✅ Auto-switch to SERVER mode if user becomes premium
-                            if (finalIsPremium && (currentUserProfile?.isPremium != true)) {
-                                // Only if previously not premium (or null)
-                                if (com.github.movesense.EngineClient.engineMode.value ==
-                                                com.github.movesense.EngineClient.EngineMode.LOCAL
-                                ) {
-                                    kotlinx.coroutines.GlobalScope.launch(
-                                            kotlinx.coroutines.Dispatchers.Main
-                                    ) {
-                                        com.github.movesense.EngineClient.setEngineMode(
-                                                com.github.movesense.EngineClient.EngineMode.SERVER
-                                        )
-                                        android.widget.Toast.makeText(
-                                                        context,
-                                                        context.getString(
-                                                                R.string.switched_to_server_mode
-                                                        ),
-                                                        android.widget.Toast.LENGTH_LONG
-                                                )
-                                                .show()
-                                    }
-                                }
-                            }
-
-                            currentUserProfile = newProfile
-
-                            val gift = snapshot.getString("giftNotification")
-                            if (!gift.isNullOrBlank()) {
-                                giftNotification = gift
-                                docRef.update("giftNotification", null)
-                            }
-                        } else {
-                            currentUserProfile = null
-                        }
-
-                        isBootLoading = false
-                    }
-
-            // Keep listener alive? LaunchedEffect will cancel it when disposed?
-            // No, addSnapshotListener returns a registration that needs to be removed.
-            // But here we are inside a coroutine scope that might complete?
-            // Actually LaunchedEffect block runs suspend functions. addSnapshotListener is async
-            // callback.
-            // We need to keep this active.
-            // Ideally we should use produceState or DisposableEffect for listeners.
-            // But since this is AppRoot and we want it to live as long as AppRoot lives (which is
-            // app life), it's fine.
-            // However, to be clean, let's use awaitClose if we were in callbackFlow, or just let it
-            // be.
-            // Better: use DisposableEffect for the listener.
-
-            // Refactoring to DisposableEffect below...
-        } else {
-            currentUserProfile = null
-            isBootLoading = false
-
-            val savedLanguageCode = LocaleManager.getSavedLanguageCode(context)
-            if (savedLanguageCode == null) {
-                LocaleManager.setLocale(
-                        context as ComponentActivity,
-                        LocaleManager.Language.ENGLISH
-                )
-            }
-        }
-    }
 
     // Better implementation using DisposableEffect for the listener
     DisposableEffect(Unit) {
@@ -200,121 +81,168 @@ fun AppRoot() {
                     registration = null
 
                     if (user != null) {
-                        val docRef =
-                                FirebaseFirestore.getInstance()
-                                        .collection("users")
-                                        .document(user.uid)
+                        if (user.isAnonymous) {
+                            // 🌟 GUEST MODE
+                            val lichess = com.github.movesense.data.local.GuestPreferences.getLichessUsername(context)
+                            val chess = com.github.movesense.data.local.GuestPreferences.getChessUsername(context)
+                            val lang = com.github.movesense.data.local.GuestPreferences.getLanguage(context) 
+                                ?: LocaleManager.getSavedLanguageCode(context) 
+                                ?: LocaleManager.Language.ENGLISH.code
 
-                        registration =
-                                docRef.addSnapshotListener { snapshot, e ->
-                                    if (e != null) return@addSnapshotListener
+                            currentUserProfile = UserProfile(
+                                email = "",
+                                lichessUsername = lichess,
+                                chessUsername = chess,
+                                language = lang,
+                                isPremium = false,
+                                premiumUntil = -1L,
+                                isAdmin = false,
+                                isGuest = true
+                            )
+                            isBootLoading = false
+                        } else {
+                            // 🌟 REGISTERED USER (Firestore)
+                            val docRef =
+                                    FirebaseFirestore.getInstance()
+                                            .collection("users")
+                                            .document(user.uid)
 
-                                    if (snapshot != null && snapshot.exists()) {
-                                        val languageCode = snapshot.getString("language")
+                            registration =
+                                    docRef.addSnapshotListener { snapshot, e ->
+                                        if (e != null) return@addSnapshotListener
 
-                                        if (!languageCode.isNullOrBlank()) {
-                                            val savedLanguageCode =
-                                                    LocaleManager.getSavedLanguageCode(context)
-                                            if (savedLanguageCode != languageCode) {
-                                                // val language =
-                                                //         LocaleManager.Language.fromCode(
-                                                //                 languageCode
-                                                //         )
-                                                // LocaleManager.setLocale(
-                                                //         context as ComponentActivity,
-                                                //         language
-                                                // )
-                                                // DISABLED: This causes restart loops/reverts during login.
+                                        if (snapshot != null && snapshot.exists()) {
+                                            val languageCode = snapshot.getString("language")
+
+                                            if (!languageCode.isNullOrBlank()) {
+                                                val savedLanguageCode =
+                                                        LocaleManager.getSavedLanguageCode(context)
+                                                if (savedLanguageCode != languageCode) {
+                                                    // val language =
+                                                    //         LocaleManager.Language.fromCode(
+                                                    //                 languageCode
+                                                    //         )
+                                                    // LocaleManager.setLocale(
+                                                    //         context as ComponentActivity,
+                                                    //         language
+                                                    // )
+                                                    // DISABLED: This causes restart loops/reverts during login.
+                                                }
                                             }
-                                        }
 
-                                        val isPremium = snapshot.getBoolean("isPremium") ?: false
-                                        val premiumUntil = snapshot.getLong("premiumUntil") ?: -1L
-                                        var finalIsPremium = isPremium
+                                            val isPremium = snapshot.getBoolean("isPremium") ?: false
+                                            val premiumUntil = snapshot.getLong("premiumUntil") ?: -1L
+                                            var finalIsPremium = isPremium
 
-                                        if (isPremium &&
-                                                        premiumUntil != -1L &&
-                                                        System.currentTimeMillis() > premiumUntil
-                                        ) {
-                                            docRef.update("isPremium", false)
-                                            finalIsPremium = false
-                                        }
-
-                                        val wasPremium = currentUserProfile?.isPremium == true
-
-                                        val newProfile =
-                                                UserProfile(
-                                                        email = user.email ?: "",
-
-                                                        lichessUsername =
-                                                                snapshot.getString(
-                                                                        "lichessUsername"
-                                                                )
-                                                                        ?: "",
-                                                        chessUsername =
-                                                                snapshot.getString("chessUsername")
-                                                                        ?: "",
-                                                        language = languageCode
-                                                                        ?: LocaleManager.Language
-                                                                                .ENGLISH
-                                                                                .code,
-                                                        isPremium = finalIsPremium,
-                                                        premiumUntil = premiumUntil,
-                                                        isAdmin = snapshot.getBoolean("isAdmin")
-                                                                        ?: false
-                                                )
-
-                                        currentUserProfile = newProfile
-                                        isBootLoading = false
-
-                                        // Auto-switch logic
-                                        if (finalIsPremium && !wasPremium) {
-                                            if (com.github.movesense.EngineClient.engineMode
-                                                            .value ==
-                                                            com.github.movesense.EngineClient
-                                                                    .EngineMode.LOCAL
+                                            if (isPremium &&
+                                                            premiumUntil != -1L &&
+                                                            System.currentTimeMillis() > premiumUntil
                                             ) {
-                                                android.os.Handler(
-                                                                android.os.Looper.getMainLooper()
-                                                        )
-                                                        .post {
-                                                            kotlinx.coroutines.GlobalScope.launch(
-                                                                    kotlinx.coroutines.Dispatchers
-                                                                            .Main
-                                                            ) {
-                                                                com.github.movesense.EngineClient
-                                                                        .setEngineMode(
-                                                                                com.github.movesense
-                                                                                        .EngineClient
-                                                                                        .EngineMode
-                                                                                        .SERVER
-                                                                        )
-                                                                android.widget.Toast.makeText(
-                                                                                context,
-                                                                                context.getString(
-                                                                                        R.string
-                                                                                                .switched_to_server_mode
-                                                                                ),
-                                                                                android.widget.Toast
-                                                                                        .LENGTH_LONG
-                                                                        )
-                                                                        .show()
-                                                            }
-                                                        }
+                                                docRef.update("isPremium", false)
+                                                finalIsPremium = false
                                             }
-                                        }
 
-                                        val gift = snapshot.getString("giftNotification")
-                                        if (!gift.isNullOrBlank()) {
-                                            giftNotification = gift
-                                            docRef.update("giftNotification", null)
+                                            val wasPremium = currentUserProfile?.isPremium == true
+
+                                            val newProfile =
+                                                    UserProfile(
+                                                            email = user.email ?: "",
+
+                                                            lichessUsername =
+                                                                    snapshot.getString(
+                                                                            "lichessUsername"
+                                                                    )
+                                                                            ?: "",
+                                                            chessUsername =
+                                                                    snapshot.getString("chessUsername")
+                                                                            ?: "",
+                                                            language = languageCode
+                                                                            ?: LocaleManager.Language
+                                                                                    .ENGLISH
+                                                                                    .code,
+                                                            isPremium = finalIsPremium,
+                                                            premiumUntil = premiumUntil,
+                                                            isAdmin = snapshot.getBoolean("isAdmin")
+                                                                            ?: false,
+                                                            isGuest = false
+                                                    )
+
+                                            currentUserProfile = newProfile
+                                            isBootLoading = false
+
+                                            // Auto-switch logic
+                                            if (finalIsPremium && !wasPremium) {
+                                                if (com.github.movesense.EngineClient.engineMode
+                                                                .value ==
+                                                                com.github.movesense.EngineClient
+                                                                        .EngineMode.LOCAL
+                                                ) {
+                                                    android.os.Handler(
+                                                                    android.os.Looper.getMainLooper()
+                                                            )
+                                                            .post {
+                                                                kotlinx.coroutines.GlobalScope.launch(
+                                                                        kotlinx.coroutines.Dispatchers
+                                                                                .Main
+                                                                ) {
+                                                                    com.github.movesense.EngineClient
+                                                                            .setEngineMode(
+                                                                                    com.github.movesense
+                                                                                            .EngineClient
+                                                                                            .EngineMode
+                                                                                            .SERVER
+                                                                            )
+                                                                    android.widget.Toast.makeText(
+                                                                                    context,
+                                                                                    context.getString(
+                                                                                            R.string
+                                                                                                    .switched_to_server_mode
+                                                                                    ),
+                                                                                    android.widget.Toast
+                                                                                            .LENGTH_LONG
+                                                                            )
+                                                                            .show()
+                                                                }
+                                                            }
+                                                }
+                                            }
+
+                                            val gift = snapshot.getString("giftNotification")
+                                            if (!gift.isNullOrBlank()) {
+                                                giftNotification = gift
+                                                docRef.update("giftNotification", null)
+                                            }
+                                        } else {
+                                            currentUserProfile = null
+                                            isBootLoading = false
                                         }
-                                    } else {
-                                        currentUserProfile = null
-                                        isBootLoading = false
+                                    }
+                        }
+                    } else {
+                        // Check if we should auto-login as guest
+                        val isGuestActive = com.github.movesense.data.local.GuestPreferences.isGuestActive(context)
+                        if (isGuestActive) {
+                            // Try to restore guest session
+                            FirebaseAuth.getInstance().signInAnonymously().addOnCompleteListener { task ->
+                                if (!task.isSuccessful) {
+                                    android.widget.Toast.makeText(context, "Guest login failed: ${task.exception?.message}", android.widget.Toast.LENGTH_LONG).show()
+                                    // Failed to restore, fallback to Welcome
+                                    currentUserProfile = null
+                                    isBootLoading = false
+                                    val savedLanguageCode = LocaleManager.getSavedLanguageCode(context)
+                                    if (savedLanguageCode == null) {
+                                        LocaleManager.setLocale(
+                                                context as ComponentActivity,
+                                                LocaleManager.Language.ENGLISH
+                                        )
                                     }
                                 }
-                    } else {
+                                // If successful, the listener will fire again with user != null
+                            }
+                            // Keep isBootLoading = true
+                            return@AuthStateListener
+                        }
+
                         currentUserProfile = null
                         isBootLoading = false
                         val savedLanguageCode = LocaleManager.getSavedLanguageCode(context)
@@ -353,8 +281,20 @@ fun AppRoot() {
 
     NavHost(
             navController = rootNav,
-            startDestination = if (currentUserProfile == null) "welcome" else "home"
+            startDestination = if (currentUserProfile == null) "welcome" else {
+                if (!GuestPreferences.isOnboardingShown(context)) "onboarding" else "home"
+            }
     ) {
+        // --- ONBOARDING ---
+        composable("onboarding") {
+            OnboardingScreen(
+                onFinish = {
+                    GuestPreferences.setOnboardingShown(context, true)
+                    rootNav.navigate("home") { popUpTo("onboarding") { inclusive = true } }
+                }
+            )
+        }
+
         // --- WELCOME ---
         composable("welcome") {
             com.github.movesense.ui.screens.WelcomeScreen(
@@ -363,7 +303,11 @@ fun AppRoot() {
                         currentUserProfile = profile
                         isFirstLoad = true
                         shouldShowDateSelection = true
-                        rootNav.navigate("home") { popUpTo("welcome") { inclusive = true } }
+                        if (!GuestPreferences.isOnboardingShown(context)) {
+                            rootNav.navigate("onboarding") { popUpTo("welcome") { inclusive = true } }
+                        } else {
+                            rootNav.navigate("home") { popUpTo("welcome") { inclusive = true } }
+                        }
                     }
             )
         }
@@ -385,13 +329,21 @@ fun AppRoot() {
                         currentUserProfile = profile
                         isFirstLoad = true
                         shouldShowDateSelection = true
-                        rootNav.navigate("home") { popUpTo("welcome") { inclusive = true } }
+                        if (!GuestPreferences.isOnboardingShown(context)) {
+                            rootNav.navigate("onboarding") { popUpTo("welcome") { inclusive = true } }
+                        } else {
+                            rootNav.navigate("home") { popUpTo("welcome") { inclusive = true } }
+                        }
                     },
                     onRegisterSuccess = { profile ->
                         currentUserProfile = profile
                         isFirstLoad = true
                         shouldShowDateSelection = true
-                        rootNav.navigate("home") { popUpTo("welcome") { inclusive = true } }
+                        if (!GuestPreferences.isOnboardingShown(context)) {
+                            rootNav.navigate("onboarding") { popUpTo("welcome") { inclusive = true } }
+                        } else {
+                            rootNav.navigate("home") { popUpTo("welcome") { inclusive = true } }
+                        }
                     }
             )
         }
@@ -419,6 +371,7 @@ fun AppRoot() {
                         onSaveProfile = { updated -> currentUserProfile = updated },
                         onLogout = {
                             FirebaseAuth.getInstance().signOut()
+                            com.github.movesense.data.local.GuestPreferences.setGuestActive(context, false)
                             currentUserProfile = null
                             games = emptyList()
                             openingFens = emptySet()
@@ -427,7 +380,8 @@ fun AppRoot() {
                         },
                         onAdminClick = { rootNav.navigate("admin_panel") },
                         shouldShowDateSelection = shouldShowDateSelection,
-                        onDateSelectionShown = { shouldShowDateSelection = false }
+                        onDateSelectionShown = { shouldShowDateSelection = false },
+                        onStartOnboarding = { rootNav.navigate("onboarding") }
                 )
 
                 if (giftNotification != null) {
@@ -478,6 +432,7 @@ fun AppRoot() {
                         },
                         onLogout = {
                             FirebaseAuth.getInstance().signOut()
+                            com.github.movesense.data.local.GuestPreferences.setGuestActive(context, false)
                             currentUserProfile = null
                             games = emptyList()
                             openingFens = emptySet()

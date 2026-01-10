@@ -23,6 +23,48 @@ import okhttp3.Request
 
 object GameLoaders {
     private const val TAG = "GameLoaders"
+    private const val UA = "MoveSense/1.0"
+
+    private val json = Json {
+        ignoreUnknownKeys = true
+        explicitNulls = false
+        isLenient = true
+    }
+
+    // --------------------- HTTP CLIENTS (IPv4/IPv6 fallback) ---------------------
+    private val clientPreferV4 =
+            OkHttpClient.Builder()
+                    .connectTimeout(30, TimeUnit.SECONDS)
+                    .readTimeout(60, TimeUnit.SECONDS)
+                    .dns(
+                            object : Dns {
+                                override fun lookup(hostname: String): List<InetAddress> {
+                                    return try {
+                                        val all = Dns.SYSTEM.lookup(hostname)
+                                        val v4 = all.filterIsInstance<Inet4Address>()
+                                        val v6 = all.filter { it !is Inet4Address }
+                                        v4 + v6 // Prefer IPv4
+                                    } catch (e: Exception) {
+                                        Dns.SYSTEM.lookup(hostname)
+                                    }
+                                }
+                            }
+                    )
+                    .build()
+
+    private val clientV4Fallback =
+            OkHttpClient.Builder()
+                    .connectTimeout(30, TimeUnit.SECONDS)
+                    .readTimeout(60, TimeUnit.SECONDS)
+                    .dns(
+                            object : Dns {
+                                override fun lookup(hostname: String): List<InetAddress> {
+                                    val all = Dns.SYSTEM.lookup(hostname)
+                                    return all.filterIsInstance<Inet4Address>().ifEmpty { all }
+                                }
+                            }
+                    )
+                    .build()
 
     @Serializable
     private data class ChessComPlayer(val username: String, val title: String? = null)
@@ -32,418 +74,86 @@ object GameLoaders {
             val url: String,
             val pgn: String? = null,
             val white: ChessComPlayer,
-            val black: ChessComPlayer
+            val black: ChessComPlayer,
+            val rules: String? = null
     )
 
-    private object Ipv4FirstDns : Dns {
-        override fun lookup(hostname: String): List<InetAddress> {
-            val all = Dns.SYSTEM.lookup(hostname)
-            return all.sortedBy { addr -> if (addr is Inet4Address) 0 else 1 }
-        }
-    }
-
-    private object Ipv4OnlyDns : Dns {
-        override fun lookup(hostname: String): List<InetAddress> {
-            val all = Dns.SYSTEM.lookup(hostname)
-            val only4 = all.filterIsInstance<InetAddress>()
-            return if (only4.isNotEmpty()) only4 else all
-        }
-    }
-
-    private val clientPreferV4: OkHttpClient =
-            OkHttpClient.Builder()
-                    .dns(Ipv4FirstDns)
-                    .connectTimeout(
-                            8,
-                            TimeUnit.SECONDS
-                    ) // ✅ ИСПРАВЛЕНИЕ: Сократили с 20 до 8 секунд
-                    .readTimeout(10, TimeUnit.SECONDS) // ✅ ИСПРАВЛЕНИЕ: Сократили с 20 до 10 секунд
-                    .retryOnConnectionFailure(true)
-                    .build()
-
-    private val clientV4Fallback: OkHttpClient =
-            OkHttpClient.Builder()
-                    .dns(Ipv4OnlyDns)
-                    .connectTimeout(
-                            8,
-                            TimeUnit.SECONDS
-                    ) // ✅ ИСПРАВЛЕНИЕ: Сократили с 20 до 8 секунд
-                    .readTimeout(10, TimeUnit.SECONDS) // ✅ ИСПРАВЛЕНИЕ: Сократили с 20 до 10 секунд
-                    .retryOnConnectionFailure(true)
-                    .build()
-
-    private val json = Json { ignoreUnknownKeys = true }
-    private const val UA = "ChessAnalysis/1.0 (+android; contact: app@example.com)"
-
-    private fun hasMoves(pgn: String): Boolean {
-        return Regex("""\b\d+\.\s""").containsMatchIn(pgn)
-    }
-
-    private fun parseTags(pgn: String): Map<String, String> {
-        val rx = Regex("""\[(\w+)\s+"([^"]*)"\]""")
-        return rx.findAll(pgn).associate { it.groupValues[1] to it.groupValues[2] }
-    }
-
-    // --- Унифицированный парсер времени партии (UTCDate/UTCTime -> Date -> dateIso) ---
-    private fun parseGameTimestamp(pgn: String, dateIsoFallback: String?): Long {
-        try {
-            // 1) UTCDate+UTCTime
-            val utcDate = Regex("""\[UTCDate\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
-            val utcTime = Regex("""\[UTCTime\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
-            if (!utcDate.isNullOrBlank() && !utcTime.isNullOrBlank()) {
-                val f = SimpleDateFormat("yyyy.MM.dd HH:mm:ss", Locale.US)
-                f.timeZone = TimeZone.getTimeZone("UTC")
-                f.parse("$utcDate $utcTime")?.time?.let {
-                    return it
-                }
-            }
-
-            // 2) Date
-            val date = Regex("""\[Date\s+"([^"]+)"]""").find(pgn)?.groupValues?.getOrNull(1)
-            if (!date.isNullOrBlank()) {
-                val f = SimpleDateFormat("yyyy.MM.dd", Locale.US)
-                f.parse(date)?.time?.let {
-                    return it
-                }
-            }
-
-            // 3) Fallback на переданное dateIso
-            if (!dateIsoFallback.isNullOrBlank()) {
-                val formats =
-                        listOf(
-                                SimpleDateFormat("yyyy.MM.dd", Locale.US),
-                                SimpleDateFormat("yyyy-MM-dd", Locale.US),
-                                SimpleDateFormat("dd.MM.yyyy", Locale.US)
-                        )
-                for (f in formats) {
-                    runCatching { f.parse(dateIsoFallback)?.time }.getOrNull()?.let {
-                        return it
-                    }
-                }
-            }
-        } catch (_: Exception) {}
-        return System.currentTimeMillis()
-    }
-
-    // ----------------------- ВАЛИДАЦИЯ НИКНЕЙМОВ -----------------------
-    suspend fun checkLichessUserExists(username: String): Boolean =
-            withContext(Dispatchers.IO) {
-                if (username.isBlank()) return@withContext true
-                val url = "https://lichess.org/api/user/${username.trim()}"
-                val req = Request.Builder().url(url).header("User-Agent", UA).build()
-                try {
-                    clientPreferV4.newCall(req).execute().use { resp ->
-                        if (resp.isSuccessful) return@withContext true
-                        // 404 — не найден
-                        if (resp.code == 404) return@withContext false
-                    }
-                } catch (_: Exception) {
-                    // пробуем v4-only
-                    return@withContext try {
-                        clientV4Fallback.newCall(req).execute().use { resp -> resp.isSuccessful }
-                    } catch (_: Exception) {
-                        false
-                    }
-                }
-                false
-            }
-
-    suspend fun getLichessGameCount(username: String): Int =
-            withContext(Dispatchers.IO) {
-                if (username.isBlank()) return@withContext 0
-                val url = "https://lichess.org/api/user/${username.trim()}"
-                val req = Request.Builder().url(url).header("User-Agent", UA).build()
-
-                val body = execWithIpv6SafeClient(req) ?: return@withContext 0
-                try {
-                    val jsonElement = json.parseToJsonElement(body).jsonObject
-                    // Lichess API: count.all
-                    return@withContext jsonElement["count"]
-                            ?.jsonObject
-                            ?.get("all")
-                            ?.jsonPrimitive
-                            ?.content
-                            ?.toIntOrNull()
-                            ?: 0
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to parse Lichess game count: ${e.message}")
-                    return@withContext 0
-                }
-            }
-
-    suspend fun checkChessComUserExists(username: String): Boolean =
-            withContext(Dispatchers.IO) {
-                if (username.isBlank()) return@withContext true
-                val norm = username.trim().lowercase()
-                val url = "https://api.chess.com/pub/player/$norm"
-                val req = Request.Builder().url(url).header("User-Agent", UA).build()
-                try {
-                    clientPreferV4.newCall(req).execute().use { resp ->
-                        if (resp.isSuccessful) return@withContext true
-                        if (resp.code == 404) return@withContext false
-                    }
-                } catch (_: Exception) {
-                    return@withContext try {
-                        clientV4Fallback.newCall(req).execute().use { resp -> resp.isSuccessful }
-                    } catch (_: Exception) {
-                        false
-                    }
-                }
-                false
-            }
-
-    suspend fun getChessComGameCount(username: String): Int =
-            withContext(Dispatchers.IO) {
-                if (username.isBlank()) return@withContext 0
-                val norm = username.trim().lowercase()
-                // Chess.com stats endpoint gives total games
-                val url = "https://api.chess.com/pub/player/$norm/stats"
-                val req = Request.Builder().url(url).header("User-Agent", UA).build()
-
-                val body = execWithIpv6SafeClient(req) ?: return@withContext 0
-                try {
-                    val jsonElement = json.parseToJsonElement(body).jsonObject
-                    // Sum up games from different categories if needed, or just specific ones.
-                    // Usually: chess_daily, chess_rapid, chess_bullet, chess_blitz
-                    var total = 0
-                    val categories =
-                            listOf("chess_daily", "chess_rapid", "chess_bullet", "chess_blitz")
-                    for (cat in categories) {
-                        total +=
-                                jsonElement[cat]
-                                        ?.jsonObject
-                                        ?.get("last")
-                                        ?.jsonObject
-                                        ?.get("rd")
-                                        ?.jsonPrimitive
-                                        ?.content
-                                        ?.toIntOrNull()
-                                        ?: 0
-                        // Wait, 'rd' is rating deviation. We need 'record' -> 'win' + 'loss' +
-                        // 'draw'.
-                        // Actually, simpler: just sum up win/loss/draw from record.
-                        val record = jsonElement[cat]?.jsonObject?.get("record")?.jsonObject
-                        if (record != null) {
-                            total += (record["win"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0)
-                            total += (record["loss"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0)
-                            total += (record["draw"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0)
-                        }
-                    }
-                    return@withContext total
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to parse Chess.com game count: ${e.message}")
-                    return@withContext 0
-                }
-            }
-
-    suspend fun ensureFullPgn(header: GameHeader): String =
-            withContext(Dispatchers.IO) {
-                val src = header.pgn.orEmpty()
-
-                // Если уже есть PGN с ходами - возвращаем его
-                if (src.isNotBlank() && hasMoves(src)) {
-                    Log.d(TAG, "✓ PGN already contains moves, returning as-is")
-                    return@withContext src
-                }
-
-                val tags = parseTags(src)
-                val siteUrl = tags["Site"].orEmpty()
-
-                // Пробуем получить PGN с Lichess
-                val lichessId =
-                        Regex("""lichess\.org/([a-zA-Z0-9]{8})""")
-                                .find(siteUrl)
-                                ?.groupValues
-                                ?.get(1)
-                                ?: tags["GameId"]
-
-                if (!lichessId.isNullOrBlank()) {
-                    Log.d(TAG, "⏳ Fetching Lichess PGN for game $lichessId...")
-                    val url =
-                            "https://lichess.org/game/export/$lichessId?moves=true&tags=true&opening=true&clocks=true&evals=false"
-                    val req = Request.Builder().url(url).header("User-Agent", UA).build()
-                    val body = execWithIpv6SafeClient(req)
-                    if (body != null && hasMoves(body)) {
-                        Log.d(TAG, "✓ Fetched full PGN with clocks for $lichessId")
-                        return@withContext body
-                    }
-                    Log.w(TAG, "⚠ Failed to fetch Lichess PGN for $lichessId")
-                }
-
-                // Пробуем получить PGN с Chess.com
-                val chessComUrl =
-                        Regex("""chess\.com/(?:live|game|daily)/([a-zA-Z0-9]+)""")
-                                .find(siteUrl)
-                                ?.groupValues
-                                ?.get(1)
-                                ?: tags["Link"]?.let {
-                                    Regex("""chess\.com/(?:live|game|daily)/([a-zA-Z0-9]+)""")
-                                            .find(it)
-                                            ?.groupValues
-                                            ?.get(1)
-                                }
-
-                if (!chessComUrl.isNullOrBlank()) {
-                    Log.d(TAG, "⏳ Fetching Chess.com PGN for game $chessComUrl...")
-                    // Chess.com API для получения одной партии
-                    val url = "https://api.chess.com/pub/game/$chessComUrl"
-                    val req = Request.Builder().url(url).header("User-Agent", UA).build()
-                    runCatching {
-                        val body = execWithIpv6SafeClient(req)
-                        if (body != null) {
-                            // Try to parse as JSON first to get titles
-                            try {
-                                val game = json.decodeFromString<ChessComGame>(body)
-                                var pgn = game.pgn?.replace("\\n", "\n")?.replace("\\\"", "\"")
-                                if (!pgn.isNullOrBlank() && hasMoves(pgn)) {
-                                    // Inject titles
-                                    val whiteTitle = game.white.title
-                                    val blackTitle = game.black.title
-                                    val extraTags = StringBuilder()
-                                    if (!whiteTitle.isNullOrBlank())
-                                            extraTags.append("[WhiteTitle \"$whiteTitle\"]\n")
-                                    if (!blackTitle.isNullOrBlank())
-                                            extraTags.append("[BlackTitle \"$blackTitle\"]\n")
-
-                                    if (extraTags.isNotEmpty()) {
-                                        pgn = extraTags.toString() + pgn
-                                    }
-
-                                    Log.d(
-                                            TAG,
-                                            "✓ Fetched Chess.com PGN (with titles) for $chessComUrl"
-                                    )
-                                    return@withContext pgn
-                                }
-                            } catch (e: Exception) {
-                                // Fallback to regex
-                                val pgnMatch =
-                                        Regex(""""pgn"\s*:\s*"((?:\\.|[^"\\])*)"""").find(body)
-                                if (pgnMatch != null) {
-                                    val pgn =
-                                            pgnMatch.groupValues[1]
-                                                    .replace("\\n", "\n")
-                                                    .replace("\\\"", "\"")
-                                    if (hasMoves(pgn)) {
-                                        Log.d(TAG, "✓ Fetched Chess.com PGN for $chessComUrl")
-                                        return@withContext pgn
-                                    }
-                                }
-                            }
-                        }
-                    }
-                            .onFailure { e ->
-                                Log.w(
-                                        TAG,
-                                        "⚠ Failed to fetch Chess.com PGN for $chessComUrl: ${e.message}"
-                                )
-                            }
-                }
-
-                // Если ничего не получилось, возвращаем исходный PGN (может быть пустым)
-                if (src.isBlank()) {
-                    Log.w(TAG, "⚠ No PGN available for game, returning empty")
-                }
-                return@withContext src
-            }
-
-    // --------------------- LICHESS: поддержка since, until, max=null ---------------------
+    // --------------------- LICHESS ---------------------
     suspend fun loadLichess(
             username: String,
             since: Long? = null,
             until: Long? = null,
-            max: Int? = 50, // 🌟 max теперь nullable
-            onProgress: (Int, Int) -> Unit = { _, _ -> } // loaded, total (estimated)
+            max: Int? = 50,
+            onProgress: (Int, Int) -> Unit = { _, _ -> }
     ): List<GameHeader> =
             withContext(Dispatchers.IO) {
-                Log.d(
-                        TAG,
-                        "🔄 Loading Lichess games for user: $username (max=$max, since=$since, until=$until)"
-                )
+                Log.d(TAG, "🔄 Loading Lichess games for user: $username")
+                onProgress(0, 0)
 
-                // 🌟 Динамически строим параметры
-                val params = mutableListOf<String>()
-                params.add("perfType=blitz,bullet,rapid,classical")
-                params.add("clocks=true")
-                params.add("evals=false")
-                params.add("opening=true")
-                params.add("pgnInJson=true")
-                max?.let { params.add("max=$it") }
-                since?.let { params.add("since=$it") }
-                until?.let { params.add("until=$it") }
+                val urlBuilder = StringBuilder("https://lichess.org/api/games/user/$username")
+                urlBuilder.append("?pgnInJson=true&clocks=false&evals=false&opening=true")
+                if (max != null) urlBuilder.append("&max=$max")
+                if (since != null) urlBuilder.append("&since=$since")
+                if (until != null) urlBuilder.append("&until=$until")
 
-                val ndUrl =
-                        "https://lichess.org/api/games/user/${username.trim()}?${params.joinToString("&")}"
-                Log.d(TAG, "Lichess URL: $ndUrl")
-
-                val ndReq =
+                val request =
                         Request.Builder()
-                                .url(ndUrl)
+                                .url(urlBuilder.toString())
                                 .header("Accept", "application/x-ndjson")
                                 .header("User-Agent", UA)
                                 .build()
 
-                execWithIpv6SafeClient(ndReq)?.let { body ->
-                    val list = mutableListOf<GameHeader>()
-                    val isNdjson =
-                            body.lineSequence().take(1).firstOrNull()?.trim()?.startsWith("{") ==
-                                    true
+                val responseBody = execWithIpv6SafeClient(request) ?: return@withContext emptyList()
 
-                    if (isNdjson) {
-                        var loaded = 0
-                        // Estimate total if max is set, otherwise we don't know easily without
-                        // separate call
-                        val totalEstimate = max ?: 100 // placeholder if unknown
+                val games = mutableListOf<GameHeader>()
+                val lines = responseBody.lines()
+                val totalLines = lines.size // Rough estimate
+                
+                lines.forEachIndexed { index, line ->
+                    if (line.isNotBlank()) {
+                        try {
+                            val jsonElement = json.parseToJsonElement(line).jsonObject
+                            val pgn = jsonElement["pgn"]?.jsonPrimitive?.content
+                            val variant = jsonElement["variant"]?.jsonPrimitive?.content
 
-                        body.lineSequence().forEach { line ->
-                            if (line.isBlank()) return@forEach
-                            runCatching {
-                                val el = json.parseToJsonElement(line).jsonObject
-                                val pgn = el["pgn"]?.jsonPrimitive?.content
-                                if (!pgn.isNullOrBlank() && hasMoves(pgn)) {
-                                    list +=
+                            // Filter standard chess
+                            if (pgn != null && (variant == "standard" || variant == null)) {
+                                if (hasMoves(pgn)) {
+                                    val header =
                                             PgnChess.headerFromPgn(pgn)
                                                     .copy(site = Provider.LICHESS, pgn = pgn)
-                                    loaded++
-                                    onProgress(loaded, totalEstimate)
+                                    games.add(header)
                                 }
                             }
-                        }
-                    } else {
-                        // fallback: обычный PGN-дамп
-                        val rx =
-                                Regex(
-                                        """(?s)(\[Event[^\[]*(?:\[[^\]]*\][^\[]*)*?(?:1-0|0-1|1/2-1/2|\*))"""
-                                )
-                        rx.findAll(body).forEach { m ->
-                            val pgn = m.groupValues[1].trim()
-                            if (pgn.isNotEmpty() && hasMoves(pgn)) {
-                                list +=
-                                        PgnChess.headerFromPgn(pgn)
-                                                .copy(site = Provider.LICHESS, pgn = pgn)
-                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to parse Lichess game line: ${e.message}")
                         }
                     }
-
-                    // ВАЖНО: сортируем по времени партии
-                    val sorted =
-                            list.sortedByDescending { gh ->
-                                parseGameTimestamp(gh.pgn ?: "", gh.date)
-                            }
-
-                    // 🌟 Применяем max только если он был задан (для "Load All" max=null)
-                    val result = if (max != null) sorted.take(max) else sorted
-
-                    Log.d(TAG, "✅ Lichess: loaded ${result.size} (newest first)")
-                    return@withContext result
+                    if (index % 10 == 0) onProgress(games.size, totalLines)
                 }
-
-                Log.w(TAG, "⚠ Lichess returned 0 games")
-                emptyList()
+                
+                Log.d(TAG, "✅ Lichess: loaded ${games.size}")
+                games
             }
 
-    // --------------------- CHESS.COM: поддержка since, until, max=null и onProgress
-    // ---------------------
+    suspend fun getLichessGameCount(username: String): Int = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("https://lichess.org/api/user/$username")
+                .header("User-Agent", UA)
+                .build()
+            
+            val body = execWithIpv6SafeClient(request) ?: return@withContext 0
+            val jsonElement = json.parseToJsonElement(body).jsonObject
+            val count = jsonElement["count"]?.jsonObject?.get("all")?.jsonPrimitive?.content?.toIntOrNull()
+            count ?: 0
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting Lichess game count", e)
+            0
+        }
+    }
+
+    // --------------------- CHESS.COM ---------------------
     suspend fun loadChessCom(
             username: String,
             since: Long? = null,
@@ -535,11 +245,6 @@ object GameLoaders {
                 val allGames = mutableListOf<GameHeader>()
                 var loadedCount: Int
                 // Estimate total: archives * avg games? Hard to say.
-                // We will update total as we process archives if possible, or just use loadedCount.
-                // Better: just report loadedCount and let UI handle "unknown total" or we pass 0 as
-                // total.
-                // Actually, we can't easily know total without fetching all archives.
-                // Let's just pass 0 as total for now if unknown, or maybe archives.size * 10?
                 val estimatedTotal = archivesToFetch.size * 20 // Rough guess
 
                 for (archiveUrl in archivesToFetch) {
@@ -552,37 +257,30 @@ object GameLoaders {
                         val gamesArray = gamesWrapper["games"]?.jsonArray
                         gamesArray?.forEach { element ->
                             val game = json.decodeFromJsonElement<ChessComGame>(element)
-                            var pgn = game.pgn?.replace("\\n", "\n")?.replace("\\\"", "\"")
-                            if (!pgn.isNullOrBlank() && hasMoves(pgn)) {
-                                // Inject titles into PGN
-                                val whiteTitle = game.white.title
-                                val blackTitle = game.black.title
-                                val extraTags = StringBuilder()
-                                if (!whiteTitle.isNullOrBlank())
-                                        extraTags.append("[WhiteTitle \"$whiteTitle\"]\n")
-                                if (!blackTitle.isNullOrBlank())
-                                        extraTags.append("[BlackTitle \"$blackTitle\"]\n")
 
-                                if (extraTags.isNotEmpty()) {
-                                    pgn = extraTags.toString() + pgn
+                            // 🌟 FILTER: Only allow standard chess (exclude chess960, etc.)
+                            if (game.rules == "chess") {
+                                var pgn = game.pgn?.replace("\\n", "\n")?.replace("\\\"", "\"")
+                                if (!pgn.isNullOrBlank() && hasMoves(pgn)) {
+                                    // Inject titles into PGN
+                                    val whiteTitle = game.white.title
+                                    val blackTitle = game.black.title
+                                    val extraTags = StringBuilder()
+                                    if (!whiteTitle.isNullOrBlank())
+                                            extraTags.append("[WhiteTitle \"$whiteTitle\"]\n")
+                                    if (!blackTitle.isNullOrBlank())
+                                            extraTags.append("[BlackTitle \"$blackTitle\"]\n")
+
+                                    if (extraTags.isNotEmpty()) {
+                                        pgn = extraTags.toString() + pgn
+                                    }
+
+                                    var header =
+                                            PgnChess.headerFromPgn(pgn)
+                                                    .copy(site = Provider.CHESSCOM, pgn = pgn)
+
+                                    allGames += header
                                 }
-
-                                var header =
-                                        PgnChess.headerFromPgn(pgn)
-                                                .copy(site = Provider.CHESSCOM, pgn = pgn)
-
-                                // Also update header names for immediate display (though
-                                // PgnChess.headerFromPgn should handle it if tags are present)
-                                // But PgnChess.headerFromPgn uses the tags we just injected!
-                                // So we don't need manual name manipulation if we pass the modified
-                                // PGN.
-
-                                // Let's verify: headerFromPgn calls parseTags, which will find
-                                // WhiteTitle.
-                                // Then it constructs names using WhiteTitle.
-                                // So we just need to pass the modified PGN.
-
-                                allGames += header
                             }
                         }
                     }
@@ -614,7 +312,7 @@ object GameLoaders {
                 // Ключевое изменение: сортируем по времени партии
                 val sortedGames =
                         allGames.sortedByDescending { gh ->
-                            parseGameTimestamp(gh.pgn ?: "", gh.date)
+                            parseGameTimestamp(gh.pgn ?: "", gh.date ?: "")
                         }
 
                 // 🌟 Применяем max только если он был задан
@@ -623,6 +321,42 @@ object GameLoaders {
                 Log.d(TAG, "✅ Chess.com: loaded ${result.size} (newest first)")
                 result
             }
+
+    suspend fun getChessComGameCount(username: String): Int = withContext(Dispatchers.IO) {
+        // Chess.com doesn't give a simple total count easily without summing archives.
+        // But we can try to fetch archives and sum them up? No, archives list doesn't have counts.
+        // We'll just return 0 or try to estimate?
+        // Actually, let's just return 0 for now as it's hard to get cheap total.
+        // Or we can fetch the stats endpoint: https://api.chess.com/pub/player/{username}/stats
+        try {
+             val request = Request.Builder()
+                .url("https://api.chess.com/pub/player/${username.trim().lowercase()}/stats")
+                .header("User-Agent", UA)
+                .build()
+            
+            val body = execWithIpv6SafeClient(request) ?: return@withContext 0
+            val jsonElement = json.parseToJsonElement(body).jsonObject
+            
+            // Sum up standard chess games
+            val chessDaily = jsonElement["chess_daily"]?.jsonObject?.get("record")?.jsonObject
+            val chessRapid = jsonElement["chess_rapid"]?.jsonObject?.get("record")?.jsonObject
+            val chessBullet = jsonElement["chess_bullet"]?.jsonObject?.get("record")?.jsonObject
+            val chessBlitz = jsonElement["chess_blitz"]?.jsonObject?.get("record")?.jsonObject
+
+            fun getCount(obj: kotlinx.serialization.json.JsonObject?): Int {
+                if (obj == null) return 0
+                val win = obj["win"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+                val loss = obj["loss"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+                val draw = obj["draw"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+                return win + loss + draw
+            }
+
+            getCount(chessDaily) + getCount(chessRapid) + getCount(chessBullet) + getCount(chessBlitz)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting Chess.com game count", e)
+            0
+        }
+    }
 
     private fun execWithIpv6SafeClient(req: Request): String? {
         try {
@@ -659,4 +393,35 @@ object GameLoaders {
     }
 
     private fun String?.orElseBlank(): String = this ?: ""
+
+    private fun hasMoves(pgn: String): Boolean {
+        // Simple check: does it have "1."?
+        return pgn.contains("1.")
+    }
+
+    private fun parseGameTimestamp(pgn: String, dateStr: String): Long {
+        // Try to parse [UTCDate "yyyy.MM.dd"] and [UTCTime "HH:mm:ss"]
+        try {
+            val dateMatch = Regex("""\[UTCDate "(\d{4}\.\d{2}\.\d{2})"\]""").find(pgn)
+            val timeMatch = Regex("""\[UTCTime "(\d{2}:\d{2}:\d{2})"\]""").find(pgn)
+
+            if (dateMatch != null && timeMatch != null) {
+                val dateTimeStr = "${dateMatch.groupValues[1]} ${timeMatch.groupValues[1]}"
+                val sdf = SimpleDateFormat("yyyy.MM.dd HH:mm:ss", Locale.US)
+                sdf.timeZone = TimeZone.getTimeZone("UTC")
+                return sdf.parse(dateTimeStr)?.time ?: 0L
+            }
+        } catch (e: Exception) {
+            // ignore
+        }
+        
+        // Fallback to dateStr (yyyy.MM.dd)
+        try {
+            val sdf = SimpleDateFormat("yyyy.MM.dd", Locale.US)
+            sdf.timeZone = TimeZone.getTimeZone("UTC")
+            return sdf.parse(dateStr)?.time ?: 0L
+        } catch (e: Exception) {
+            return 0L
+        }
+    }
 }

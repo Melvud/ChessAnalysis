@@ -42,7 +42,8 @@ fun HomeWithBottomNav(
         onLogout: () -> Unit,
         onAdminClick: () -> Unit,
         shouldShowDateSelection: Boolean,
-        onDateSelectionShown: () -> Unit
+        onDateSelectionShown: () -> Unit,
+        onStartOnboarding: () -> Unit
 ) {
     val tabsNav = rememberNavController()
     val navBackStackEntry by tabsNav.currentBackStackEntryAsState()
@@ -104,7 +105,8 @@ fun HomeWithBottomNav(
                     onOpenReport = onOpenReport,
                     shouldShowDateSelection = shouldShowDateSelection,
                     onDateSelectionShown = onDateSelectionShown,
-                    onNavigateToProfile = onNavigateToProfile
+                    onNavigateToProfile = onNavigateToProfile,
+                    onStartOnboarding = onStartOnboarding
             )
             addProfileTab(
                     profile = profile,
@@ -138,7 +140,8 @@ private fun NavGraphBuilder.addGamesTab(
         onOpenReport: (FullReport) -> Unit,
         shouldShowDateSelection: Boolean,
         onDateSelectionShown: () -> Unit,
-        onNavigateToProfile: () -> Unit
+        onNavigateToProfile: () -> Unit,
+        onStartOnboarding: () -> Unit
 ) {
     composable(TAB_GAMES) {
         GamesListScreen(
@@ -150,7 +153,8 @@ private fun NavGraphBuilder.addGamesTab(
                 onOpenReport = onOpenReport,
                 shouldShowDateSelection = shouldShowDateSelection,
                 onDateSelectionShown = onDateSelectionShown,
-                onNavigateToProfile = onNavigateToProfile
+                onNavigateToProfile = onNavigateToProfile,
+                onStartOnboarding = onStartOnboarding
         )
     }
 }

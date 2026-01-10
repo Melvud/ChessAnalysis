@@ -342,7 +342,7 @@
     <string name="complete_registration_desc">Please confirm your nickname and optional chess usernames to complete your account setup.</string>
     <string name="error_google_already_linked">This Google account is already linked to another user.</string>
     <string name="switched_to_server_mode">Switch to server mode</string>
-    <string name="welcome_desc_no_accounts">Parece que aún no has conectado ninguna cuenta. Puedes subir un archivo PGN o ir a tu perfil para conectar Lichess/Chess.com.</string>
+    <string name="welcome_desc_no_accounts">Hemos cargado las partidas de prueba de Magnus Carlsen para ti. Para cargar tus propias partidas, haz clic en el botón \'Cargar partidas\' en la parte superior e introduce tu usuario de Lichess/Chess.com o sube un archivo PGN.</string>
     <string name="go_to_profile">Ir al Perfil</string>
     <string name="upload_pgn">Subir PGN</string>
     <string name="games">Partidas</string>
@@ -374,4 +374,12 @@
     <string name="notif_msg_brilliant_2">Tu juego reciente fue impresionante. ¡Sigue así!</string>
     <string name="notif_title_brilliant_3">¿Jugadas de Gran Maestro?</string>
     <string name="notif_msg_brilliant_3">Encontraste una idea brillante. ¡Analiza más partidas!</string>
+
+    <!-- Guest Mode -->
+    <string name="continue_as_guest">Continuar como invitado</string>
+    <string name="guest_mode_title">Modo Invitado</string>
+    <string name="guest_mode_desc">Estás usando la aplicación como invitado. Tus datos se guardan localmente. Crea una cuenta para sincronizar tus datos y acceder a funciones premium.</string>
+    <string name="create_account">Crear cuenta</string>
+    <string name="guest_user">Usuario Invitado</string>
+    <string name="exit_guest_mode">Salir del modo invitado</string>
 </resources>

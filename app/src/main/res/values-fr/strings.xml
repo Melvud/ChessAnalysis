@@ -340,7 +340,7 @@
     <string name="complete_registration_desc">Veuillez confirmer votre pseudo et vos noms d\'utilisateur d\'échecs optionnels pour terminer la configuration de votre compte.</string>
     <string name="error_google_already_linked">Ce compte Google est déjà lié à un autre utilisateur.</string>
     <string name="switched_to_server_mode">Passé en mode serveur</string>
-    <string name="welcome_desc_no_accounts">Il semble que vous n\'ayez pas encore connecté de comptes. Vous pouvez télécharger un fichier PGN ou aller sur votre profil pour connecter Lichess/Chess.com.</string>
+    <string name="welcome_desc_no_accounts">Nous avons chargé les parties tests de Magnus Carlsen pour vous. Pour charger vos propres parties, cliquez sur le bouton \'Charger des parties\' en haut et entrez votre nom d\'utilisateur Lichess/Chess.com ou téléchargez un fichier PGN.</string>
     <string name="go_to_profile">Aller au profil</string>
     <string name="upload_pgn">Télécharger PGN</string>
     <string name="games">Parties</string>
@@ -372,4 +372,12 @@
     <string name="notif_msg_brilliant_2">Votre dernière partie était impressionnante. Continuez comme ça !</string>
     <string name="notif_title_brilliant_3">Coups de Grand Maître ?</string>
     <string name="notif_msg_brilliant_3">Vous avez eu une idée fantastique. Analysez plus de parties !</string>
+
+    <!-- Guest Mode -->
+    <string name="continue_as_guest">Continuer en tant qu\'invité</string>
+    <string name="guest_mode_title">Mode Invité</string>
+    <string name="guest_mode_desc">Vous utilisez l\'application en tant qu\'invité. Vos données sont enregistrées localement. Créez un compte pour synchroniser vos données et accéder aux fonctionnalités premium.</string>
+    <string name="create_account">Créer un compte</string>
+    <string name="guest_user">Utilisateur Invité</string>
+    <string name="exit_guest_mode">Quitter le mode invité</string>
 </resources>

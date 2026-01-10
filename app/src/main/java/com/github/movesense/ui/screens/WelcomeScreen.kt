@@ -320,6 +320,48 @@ fun WelcomeScreen(
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Guest Button
+                TextButton(
+                    onClick = {
+                        isLoading = true
+                        FirebaseAuth.getInstance().signInAnonymously()
+                            .addOnSuccessListener { result ->
+                                val user = result.user
+                                if (user != null) {
+                                    val currentLocalLang = LocaleManager.getLocale(context).code
+                                    // Save default guest prefs
+                                    com.github.movesense.data.local.GuestPreferences.setLanguage(context, currentLocalLang)
+                                    com.github.movesense.data.local.GuestPreferences.setGuestActive(context, true)
+                                    
+                                    val profile = UserProfile(
+                                        email = "",
+                                        lichessUsername = "",
+                                        chessUsername = "",
+                                        language = currentLocalLang,
+                                        isGuest = true
+                                    )
+                                    onLoginSuccess(profile)
+                                } else {
+                                    isLoading = false
+                                    errorMessage = "Guest login failed: User is null"
+                                }
+                            }
+                            .addOnFailureListener { e ->
+                                isLoading = false
+                                errorMessage = "Guest login failed: ${e.message}"
+                            }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = stringResource(R.string.continue_as_guest),
+                        fontSize = 16.sp,
+                        color = textColor.copy(alpha = 0.7f)
+                    )
+                }
             }
         }
     }

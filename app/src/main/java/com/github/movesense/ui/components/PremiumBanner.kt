@@ -40,7 +40,7 @@ fun PremiumBanner(
             onClick = onUpgradeClick,
             modifier = modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 4.dp), // Reduced vertical padding
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(
                 containerColor = Color.Transparent
@@ -84,7 +84,7 @@ fun PremiumBanner(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(20.dp),
+                        .padding(12.dp), // Reduced padding
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
@@ -92,14 +92,14 @@ fun PremiumBanner(
                     Surface(
                         shape = RoundedCornerShape(16.dp),
                         color = if (isPromo) Color.White.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
-                        modifier = Modifier.size(56.dp)
+                        modifier = Modifier.size(40.dp) // Reduced size
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 Icons.Default.Star,
                                 contentDescription = null,
                                 tint = if (isPromo) Color.White else Color(0xFFFFD700),
-                                modifier = Modifier.size(32.dp)
+                                modifier = Modifier.size(24.dp) // Reduced size
                             )
                         }
                     }
@@ -112,7 +112,8 @@ fun PremiumBanner(
                             text = if (isPromo) stringResource(R.string.banner_promo_title) else stringResource(R.string.banner_standard_title),
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontWeight = FontWeight.ExtraBold,
-                                letterSpacing = (-0.5).sp
+                                letterSpacing = (-0.5).sp,
+                                fontSize = 18.sp // Explicitly smaller font
                             ),
                             color = Color.White
                         )
@@ -122,7 +123,8 @@ fun PremiumBanner(
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color.White.copy(alpha = 0.9f),
                             fontWeight = FontWeight.Medium,
-                            lineHeight = 18.sp
+                            lineHeight = 16.sp, // Reduced line height
+                            fontSize = 13.sp // Reduced font size
                         )
                     }
 

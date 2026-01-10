@@ -17,7 +17,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ExternalGameEntity::class,
         ReportCacheEntity::class
     ],
-    version = 4, // УВЕЛИЧИЛИ версию до 4
+    version = 6, // УВЕЛИЧИЛИ версию до 6
     exportSchema = false
 )
 @TypeConverters(EmptyConverters::class)
@@ -81,6 +81,22 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // Миграция 4 -> 5: добавляем колонку isTest
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                Log.d(TAG, "Running migration 4->5")
+                try {
+                    database.execSQL(
+                        "ALTER TABLE external_games ADD COLUMN isTest INTEGER NOT NULL DEFAULT 0"
+                    )
+                    Log.d(TAG, "Migration 4->5 completed successfully")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Migration 4->5 failed: ${e.message}", e)
+                    throw e
+                }
+            }
+        }
+
         fun getInstance(ctx: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -88,7 +104,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "chessanalysis.db"
                 )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .fallbackToDestructiveMigration() // На всякий случай
                     .build()
                     .also { INSTANCE = it }

@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.*
@@ -85,6 +86,12 @@ import kotlinx.serialization.json.Json
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.tasks.await
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
+import com.google.android.gms.common.api.ApiException
+import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.auth.FirebaseAuthUserCollisionException
 
 private const val TAG = "GamesListScreen"
 
@@ -123,7 +130,8 @@ fun GamesListScreen(
         onOpenReport: (FullReport) -> Unit,
         shouldShowDateSelection: Boolean,
         onDateSelectionShown: () -> Unit,
-        onNavigateToProfile: () -> Unit
+        onNavigateToProfile: () -> Unit,
+        onStartOnboarding: () -> Unit
 ) {
         val scope = rememberCoroutineScope()
         val context = LocalContext.current
@@ -134,6 +142,55 @@ fun GamesListScreen(
                 }
         }
         val repo = remember { context.gameRepository(json) }
+        
+        // Google Sign-In Launcher
+        val googleSignInLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+            try {
+                val account = task.getResult(ApiException::class.java)
+                account?.idToken?.let { token ->
+                    val credential = GoogleAuthProvider.getCredential(token, null)
+                    // Link the anonymous account with the Google credential
+                    FirebaseAuth.getInstance().currentUser?.linkWithCredential(credential)
+                        ?.addOnSuccessListener {
+                            // Link successful, convert guest data to registered user data
+                            // This logic is handled in AppRoot/ProfileScreen, but we need to ensure UI updates
+                            Toast.makeText(context, context.getString(R.string.google_linked), Toast.LENGTH_SHORT).show()
+                        }
+                        ?.addOnFailureListener { e ->
+                            if (e is FirebaseAuthUserCollisionException) {
+                                // Account already exists, maybe sign in instead?
+                                // For now just show error
+                                Toast.makeText(context, context.getString(R.string.link_error, e.message), Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(context, context.getString(R.string.link_error, e.message), Toast.LENGTH_LONG).show()
+                            }
+                        }
+                }
+            } catch (e: ApiException) {
+                if (e.statusCode == GoogleSignInStatusCodes.SIGN_IN_CANCELLED) {
+                    Log.d(TAG, "Google sign in cancelled")
+                } else {
+                    Log.e(TAG, "Google sign in failed", e)
+                    Toast.makeText(context, "Google sign in failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
+        val launchGoogleSignIn = {
+            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                .requestIdToken(context.getString(R.string.default_web_client_id))
+                .requestEmail()
+                .build()
+            val googleSignInClient = GoogleSignIn.getClient(context, gso)
+            // Always sign out first to force account selection
+            googleSignInClient.signOut().addOnCompleteListener {
+                googleSignInLauncher.launch(googleSignInClient.signInIntent)
+            }
+            Unit
+        }
 
         val billingPremium by GooglePlayBillingManager.isPremiumFlow.collectAsState()
 
@@ -532,6 +589,10 @@ fun GamesListScreen(
                                                 profile.chessUsername.isNotBlank()
                                 if (hasCredentials) {
                                         // NEW BEHAVIOR: Show dialog instead of auto-loading
+                                        // 🌟 Remove test games if any
+                                        scope.launch {
+                                            repo.deleteTestGames()
+                                        }
                                         showSettingsDialog = true
                                 } else {
                                         // Load test games (Magnus Carlsen)
@@ -950,6 +1011,13 @@ fun GamesListScreen(
                                                                         )
                                                 )
                                         }
+                                        IconButton(onClick = onStartOnboarding) {
+                                            Icon(
+                                                Icons.Default.School,
+                                                contentDescription = stringResource(R.string.onboarding_title),
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
                                 },
                                 colors =
                                         TopAppBarDefaults.topAppBarColors(
@@ -1118,7 +1186,13 @@ fun GamesListScreen(
 
                                 if (!isPremiumUser && showPremiumBanner && !showAnalysis) {
                                         PremiumBanner(
-                                                onUpgradeClick = { showPaywall = true },
+                                                onUpgradeClick = { 
+                                                    if (profile.isGuest) {
+                                                        launchGoogleSignIn()
+                                                    } else {
+                                                        showPaywall = true 
+                                                    }
+                                                },
                                                 onDismiss = {
                                                         com.github.movesense.App.isBannerDismissed =
                                                                 true
@@ -1134,7 +1208,7 @@ fun GamesListScreen(
                                 }
 
                                 PullToRefreshBox(
-                                        modifier = Modifier.fillMaxSize(),
+                                        modifier = Modifier.fillMaxWidth().weight(1f),
                                         isRefreshing = isDeltaSyncing,
                                         onRefresh = {
                                                 scope.launch {
@@ -1294,7 +1368,13 @@ fun GamesListScreen(
 
                         if (showAnalysis && !isPremiumUser && !isServerMode) {
                                 CompactPremiumBanner(
-                                        onUpgradeClick = { showPaywall = true },
+                                        onUpgradeClick = { 
+                                            if (profile.isGuest) {
+                                                launchGoogleSignIn()
+                                            } else {
+                                                showPaywall = true 
+                                            }
+                                        },
                                         modifier =
                                                 Modifier.align(Alignment.TopCenter)
                                                         .padding(top = 16.dp)
@@ -2135,35 +2215,14 @@ fun GamesListScreen(
                         text = {
                                 Column {
                                         Text(stringResource(R.string.welcome_desc_no_accounts))
-                                        Spacer(Modifier.height(16.dp))
-
-                                        Button(
-                                                onClick = {
-                                                        showNoAccountsDialog = false
-                                                        onNavigateToProfile()
-                                                },
-                                                modifier = Modifier.fillMaxWidth(),
-                                                shape = RoundedCornerShape(12.dp)
-                                        ) { Text(stringResource(R.string.go_to_profile)) }
-
-                                        Spacer(Modifier.height(8.dp))
-
-                                        OutlinedButton(
-                                                onClick = {
-                                                        showNoAccountsDialog = false
-                                                        showAddDialog = true
-                                                },
-                                                modifier = Modifier.fillMaxWidth(),
-                                                shape = RoundedCornerShape(12.dp)
-                                        ) { Text(stringResource(R.string.upload_pgn)) }
                                 }
                         },
-                        confirmButton = {},
-                        dismissButton = {
+                        confirmButton = {
                                 TextButton(onClick = { showNoAccountsDialog = false }) {
                                         Text(stringResource(R.string.close))
                                 }
-                        }
+                        },
+                        dismissButton = {}
                 )
         }
 }

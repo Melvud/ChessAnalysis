@@ -99,4 +99,8 @@ interface GameDao {
     // 🌟 НОВЫЙ МЕТОД ДЛЯ ДЕЛЬТА-ЗАГРУЗКИ 🌟
     @Query("SELECT MAX(gameTimestamp) FROM external_games WHERE provider = :provider")
     suspend fun getNewestGameTimestamp(provider: String): Long?
+
+    // 🌟 Удаление тестовых игр 🌟
+    @Query("DELETE FROM external_games WHERE isTest = 1")
+    suspend fun deleteTestGames()
 }

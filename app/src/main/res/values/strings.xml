@@ -345,7 +345,7 @@
     <string name="error_google_already_linked">This Google account is already linked to another user.</string>
     <string name="switched_to_server_mode">Switch to server mode</string>
     <string name="welcome_title">Welcome</string>
-    <string name="welcome_desc_no_accounts">It looks like you haven\'t connected any accounts yet. You can upload a PGN file or go to your profile to connect Lichess/Chess.com.</string>
+    <string name="welcome_desc_no_accounts">We have loaded Magnus Carlsen\'s test games for you. To load your own games, click the \'Load Games\' button at the top and enter your Lichess/Chess.com username or upload a PGN file.</string>
     <string name="go_to_profile">Go to Profile</string>
     <string name="upload_pgn">Upload PGN</string>
     <string name="games">Games</string>
@@ -377,4 +377,17 @@
     <string name="notif_msg_brilliant_2">Your recent play was impressive. Keep it up!</string>
     <string name="notif_title_brilliant_3">Grandmaster moves?</string>
     <string name="notif_msg_brilliant_3">You found a brilliant idea recently. Analyze more games!</string>
+
+    <!-- Guest Mode -->
+    <string name="continue_as_guest">Continue as Guest</string>
+    <string name="guest_mode_title">Guest Mode</string>
+    <string name="guest_mode_desc">You are using the app as a guest. Your data is saved locally. Create an account to sync your data and access premium features.</string>
+    <string name="create_account">Create Account</string>
+    <string name="guest_user">Guest User</string>
+    <string name="exit_guest_mode">Exit Guest Mode</string>
+    
+    <!-- Onboarding -->
+    <string name="onboarding_title">Tutorial</string>
+    <string name="onboarding_skip">Skip</string>
+    <string name="onboarding_finish">Start</string>
 </resources>

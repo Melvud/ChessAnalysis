@@ -30,7 +30,8 @@ data class ExternalGameEntity(
     val eco: String?,
     val pgn: String?,
     val gameTimestamp: Long = System.currentTimeMillis(), // Время игры из PGN
-    val addedTimestamp: Long = System.currentTimeMillis() // Время добавления в БД
+    val addedTimestamp: Long = System.currentTimeMillis(), // Время добавления в БД
+    val isTest: Boolean = false // Флаг тестовой игры
 )
 
 @Entity(tableName = "report_cache")

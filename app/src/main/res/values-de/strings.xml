@@ -340,7 +340,7 @@
     <string name="complete_registration_desc">Bitte bestätigen Sie Ihren Spitznamen und optionale Schach-Benutzernamen, um die Einrichtung Ihres Kontos abzuschließen.</string>
     <string name="error_google_already_linked">Dieses Google-Konto ist bereits mit einem anderen Benutzer verknüpft.</string>
     <string name="switched_to_server_mode">In den Server-Modus gewechselt</string>
-    <string name="welcome_desc_no_accounts">Es scheint, dass Sie noch keine Konten verbunden haben. Sie können eine PGN-Datei hochladen oder zu Ihrem Profil gehen, um Lichess/Chess.com zu verbinden.</string>
+    <string name="welcome_desc_no_accounts">Wir haben Magnus Carlsens Testpartien für Sie geladen. Um Ihre eigenen Partien zu laden, klicken Sie oben auf \'Partien laden\' und geben Sie Ihren Lichess/Chess.com-Benutzernamen ein oder laden Sie eine PGN-Datei hoch.</string>
     <string name="go_to_profile">Zum Profil</string>
     <string name="upload_pgn">PGN hochladen</string>
     <string name="games">Spiele</string>
@@ -372,4 +372,12 @@
     <string name="notif_msg_brilliant_2">Ihr letztes Spiel war beeindruckend. Weiter so!</string>
     <string name="notif_title_brilliant_3">Großmeister-Züge?</string>
     <string name="notif_msg_brilliant_3">Sie hatten eine fantastische Idee. Analysieren Sie mehr Spiele!</string>
+
+    <!-- Guest Mode -->
+    <string name="continue_as_guest">Als Gast fortfahren</string>
+    <string name="guest_mode_title">Gastmodus</string>
+    <string name="guest_mode_desc">Sie nutzen die App als Gast. Ihre Daten werden lokal gespeichert. Erstellen Sie ein Konto, um Ihre Daten zu synchronisieren und auf Premium-Funktionen zuzugreifen.</string>
+    <string name="create_account">Konto erstellen</string>
+    <string name="guest_user">Gastbenutzer</string>
+    <string name="exit_guest_mode">Gastmodus verlassen</string>
 </resources>

@@ -14,7 +14,7 @@
     <!-- Login Screen -->
     <string name="welcome">Добро пожаловать</string>
     <string name="welcome_title">Добро пожаловать</string>
-    <string name="welcome_desc_no_accounts">Похоже, вы еще не подключили аккаунты. Вы можете загрузить PGN файл или перейти в профиль для подключения Lichess/Chess.com.</string>
+    <string name="welcome_desc_no_accounts">Мы загрузили для вас тестовые партии Магнуса Карлсена. Чтобы загрузить свои партии, нажмите кнопку \'Загрузить партии\' вверху и введите имя пользователя Lichess/Chess.com или загрузите PGN-файл.</string>
     <string name="go_to_profile">В профиль</string>
     <string name="upload_pgn">Загрузить PGN</string>
     <string name="games">Партии</string>
@@ -386,4 +386,17 @@
     <string name="notif_msg_brilliant_2">Ваша недавняя игра впечатляет. Так держать!</string>
     <string name="notif_title_brilliant_3">Гроссмейстерские ходы?</string>
     <string name="notif_msg_brilliant_3">Вы нашли блестящую идею. Анализируйте больше партий!</string>
+
+    <!-- Guest Mode -->
+    <string name="continue_as_guest">Продолжить как гость</string>
+    <string name="guest_mode_title">Гостевой режим</string>
+    <string name="guest_mode_desc">Вы используете приложение как гость. Ваши данные сохраняются локально. Создайте аккаунт для синхронизации данных и доступа к премиум функциям.</string>
+    <string name="create_account">Создать аккаунт</string>
+    <string name="guest_user">Гость</string>
+    <string name="exit_guest_mode">Выйти из гостевого режима</string>
+
+    <!-- Onboarding -->
+    <string name="onboarding_title">Обучение</string>
+    <string name="onboarding_skip">Пропустить</string>
+    <string name="onboarding_finish">Начать</string>
 </resources>

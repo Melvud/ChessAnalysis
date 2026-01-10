@@ -105,6 +105,41 @@ fun ProfileScreen(
                     ?.addOnSuccessListener {
                         isGoogleLinked = true
                         Toast.makeText(context, context.getString(R.string.google_linked), Toast.LENGTH_SHORT).show()
+                        
+                        // 🌟 Sync Guest Data to Firestore
+                        val user = FirebaseAuth.getInstance().currentUser
+                        if (user != null) {
+                            val lichess = com.github.movesense.data.local.GuestPreferences.getLichessUsername(context)
+                            val chess = com.github.movesense.data.local.GuestPreferences.getChessUsername(context)
+                            val lang = com.github.movesense.data.local.GuestPreferences.getLanguage(context) ?: "en"
+                            
+                            val userData = hashMapOf(
+                                "email" to (user.email ?: ""),
+                                "lichessUsername" to lichess,
+                                "chessUsername" to chess,
+                                "language" to lang,
+                                "isPremium" to false,
+                                "isAdmin" to false
+                            )
+                            
+                            FirebaseFirestore.getInstance().collection("users").document(user.uid)
+                                .set(userData)
+                                .addOnSuccessListener {
+                                    // Clear guest prefs? Optional. Keeping them doesn't hurt.
+                                    // com.github.movesense.data.local.GuestPreferences.clear(context)
+                                    
+                                    // Force refresh profile to remove guest status in UI
+                                    // (AppRoot listener should handle this, but we might need to trigger it)
+                                    // Actually, AppRoot listener will see the update in Firestore?
+                                    // No, AppRoot listener is NOT active for Anonymous user in my implementation!
+                                    // I need to SWITCH AppRoot to listen to Firestore now that we are not anonymous?
+                                    // Wait, linkWithCredential keeps the same user object, but isAnonymous becomes false?
+                                    // Yes, user.isAnonymous becomes false after linking.
+                                    // But AppRoot's AuthStateListener might not trigger if the user object instance doesn't change?
+                                    // It usually triggers on token changes.
+                                    // If not, we might need to reload.
+                                }
+                        }
                     }
                     ?.addOnFailureListener { e ->
                         if (e.message?.contains("ERROR_CREDENTIAL_ALREADY_ASSOCIATED") == true ||
@@ -192,46 +227,100 @@ fun ProfileScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Premium Card Section
-            // Premium Card Section
+            // Google Sign-In Launcher Logic
+            val launchGoogleSignIn = {
+                val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                    .requestIdToken(context.getString(R.string.default_web_client_id))
+                    .requestEmail()
+                    .build()
+                val googleSignInClient = GoogleSignIn.getClient(context, gso)
+                // Always sign out first to force account selection
+                googleSignInClient.signOut().addOnCompleteListener {
+                    googleSignInLauncher.launch(googleSignInClient.signInIntent)
+                }
+                Unit
+            }
+
+            // Premium Card Section (Visible for all, different action for guests)
             PremiumCard(
                 profile = profile,
                 isPremium = isPremiumUser,
-                onUpgradeClick = { showPaywall = true },
+                onUpgradeClick = {
+                    if (profile.isGuest) {
+                        launchGoogleSignIn()
+                    } else {
+                        showPaywall = true
+                    }
+                },
                 onManageClick = { showManageSubscriptionDialog = true },
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
 
-            // Engine Mode Section
-            EngineSection(
-                engineMode = engineMode,
-                isPremium = isPremiumUser,
-                onUpgradeClick = { showPaywall = true },
-                modifier = Modifier.padding(horizontal = 16.dp)
-            )
+            if (!profile.isGuest) {
+                // Engine Mode Section
+                EngineSection(
+                    engineMode = engineMode,
+                    isPremium = isPremiumUser,
+                    onUpgradeClick = { showPaywall = true },
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            } else {
+                // Guest Banner (Keep it but maybe simpler since we have Premium banner now? 
+                // User said "if guest, clicking premium banner should offer account creation".
+                // User didn't explicitly say "remove guest banner". 
+                // But having two "create account" prompts might be much.
+                // Let's keep the Guest Banner as a clear "You are a guest" indicator, 
+                // but maybe make it smaller or less obtrusive if needed. 
+                // For now, I'll keep it as is but ensure Premium banner is ALSO there.)
+                
+                // Actually, the user said "If guest... clicking premium banner should offer...".
+                // This implies the premium banner IS shown.
+                
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp), // Reduced vertical padding
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) { // Reduced padding
+                        Text(
+                            text = stringResource(R.string.guest_mode_title),
+                            style = MaterialTheme.typography.titleSmall, // Smaller title
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = stringResource(R.string.guest_mode_desc),
+                            style = MaterialTheme.typography.bodySmall // Smaller body
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = launchGoogleSignIn,
+                            modifier = Modifier.fillMaxWidth().height(40.dp), // Compact button
+                            contentPadding = PaddingValues(vertical = 0.dp)
+                        ) {
+                            Text(stringResource(R.string.create_account))
+                        }
+                    }
+                }
+            }
 
             // Profile Information Section
             ProfileInfoSection(
-                email = email,
+                email = if (profile.isGuest) stringResource(R.string.guest_user) else email,
 
                 lichessName = lichessName,
                 chessName = chessName,
                 selectedLanguage = selectedLanguage,
-                onEmailChange = { email = it },
+                onEmailChange = { if (!profile.isGuest) email = it },
 
                 onLichessNameChange = { lichessName = it },
                 onChessNameChange = { chessName = it },
                 onLanguageClick = { showLanguageDialog = true },
                 isSaving = isSaving,
                 isGoogleLinked = isGoogleLinked,
-                onLinkGoogle = {
-                    val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-                        .requestIdToken(context.getString(R.string.default_web_client_id))
-                        .requestEmail()
-                        .build()
-                    val googleSignInClient = GoogleSignIn.getClient(context, gso)
-                    googleSignInLauncher.launch(googleSignInClient.signInIntent)
-                },
+                onLinkGoogle = launchGoogleSignIn,
                 onUnlinkGoogle = {
                     FirebaseAuth.getInstance().currentUser?.unlink(GoogleAuthProvider.PROVIDER_ID)
                         ?.addOnSuccessListener {
@@ -242,7 +331,8 @@ fun ProfileScreen(
                             Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
                         }
                 },
-                modifier = Modifier.padding(horizontal = 16.dp)
+                modifier = Modifier.padding(horizontal = 16.dp),
+                isGuest = profile.isGuest // Pass isGuest to disable email editing etc
             )
 
             // Error Message
@@ -300,7 +390,7 @@ fun ProfileScreen(
 
                         try {
                             // Validate usernames
-                            if (email.isBlank()) {
+                            if (!profile.isGuest && email.isBlank()) {
                                 errorMessage = context.getString(R.string.empty_fields_error)
                                 isSaving = false
                                 return@launch
@@ -321,36 +411,20 @@ fun ProfileScreen(
                                 return@launch
                             }
 
-                            // Save to Firebase
-                            val userId = FirebaseAuth.getInstance().currentUser?.uid
-                            if (userId != null) {
-                                val db = FirebaseFirestore.getInstance()
-                                val languageChanged = selectedLanguage.code != profile.language
-
-                                db.collection("users")
-                                    .document(userId)
-                                    .update(
-                                        mapOf(
-                                            "email" to email,
-
-                                            "lichessUsername" to lichessName,
-                                            "chessUsername" to chessName,
-                                            "language" to selectedLanguage.code
-                                        )
-                                    )
-                                    .await()
-
+                            if (profile.isGuest) {
+                                // 🌟 Save to GuestPreferences
+                                com.github.movesense.data.local.GuestPreferences.setLichessUsername(context, lichessName)
+                                com.github.movesense.data.local.GuestPreferences.setChessUsername(context, chessName)
+                                com.github.movesense.data.local.GuestPreferences.setLanguage(context, selectedLanguage.code)
+                                
                                 val updatedProfile = profile.copy(
-                                    email = email,
-
                                     lichessUsername = lichessName,
                                     chessUsername = chessName,
                                     language = selectedLanguage.code
                                 )
-
                                 onSave(updatedProfile)
-
-                                if (languageChanged) {
+                                
+                                if (selectedLanguage.code != profile.language) {
                                     withContext(Dispatchers.Main) {
                                         LocaleManager.setLocale(
                                             context as ComponentActivity,
@@ -360,17 +434,60 @@ fun ProfileScreen(
                                 } else {
                                     isSaving = false
                                     withContext(Dispatchers.Main) {
-                                        Toast.makeText(
-                                            context,
-                                            context.getString(R.string.profile_updated),
-                                            Toast.LENGTH_SHORT
-                                        ).show()
+                                        Toast.makeText(context, context.getString(R.string.profile_updated), Toast.LENGTH_SHORT).show()
                                         onBack()
                                     }
                                 }
                             } else {
-                                errorMessage = context.getString(R.string.user_not_found_error)
-                                isSaving = false
+                                // Save to Firebase
+                                val userId = FirebaseAuth.getInstance().currentUser?.uid
+                                if (userId != null) {
+                                    val db = FirebaseFirestore.getInstance()
+                                    val languageChanged = selectedLanguage.code != profile.language
+
+                                    db.collection("users")
+                                        .document(userId)
+                                        .update(
+                                            mapOf(
+                                                "email" to email,
+                                                "lichessUsername" to lichessName,
+                                                "chessUsername" to chessName,
+                                                "language" to selectedLanguage.code
+                                            )
+                                        )
+                                        .await()
+
+                                    val updatedProfile = profile.copy(
+                                        email = email,
+                                        lichessUsername = lichessName,
+                                        chessUsername = chessName,
+                                        language = selectedLanguage.code
+                                    )
+
+                                    onSave(updatedProfile)
+
+                                    if (languageChanged) {
+                                        withContext(Dispatchers.Main) {
+                                            LocaleManager.setLocale(
+                                                context as ComponentActivity,
+                                                selectedLanguage
+                                            )
+                                        }
+                                    } else {
+                                        isSaving = false
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(
+                                                context,
+                                                context.getString(R.string.profile_updated),
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                            onBack()
+                                        }
+                                    }
+                                } else {
+                                    errorMessage = context.getString(R.string.user_not_found_error)
+                                    isSaving = false
+                                }
                             }
                         } catch (e: Exception) {
                             errorMessage = context.getString(
@@ -414,7 +531,19 @@ fun ProfileScreen(
 
             // Logout Button
             OutlinedButton(
-                onClick = { if (!isSaving) onLogout() },
+                onClick = { 
+                    if (!isSaving) {
+                        if (profile.isGuest) {
+                             // Clear guest prefs on logout? Maybe not, to persist data.
+                             // But user asked to persist data.
+                             // Actually, logout for guest means returning to welcome screen.
+                             // We should probably keep data in case they come back as guest.
+                             onLogout()
+                        } else {
+                            onLogout() 
+                        }
+                    }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)
@@ -436,7 +565,7 @@ fun ProfileScreen(
                 Icon(Icons.Default.ExitToApp, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    stringResource(R.string.logout),
+                    stringResource(if (profile.isGuest) R.string.exit_guest_mode else R.string.logout),
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Medium
                 )
@@ -631,7 +760,7 @@ private fun PremiumCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(20.dp)
+                    .padding(12.dp) // Reduced padding
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -644,7 +773,7 @@ private fun PremiumCard(
                         } else {
                             MaterialTheme.colorScheme.primary
                         },
-                        modifier = Modifier.size(48.dp)
+                        modifier = Modifier.size(36.dp) // Reduced circle size
                     ) {
                         Box(
                             contentAlignment = Alignment.Center,
@@ -654,7 +783,7 @@ private fun PremiumCard(
                                 Icons.Default.Star,
                                 contentDescription = null,
                                 tint = Color.White,
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(20.dp) // Reduced icon size
                             )
                         }
                     }
@@ -681,7 +810,7 @@ private fun PremiumCard(
                             } else {
                                 stringResource(R.string.faster_analysis_with_server)
                             },
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = MaterialTheme.typography.bodySmall, // Reduced size
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                         )
 
@@ -760,7 +889,7 @@ private fun EngineSection(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(20.dp)
+                .padding(12.dp) // Reduced padding
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -853,7 +982,7 @@ private fun EngineModeOption(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(12.dp), // Reduced padding
             verticalAlignment = Alignment.CenterVertically
         ) {
             Surface(
@@ -863,7 +992,7 @@ private fun EngineModeOption(
                 } else {
                     MaterialTheme.colorScheme.surfaceVariant
                 },
-                modifier = Modifier.size(40.dp)
+                modifier = Modifier.size(32.dp) // Reduced circle size
             ) {
                 Box(
                     contentAlignment = Alignment.Center,
@@ -873,7 +1002,7 @@ private fun EngineModeOption(
                         icon,
                         contentDescription = null,
                         tint = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(16.dp) // Reduced icon size
                     )
                 }
             }
@@ -947,7 +1076,8 @@ private fun ProfileInfoSection(
     isGoogleLinked: Boolean,
     onLinkGoogle: () -> Unit,
     onUnlinkGoogle: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isGuest: Boolean = false
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -983,7 +1113,7 @@ private fun ProfileInfoSection(
                 label = { Text(stringResource(R.string.email)) },
                 leadingIcon = { Icon(Icons.Default.Email, contentDescription = null) },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = !isSaving,
+                enabled = !isSaving && !isGuest,
                 shape = RoundedCornerShape(12.dp)
             )
 

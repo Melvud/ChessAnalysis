@@ -340,7 +340,7 @@
     <string name="complete_registration_desc">Harap konfirmasikan nama panggilan dan nama pengguna catur opsional Anda untuk menyelesaikan pengaturan akun Anda.</string>
     <string name="error_google_already_linked">Akun Google ini sudah terhubung dengan pengguna lain.</string>
     <string name="switched_to_server_mode">Beralih ke mode server</string>
-    <string name="welcome_desc_no_accounts">Sepertinya Anda belum menghubungkan akun apa pun. Anda dapat mengunggah file PGN atau pergi ke profil Anda untuk menghubungkan Lichess/Chess.com.</string>
+    <string name="welcome_desc_no_accounts">Kami telah memuat game uji Magnus Carlsen untuk Anda. Untuk memuat game Anda sendiri, klik tombol \'Muat Game\' di bagian atas dan masukkan nama pengguna Lichess/Chess.com Anda atau unggah file PGN.</string>
     <string name="go_to_profile">Ke Profil</string>
     <string name="upload_pgn">Unggah PGN</string>
     <string name="games">Permainan</string>
@@ -372,4 +372,12 @@
     <string name="notif_msg_brilliant_2">Permainan terakhir Anda mengesankan. Teruskan!</string>
     <string name="notif_title_brilliant_3">Langkah Grandmaster?</string>
     <string name="notif_msg_brilliant_3">Anda punya ide fantastis. Analisis lebih banyak permainan!</string>
+
+    <!-- Guest Mode -->
+    <string name="continue_as_guest">Lanjutkan sebagai Tamu</string>
+    <string name="guest_mode_title">Mode Tamu</string>
+    <string name="guest_mode_desc">Anda menggunakan aplikasi sebagai tamu. Data Anda disimpan secara lokal. Buat akun untuk menyinkronkan data Anda dan mengakses fitur premium.</string>
+    <string name="create_account">Buat Akun</string>
+    <string name="guest_user">Pengguna Tamu</string>
+    <string name="exit_guest_mode">Keluar dari Mode Tamu</string>
 </resources>
