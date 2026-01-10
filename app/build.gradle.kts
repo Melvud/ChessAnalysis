@@ -19,8 +19,8 @@ android {
         applicationId = "com.github.movesense"
         minSdk = 24
         targetSdk = 36
-        versionCode = 18
-        versionName = "0.1.2"
+        versionCode = 19
+        versionName = "0.1.3"
 
     }
 
@@ -39,7 +39,7 @@ android {
 
     androidResources {
         @Suppress("UnstableApiUsage")
-        localeFilters += listOf("en", "ru", "es")
+        localeFilters += listOf("en", "ru", "es", "hi", "pt", "de", "fr", "pl", "in", "uk")
 
         noCompress += listOf("wasm", "nnue", "json", "js", "html")
     }
@@ -105,6 +105,7 @@ dependencies {
     implementation(libs.androidx.ui.unit)
     implementation(libs.androidx.animation.core)
     implementation(libs.material3)
+    implementation(libs.androidx.foundation)
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("com.google.android.material:material:1.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor")
@@ -140,6 +141,9 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences-core:1.0.0")
     implementation("com.google.android.gms:play-services-auth:21.2.0")
     implementation("androidx.work:work-runtime-ktx:2.9.0")
+    
+    // Balloon library for beautiful tooltips
+    implementation("com.github.skydoves:balloon-compose:1.6.4")
 
     implementation("com.android.billingclient:billing-ktx:7.1.1")
     testImplementation("junit:junit:4.13.2")

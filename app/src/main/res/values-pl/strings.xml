@@ -1,0 +1,375 @@
+<resources>
+    <string name="app_name">MoveSense</string>
+
+    <!-- Common -->
+    <string name="ok">OK</string>
+    <string name="cancel">Anuluj</string>
+    <string name="save">Zapisz</string>
+    <string name="back">Wstecz</string>
+    <string name="delete">Usuń</string>
+    <string name="close">Zamknij</string>
+    <string name="loading">Ładowanie…</string>
+    <string name="error">Błąd</string>
+
+    <!-- Login Screen -->
+    <string name="welcome">Witaj</string>
+    <string name="welcome_title">Witaj</string>
+    <string name="login_title">Zaloguj się do MoveSense</string>
+    <string name="email">E-mail</string>
+    <string name="password">Hasło</string>
+    <string name="login">Zaloguj się</string>
+    <string name="register">Zarejestruj się</string>
+    <string name="no_account">Nie masz konta?</string>
+    <string name="have_account">Masz już konto?</string>
+    <string name="login_error">Błąd logowania: %s</string>
+    <string name="register_error">Błąd rejestracji: %s</string>
+
+    <!-- Profile Screen -->
+    <string name="profile">Profil</string>
+    <string name="lichess_username">Nazwa użytkownika Lichess</string>
+    <string name="chesscom_username">Nazwa użytkownika Chess.com</string>
+    <string name="language">Język</string>
+    <string name="logout">Wyloguj się</string>
+    <string name="save_profile">Zapisz profil</string>
+    <string name="profile_updated">Profil zaktualizowany</string>
+
+    <!-- Games List Screen -->
+    <string name="games_list">Lista gier</string>
+    <string name="add_game">Dodaj grę</string>
+    <string name="no_games">Nie znaleziono gier</string>
+    <string name="filter_all">Wszystkie (%d)</string>
+    <string name="filter_lichess">Lichess</string>
+    <string name="filter_chesscom">Chess.com</string>
+    <string name="filter_manual">Przesłane</string>
+    <string name="syncing">Synchronizacja…</string>
+    <string name="games_added">Dodano nowe gry: %d</string>
+    <string name="sync_error">Błąd synchronizacji: %s</string>
+    <string name="analyzed">Przeanalizowane</string>
+
+    <!-- Add Game Dialog -->
+    <string name="add_game_title">Dodaj grę</string>
+    <string name="paste_pgn_hint">Wklej pełne PGN lub wybierz plik .pgn</string>
+    <string name="select_file">Wybierz plik .pgn</string>
+    <string name="game_added">Gra dodana</string>
+    <string name="empty_pgn">PGN jest pusty</string>
+    <string name="add_error">Błąd: %s</string>
+
+    <!-- Game Report Screen -->
+    <string name="game_analysis">Analiza gry</string>
+    <string name="flip_board">Odwróć szachownicę</string>
+    <string name="to_start">Na początek</string>
+    <string name="previous">Poprzedni</string>
+    <string name="play">Odtwórz</string>
+    <string name="pause">Pauza</string>
+    <string name="next">Następny</string>
+    <string name="to_end">Na koniec</string>
+
+    <!-- Analysis Settings -->
+    <string name="analysis_settings">Ustawienia analizy</string>
+    <string name="depth">Głębokość: %d</string>
+    <string name="multipv">Linie (MultiPV): %d</string>
+    <string name="settings_note">💡 Ustawienia są zapisywane osobno dla każdej pozycji</string>
+
+    <!-- Engine Lines Panel -->
+    <string name="engine_lines">Linie silnika</string>
+    <string name="calculating">Obliczanie…</string>
+    <string name="no_lines">Brak dostępnych linii dla tej pozycji</string>
+
+    <!-- Report Screen -->
+    <string name="game_report">Raport z gry</string>
+    <string name="performance_evaluation">Ocena wydajności</string>
+    <string name="view_report">Zobacz raport</string>
+    <string name="return_back">Wróć</string>
+
+    <!-- Move Classifications -->
+    <string name="move_splendid">Genialny!!</string>
+    <string name="move_perfect">Idealny!</string>
+    <string name="move_best">Najlepszy</string>
+    <string name="move_excellent">Doskonały</string>
+    <string name="move_okay">Dobry</string>
+    <string name="move_opening">Teoria</string>
+    <string name="move_inaccuracy">Niedokładność</string>
+    <string name="move_mistake">Błąd</string>
+    <string name="move_forced">Wymuszony</string>
+    <string name="move_blunder">Podstawka</string>
+
+    <!-- Time Control -->
+    <string name="bullet">Bullet</string>
+    <string name="blitz">Blitz</string>
+    <string name="rapid">Rapid</string>
+    <string name="classical">Klasyczne</string>
+
+    <!-- Player Info -->
+    <string name="white">Białe</string>
+    <string name="black">Czarne</string>
+    <string name="rating">(%d)</string>
+
+    <!-- Navigation -->
+    <string name="nav_games">Gry</string>
+    <string name="nav_profile">Profil</string>
+
+    <!-- Re-analyze -->
+    <string name="reanalyze">Przeanalizuj ponownie</string>
+    <string name="reanalyze_title">Przeanalizuj ponownie</string>
+
+    <!-- Language Names -->
+    <string name="lang_russian">Русский</string>
+    <string name="lang_english">English</string>
+    <string name="lang_spanish">Español</string>
+    <string name="lang_hindi">हिन्दी</string>
+    <string name="lang_portuguese">Português</string>
+    <string name="lang_german">Deutsch</string>
+    <string name="lang_french">Français</string>
+    <string name="lang_polish">Polski</string>
+    <string name="lang_indonesian">Bahasa Indonesia</string>
+    <string name="lang_ukrainian">Українська</string>
+
+    <!-- GameReportScreen -->
+    <string name="depth_label">Głębokość</string>
+    <string name="multipv_label">Linie (MultiPV)</string>
+
+    <!-- GamesListScreen -->
+    <string name="analysis_error">Błąd analizy: %s</string>
+    <string name="pgn_not_found">Nie znaleziono PGN</string>
+    <string name="no_nicknames_error">Najpierw ustaw swoją nazwę użytkownika Lichess lub Chess.com w profilu.</string>
+
+    <!-- LoginScreen -->
+    <string name="show_password">Pokaż hasło</string>
+    <string name="hide_password">Ukryj hasło</string>
+    <string name="profile_load_error">Błąd ładowania profilu</string>
+    <string name="profile_save_error">Błąd zapisywania profilu</string>
+    <string name="reset_email_sent">Wysłano e-mail resetujący</string>
+    <string name="error_sending_reset">Błąd wysyłania e-maila: %s</string>
+    <string name="sign_in_with_google">Zaloguj się przez Google</string>
+    <string name="link_google">Połącz konto Google</string>
+    <string name="unlink_google">Odłącz konto Google</string>
+    <string name="google_linked">Konto Google połączone</string>
+    <string name="google_unlinked">Konto Google odłączone</string>
+    <string name="link_error">Błąd łączenia: %s</string>
+    <string name="forgot_password">Zapomniałeś hasła?</string>
+    <string name="reset_password">Zresetuj hasło</string>
+    <string name="enter_email">Wpisz swój e-mail</string>
+    <string name="send_reset_link">Wyślij link</string>
+    <string name="reset_link_sent">Link wysłany do %s</string>
+    <string name="reset_error">Błąd wysyłania: %s</string>
+    <string name="verification_sent">Weryfikacja wysłana do %s</string>
+    <string name="verify_email">Zweryfikuj swój e-mail</string>
+
+    <string name="sign_in_google">Zaloguj się przez Google</string>
+
+    <!-- ProfileScreen -->
+    <string name="engine_mode">Tryb silnika</string>
+    <string name="engine_server">Serwer</string>
+    <string name="engine_server_desc">Szybka analiza na serwerze</string>
+    <string name="engine_local">Lokalny</string>
+    <string name="engine_local_desc">Analiza na urządzeniu</string>
+    <string name="switch_error">Błąd przełączania: %s</string>
+    <string name="empty_fields_error">E-mail i nazwa nie mogą być puste</string>
+    <string name="user_not_found_error">Użytkownik nie znaleziony</string>
+    <string name="save_error">Błąd zapisywania: %s</string>
+    <string name="saving">Zapisywanie…</string>
+    <string name="unknown">Nieznany</string>
+    <!-- ReportScreen -->
+    <string name="move_classification">Klasyfikacja ruchu</string>
+
+    <string name="analyzing">Analizowanie</string>
+    <string name="show_eval_bar_mini">Pokaż pasek oceny na mini-szachownicy</string>
+    <string name="settings">Ustawienia</string>
+
+    <string name="variation_mode">Tryb wariacji</string>
+    <string name="variation_hint">Jesteś w wariacji. Dotknij "Wyjdź", aby wrócić</string>
+    <string name="exit_variation">Wyjdź</string>
+
+    <!-- Game termination types -->
+    <string name="checkmate">♔ Mat</string>
+    <string name="checkmate_by">♔ Mat przez %1$s</string>
+    <string name="timeout">⏱ Czas minął</string>
+    <string name="timeout_lost">⏱ Czas minął: %1$s</string>
+    <string name="resigned">🏳 %1$s poddał się</string>
+    <string name="resignation">🏳 Poddanie</string>
+    <string name="stalemate">= Pat</string>
+    <string name="draw">= Remis</string>
+    <string name="insufficient_material">= Niewystarczający materiał</string>
+    <string name="threefold_repetition">= Trzykrotne powtórzenie</string>
+    <string name="fifty_move_rule">= Zasada 50 ruchów</string>
+
+    <!-- GamesListScreen -->
+    <string name="remaining_time">Pozostały czas: %1$s</string>
+    <string name="select_language">Wybierz język</string>
+
+    <string name="loading_lichess">Ładowanie gier Lichess…</string>
+    <string name="loading_chesscom">Ładowanie gier Chess.com…</string>
+    <string name="load_games_title">Załaduj gry</string>
+    <string name="load_games_desc">Wybierz zakres dat lub załaduj wszystkie gry ze swoich kont.</string>
+    <string name="date_from">Od</string>
+    <string name="date_until">Do</string>
+    <string name="load_date_range">Załaduj zakres</string>
+    <string name="load_all_games">Załaduj wszystko</string>
+    <string name="load_all_warning_title">Załadować wszystko?</string>
+    <string name="load_all_warning_message">Ładowanie wszystkich gier może zająć dużo czasu, jeśli masz dużą historię. Czy na pewno chcesz kontynuować?</string>
+    <string name="load_all_confirm">Załaduj</string>
+    <string name="load_game">Załaduj grę</string>
+
+    <string name="victory_vs_titled">Zwycięstwo z utytułowanym graczem</string>
+
+    <!-- Settings Dialog -->
+    <string name="show_eval_bar">Pokaż pasek oceny</string>
+    <string name="eval_bar_position">Pozycja paska</string>
+    <string name="left">Lewo</string>
+    <string name="top">Góra</string>
+    <string name="show_best_move_arrows">Pokaż strzałki najlepszego ruchu</string>
+    <string name="show_threats">Pokaż groźby</string>
+    <string name="coming_soon">Wkrótce...</string>
+    <string name="show_engine_lines">Pokaż linie silnika</string>
+    <string name="number_of_lines">Liczba linii</string>
+
+    <!-- Depth Dialog -->
+    <string name="select_depth">Wybierz głębokość</string>
+    <string name="depth_description">Głębokość analizy wzrasta automatycznie od wybranej wartości do 18. Większa głębokość oznacza dokładniejszą ocenę, ale wolniejsze obliczenia.</string>
+    <string name="display_settings">Ustawienia wyświetlania</string>
+    <string name="show_best_move_arrow">Pokaż strzałkę najlepszego ruchu</string>
+    <string name="loading_error">Błąd ładowania</string>
+
+
+    <!-- Premium Features -->
+    <string name="unlock_premium">Odblokuj swój potencjał</string>
+    <string name="premium_subtitle">Opanuj szachy dzięki natychmiastowej, profesjonalnej analizie.</string>
+    <string name="upgrade_to_premium">Ulepsz do Premium</string>
+    <string name="premium">Premium</string>
+    <string name="free">Darmowe</string>
+
+    <!-- Features -->
+    <string name="feature_fast_analysis">Błyskawiczna analiza</string>
+    <string name="feature_fast_analysis_desc">Silnik serwerowy analizuje gry 5x szybciej</string>
+    <string name="feature_server_engine">Dostęp do silnika serwerowego</string>
+    <string name="feature_server_engine_desc">Użyj potężnego silnika Stockfish w chmurze</string>
+    <string name="feature_deep_analysis">Głęboka analiza</string>
+    <string name="feature_deep_analysis_desc">Uzyskaj dokładniejsze oceny z większą głębokością</string>
+
+    <!-- Benefits -->
+    <string name="benefit_server_engine">✓ Silnik serwerowy</string>
+    <string name="benefit_fast_analysis">✓ Analiza 5x szybsza</string>
+    <string name="benefit_deep_analysis">✓ Głębsza ocena pozycji</string>
+    <string name="premium_benefits">Korzyści Premium:</string>
+
+    <!-- Banner -->
+    <!-- Banner -->
+    <string name="faster_analysis_with_server">5x szybsza analiza w trybie serwerowym</string>
+    <string name="upgrade">Ulepsz</string>
+    <string name="upgrade_for_faster_analysis">⚡ Ulepsz, aby uzyskać prawie natychmiastową analizę (2-3 s)</string>
+    <string name="banner_promo_title">50% TANIEJ - Ograniczony czas!</string>
+    <string name="banner_promo_desc">Natychmiastowa analiza (2-3s) i wyższa dokładność.</string>
+    <string name="banner_standard_title">Przestań czekać na analizę</string>
+    <string name="banner_standard_desc">Wyniki w kilka sekund dzięki Premium.</string>
+
+    <!-- Subscription Management -->
+    <string name="subscription_status">Status subskrypcji</string>
+    <string name="manage_subscription">Zarządzaj subskrypcją</string>
+    <string name="manage_subscription_description">Zarządzaj subskrypcją w sklepie Google Play lub przywróć zakupy</string>
+    <string name="open_play_store">Otwórz Sklep Play</string>
+    <string name="restore_purchases">Przywróć zakupy</string>
+    <string name="subscription_expires">Wygasa: %s</string>
+    <string name="subscription_will_renew">Zostanie odnowiona automatycznie</string>
+    <string name="subscription_will_not_renew">Nie zostanie odnowiona (Anulowana)</string>
+
+    <!-- Purchase -->
+    <string name="subscribe_now">Subskrybuj teraz</string>
+    <string name="premium_activated">Premium aktywowane! 🎉</string>
+    <string name="subscription_terms">Subskrypcja odnawia się automatycznie. Możesz anulować w dowolnym momencie w ustawieniach sklepu Google Play.</string>
+
+    <!-- Errors -->
+    <string name="load_products_error">Nie udało się załadować opcji subskrypcji</string>
+    <string name="no_products_available">Brak dostępnych opcji subskrypcji</string>
+    <string name="unexpected_error">Wystąpił nieoczekiwany błąd</string>
+    <string name="product_not_found">Produkt nie znaleziony</string>
+    <string name="purchase_failed">Zakup nie powiódł się</string>
+
+    <string name="feature_basic_analysis">Analiza podstawowa</string>
+    <string name="feature_local_engine">Silnik lokalny</string>
+    <string name="feature_limited_depth">Ograniczona głębokość</string>
+    <string name="feature_unlimited_analysis">Nielimitowana analiza</string>
+    <string name="feature_cloud_engine">Silnik w chmurze</string>
+    <string name="feature_priority_support">Wsparcie priorytetowe</string>
+
+    <string name="continue_button">Kontynuuj</string>
+    <string name="pro">PRO</string>
+
+    <string name="subscription_price">Subskrypcja za jedyne %s/rok</string>
+    <string name="subscribe_to_premium">Subskrybuj Premium za %s</string>
+
+    <string name="premium_status">Status Premium</string>
+    <string name="premium_active">Premium Aktywne</string>
+    <string name="premium_expires">Ważne do: %s</string>
+    <string name="premium_until">Premium do: %s</string>
+
+    <string name="purchase_error">Błąd zakupu</string>
+    <string name="restore_failed">Nie udało się przywrócić</string>
+    <string name="billing_not_ready">Płatności nie są gotowe, spróbuj ponownie później</string>
+
+    <string name="benefit_instant_analysis">⚡ Natychmiastowa analiza pozycji</string>
+    <string name="benefit_deep_calculation">🧠 Głębokie obliczanie wariacji</string>
+    <string name="benefit_cloud_processing">☁️ Przetwarzanie w chmurze</string>
+    <string name="benefit_unlimited">♾️ Nielimitowane użycie</string>
+    <string name="benefit_no_ads">🚫 Brak reklam</string>
+    <string name="benefit_priority_support">💬 Wsparcie priorytetowe</string>
+
+    <!-- Admin Panel -->
+    <string name="admin_panel_button">Panel administratora</string>
+    <string name="admin_panel_title">Panel administratora</string>
+    <string name="search_hint">Szukaj po nicku...</string>
+    <string name="random_gift">Losowy prezent</string>
+    <string name="user_list_loading_error">Błąd ładowania użytkowników: %s</string>
+    <string name="search_error">Błąd wyszukiwania: %s</string>
+    <string name="gift_sent">Prezent wysłany do %s!</string>
+    <string name="gift_no_user">Nie znaleziono kwalifikującego się użytkownika do prezentu</string>
+    <string name="gift_error">Błąd prezentu: %s</string>
+    <string name="granted_subscription">Przyznano %1$s dla %2$s</string>
+    <string name="cancelled_subscription">Anulowano subskrypcję dla %s</string>
+    <string name="subscription_error">Błąd: %s</string>
+    <string name="gift_notification_message">Wygrałeś losowy prezent! 1 miesiąc Premium!</string>
+    <string name="gift_dialog_title">Prezent!</string>
+    <string name="manage_subscription_title">Zarządzaj subskrypcją</string>
+    <string name="user_label">Użytkownik: %s</string>
+    <string name="cancel_subscription">Anuluj subskrypcję</string>
+    <string name="extend_change_label">Lub przedłuż/zmień:</string>
+    <string name="grant_month">Przyznaj 1 miesiąc</string>
+    <string name="grant_year">Przyznaj 1 rok</string>
+    <string name="grant_forever">Przyznaj na zawsze</string>
+
+    <string name="complete_registration">Dokończ rejestrację</string>
+    <string name="complete_registration_desc">Potwierdź swój nick i opcjonalne nazwy użytkownika szachowego, aby dokończyć konfigurację konta.</string>
+    <string name="error_google_already_linked">To konto Google jest już połączone z innym użytkownikiem.</string>
+    <string name="switched_to_server_mode">Przełączono na tryb serwerowy</string>
+    <string name="welcome_desc_no_accounts">Wygląda na to, że nie połączyłeś jeszcze żadnych kont. Możesz przesłać plik PGN lub przejść do profilu, aby połączyć Lichess/Chess.com.</string>
+    <string name="go_to_profile">Idź do profilu</string>
+    <string name="upload_pgn">Prześlij PGN</string>
+    <string name="games">Gry</string>
+    <string name="welcome_load_games_title">Witaj w MoveSense!</string>
+    <string name="welcome_load_games_desc">Połączyłeś swoje konta. Wybierz zakres dat, aby załadować swoje gry.</string>
+    <string name="loading_progress_fmt">Załadowano %1$d / %2$d gier</string>
+    <string name="loading_calculating_total">Obliczanie całkowitej liczby gier...</string>
+    <string name="loading_progress_unknown">Załadowano %1$d gier</string>
+    <string name="select_date_range">Wybierz zakres dat</string>
+
+    <!-- Rate Us Dialog -->
+    <string name="rate_us_title">Lubisz MoveSense?</string>
+    <string name="rate_us_message">Jeśli podoba Ci się nasza aplikacja, poświęć chwilę, aby ją ocenić. Nie zajmie to więcej niż minutę. Dziękujemy za wsparcie!</string>
+    <string name="rate_now">Oceń teraz</string>
+    <string name="maybe_later">Może później</string>
+
+    <!-- Retention Notifications -->
+    <string name="notif_title_1">Grałeś dziś w szachy?</string>
+    <string name="notif_msg_1">Nie zapomnij przeanalizować swoich ostatnich gier, aby stać się lepszym!</string>
+    <string name="notif_title_2">Czas na poprawę!</string>
+    <string name="notif_msg_2">Przeanalizuj swoje błędy i ucz się na nich.</string>
+    <string name="notif_title_3">Sprawdź swój ranking</string>
+    <string name="notif_msg_3">Zobacz, jak poprawia się Twoja wydajność.</string>
+    <string name="notif_title_4">Rozwiążesz zagadkę?</string>
+    <string name="notif_msg_4">Utrzymuj umysł w dobrej kondycji dzięki analizie szachowej.</string>
+    <string name="notif_title_brilliant">Genialny ruch!</string>
+    <string name="notif_msg_brilliant">Wczoraj wykonałeś genialny ruch! Powtórzymy to?</string>
+    <string name="notif_title_brilliant_2">Geniusz w akcji!</string>
+    <string name="notif_msg_brilliant_2">Twoja ostatnia gra była imponująca. Tak trzymaj!</string>
+    <string name="notif_title_brilliant_3">Ruchy arcymistrza?</string>
+    <string name="notif_msg_brilliant_3">Miałeś fantastyczny pomysł. Analizuj więcej gier!</string>
+</resources>

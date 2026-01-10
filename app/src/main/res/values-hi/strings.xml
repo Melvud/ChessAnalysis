@@ -1,0 +1,375 @@
+<resources>
+    <string name="app_name">MoveSense</string>
+
+    <!-- Common -->
+    <string name="ok">ठीक है</string>
+    <string name="cancel">रद्द करें</string>
+    <string name="save">सहेजें</string>
+    <string name="back">वापस</string>
+    <string name="delete">हटाएं</string>
+    <string name="close">बंद करें</string>
+    <string name="loading">लोड हो रहा है…</string>
+    <string name="error">त्रुटि</string>
+
+    <!-- Login Screen -->
+    <string name="welcome">स्वागत है</string>
+    <string name="welcome_title">स्वागत है</string>
+    <string name="login_title">MoveSense में लॉगिन करें</string>
+    <string name="email">ईमेल</string>
+    <string name="password">पासवर्ड</string>
+    <string name="login">लॉगिन</string>
+    <string name="register">रजिस्टर करें</string>
+    <string name="no_account">खाता नहीं है?</string>
+    <string name="have_account">पहले से खाता है?</string>
+    <string name="login_error">लॉगिन त्रुटि: %s</string>
+    <string name="register_error">पंजीकरण त्रुटि: %s</string>
+
+    <!-- Profile Screen -->
+    <string name="profile">प्रोफ़ाइल</string>
+    <string name="lichess_username">Lichess उपयोगकर्ता नाम</string>
+    <string name="chesscom_username">Chess.com उपयोगकर्ता नाम</string>
+    <string name="language">भाषा</string>
+    <string name="logout">लॉग आउट</string>
+    <string name="save_profile">प्रोफ़ाइल सहेजें</string>
+    <string name="profile_updated">प्रोफ़ाइल अपडेट की गई</string>
+
+    <!-- Games List Screen -->
+    <string name="games_list">खेल सूची</string>
+    <string name="add_game">खेल जोड़ें</string>
+    <string name="no_games">कोई खेल नहीं मिला</string>
+    <string name="filter_all">सभी (%d)</string>
+    <string name="filter_lichess">Lichess</string>
+    <string name="filter_chesscom">Chess.com</string>
+    <string name="filter_manual">अपलोड किए गए</string>
+    <string name="syncing">सिंक हो रहा है…</string>
+    <string name="games_added">नए खेल जोड़े गए: %d</string>
+    <string name="sync_error">सिंक त्रुटि: %s</string>
+    <string name="analyzed">विश्लेषण</string>
+
+    <!-- Add Game Dialog -->
+    <string name="add_game_title">खेल जोड़ें</string>
+    <string name="paste_pgn_hint">पूरा PGN पेस्ट करें या .pgn फ़ाइल चुनें</string>
+    <string name="select_file">.pgn फ़ाइल चुनें</string>
+    <string name="game_added">खेल जोड़ा गया</string>
+    <string name="empty_pgn">PGN खाली है</string>
+    <string name="add_error">त्रुटि: %s</string>
+
+    <!-- Game Report Screen -->
+    <string name="game_analysis">खेल विश्लेषण</string>
+    <string name="flip_board">बोर्ड पलटें</string>
+    <string name="to_start">शुरुआत में</string>
+    <string name="previous">पिछला</string>
+    <string name="play">खेलें</string>
+    <string name="pause">रोकें</string>
+    <string name="next">अगला</string>
+    <string name="to_end">अंत में</string>
+
+    <!-- Analysis Settings -->
+    <string name="analysis_settings">विश्लेषण सेटिंग्स</string>
+    <string name="depth">गहराई: %d</string>
+    <string name="multipv">लाइनें (MultiPV): %d</string>
+    <string name="settings_note">💡 सेटिंग्स प्रत्येक स्थिति के लिए अलग से सहेजी जाती हैं</string>
+
+    <!-- Engine Lines Panel -->
+    <string name="engine_lines">इंजन लाइनें</string>
+    <string name="calculating">गणना हो रही है…</string>
+    <string name="no_lines">इस स्थिति के लिए कोई लाइन उपलब्ध नहीं है</string>
+
+    <!-- Report Screen -->
+    <string name="game_report">खेल रिपोर्ट</string>
+    <string name="performance_evaluation">प्रदर्शन मूल्यांकन</string>
+    <string name="view_report">रिपोर्ट देखें</string>
+    <string name="return_back">वापस जाएं</string>
+
+    <!-- Move Classifications -->
+    <string name="move_splendid">शानदार!!</string>
+    <string name="move_perfect">उत्तम!</string>
+    <string name="move_best">सर्वश्रेष्ठ</string>
+    <string name="move_excellent">बहुत बढ़िया</string>
+    <string name="move_okay">अच्छा</string>
+    <string name="move_opening">सिद्धांत</string>
+    <string name="move_inaccuracy">अशुद्धि</string>
+    <string name="move_mistake">गलती</string>
+    <string name="move_forced">मजबूर</string>
+    <string name="move_blunder">भारी गलती</string>
+
+    <!-- Time Control -->
+    <string name="bullet">बुलेट</string>
+    <string name="blitz">ब्लिट्ज</string>
+    <string name="rapid">रैपिड</string>
+    <string name="classical">क्लासिकल</string>
+
+    <!-- Player Info -->
+    <string name="white">सफेद</string>
+    <string name="black">काला</string>
+    <string name="rating">(%d)</string>
+
+    <!-- Navigation -->
+    <string name="nav_games">खेल</string>
+    <string name="nav_profile">प्रोफ़ाइल</string>
+
+    <!-- Re-analyze -->
+    <string name="reanalyze">पुनः विश्लेषण करें</string>
+    <string name="reanalyze_title">पुनः विश्लेषण करें</string>
+
+    <!-- Language Names -->
+    <string name="lang_russian">Русский</string>
+    <string name="lang_english">English</string>
+    <string name="lang_spanish">Español</string>
+    <string name="lang_hindi">हिन्दी</string>
+    <string name="lang_portuguese">Português</string>
+    <string name="lang_german">Deutsch</string>
+    <string name="lang_french">Français</string>
+    <string name="lang_polish">Polski</string>
+    <string name="lang_indonesian">Bahasa Indonesia</string>
+    <string name="lang_ukrainian">Українська</string>
+
+    <!-- GameReportScreen -->
+    <string name="depth_label">गहराई</string>
+    <string name="multipv_label">लाइनें (MultiPV)</string>
+
+    <!-- GamesListScreen -->
+    <string name="analysis_error">विश्लेषण त्रुटि: %s</string>
+    <string name="pgn_not_found">PGN नहीं मिला</string>
+    <string name="no_nicknames_error">कृपया पहले प्रोफ़ाइल में अपना Lichess या Chess.com उपनाम सेट करें।</string>
+
+    <!-- LoginScreen -->
+    <string name="show_password">पासवर्ड दिखाएं</string>
+    <string name="hide_password">पासवर्ड छिपाएं</string>
+    <string name="profile_load_error">प्रोफ़ाइल लोड करने में त्रुटि</string>
+    <string name="profile_save_error">प्रोफ़ाइल सहेजने में त्रुटि</string>
+    <string name="reset_email_sent">रीसेट ईमेल भेजा गया</string>
+    <string name="error_sending_reset">ईमेल भेजने में त्रुटि: %s</string>
+    <string name="sign_in_with_google">Google के साथ साइन इन करें</string>
+    <string name="link_google">Google खाता लिंक करें</string>
+    <string name="unlink_google">Google खाता अनलिंक करें</string>
+    <string name="google_linked">Google खाता लिंक किया गया</string>
+    <string name="google_unlinked">Google खाता अनलिंक किया गया</string>
+    <string name="link_error">लिंक करने में त्रुटि: %s</string>
+    <string name="forgot_password">पासवर्ड भूल गए?</string>
+    <string name="reset_password">पासवर्ड रीसेट करें</string>
+    <string name="enter_email">अपना ईमेल दर्ज करें</string>
+    <string name="send_reset_link">लिंक भेजें</string>
+    <string name="reset_link_sent">%s को लिंक भेजा गया</string>
+    <string name="reset_error">भेजने में त्रुटि: %s</string>
+    <string name="verification_sent">%s को सत्यापन भेजा गया</string>
+    <string name="verify_email">अपना ईमेल सत्यापित करें</string>
+
+    <string name="sign_in_google">Google के साथ साइन इन करें</string>
+
+    <!-- ProfileScreen -->
+    <string name="engine_mode">इंजन मोड</string>
+    <string name="engine_server">सर्वर</string>
+    <string name="engine_server_desc">सर्वर पर तेज़ विश्लेषण</string>
+    <string name="engine_local">लोकल</string>
+    <string name="engine_local_desc">डिवाइस पर विश्लेषण</string>
+    <string name="switch_error">स्विच करने में त्रुटि: %s</string>
+    <string name="empty_fields_error">ईमेल और नाम खाली नहीं होना चाहिए</string>
+    <string name="user_not_found_error">उपयोगकर्ता नहीं मिला</string>
+    <string name="save_error">सहेजने में त्रुटि: %s</string>
+    <string name="saving">सहेजा जा रहा है…</string>
+    <string name="unknown">अज्ञात</string>
+    <!-- ReportScreen -->
+    <string name="move_classification">चाल वर्गीकरण</string>
+
+    <string name="analyzing">विश्लेषण हो रहा है</string>
+    <string name="show_eval_bar_mini">मिनी बोर्ड पर मूल्यांकन बार दिखाएं</string>
+    <string name="settings">सेटिंग्स</string>
+
+    <string name="variation_mode">विविधता मोड</string>
+    <string name="variation_hint">आप एक विविधता में हैं। वापस जाने के लिए "बाहर निकलें" पर टैप करें</string>
+    <string name="exit_variation">बाहर निकलें</string>
+
+    <!-- Game termination types -->
+    <string name="checkmate">♔ शह और मात</string>
+    <string name="checkmate_by">♔ %1$s द्वारा शह और मात</string>
+    <string name="timeout">⏱ समय समाप्त</string>
+    <string name="timeout_lost">⏱ समय समाप्त: %1$s</string>
+    <string name="resigned">🏳 %1$s ने इस्तीफा दिया</string>
+    <string name="resignation">🏳 इस्तीफा</string>
+    <string name="stalemate">= गतिरोध</string>
+    <string name="draw">= ड्रा</string>
+    <string name="insufficient_material">= अपर्याप्त सामग्री</string>
+    <string name="threefold_repetition">= तीन बार दोहराव</string>
+    <string name="fifty_move_rule">= 50-चाल नियम</string>
+
+    <!-- GamesListScreen -->
+    <string name="remaining_time">शेष समय: %1$s</string>
+    <string name="select_language">भाषा चुनें</string>
+
+    <string name="loading_lichess">Lichess खेल लोड हो रहे हैं…</string>
+    <string name="loading_chesscom">Chess.com खेल लोड हो रहे हैं…</string>
+    <string name="load_games_title">खेल लोड करें</string>
+    <string name="load_games_desc">तिथि सीमा चुनें या अपने खातों से सभी खेल लोड करें।</string>
+    <string name="date_from">से</string>
+    <string name="date_until">तक</string>
+    <string name="load_date_range">सीमा लोड करें</string>
+    <string name="load_all_games">सभी लोड करें</string>
+    <string name="load_all_warning_title">सभी खेल लोड करें?</string>
+    <string name="load_all_warning_message">यदि आपका इतिहास बड़ा है तो सभी खेल लोड करने में समय लग सकता है। क्या आप वाकई जारी रखना चाहते हैं?</string>
+    <string name="load_all_confirm">लोड करें</string>
+    <string name="load_game">खेल लोड करें</string>
+
+    <string name="victory_vs_titled">टाइटल्ड खिलाड़ी के खिलाफ जीत</string>
+
+    <!-- Settings Dialog -->
+    <string name="show_eval_bar">मूल्यांकन बार दिखाएं</string>
+    <string name="eval_bar_position">बार की स्थिति</string>
+    <string name="left">बाएं</string>
+    <string name="top">ऊपर</string>
+    <string name="show_best_move_arrows">सर्वश्रेष्ठ चाल तीर दिखाएं</string>
+    <string name="show_threats">खतरे दिखाएं</string>
+    <string name="coming_soon">जल्द आ रहा है...</string>
+    <string name="show_engine_lines">इंजन लाइनें दिखाएं</string>
+    <string name="number_of_lines">लाइनों की संख्या</string>
+
+    <!-- Depth Dialog -->
+    <string name="select_depth">गहराई चुनें</string>
+    <string name="depth_description">विश्लेषण की गहराई स्वचालित रूप से चयनित मान से 18 तक बढ़ जाती है। अधिक गहराई का मतलब है अधिक सटीक मूल्यांकन, लेकिन धीमी गणना।</string>
+    <string name="display_settings">प्रदर्शन सेटिंग्स</string>
+    <string name="show_best_move_arrow">सर्वश्रेष्ठ चाल तीर दिखाएं</string>
+    <string name="loading_error">लोडिंग त्रुटि</string>
+
+
+    <!-- Premium Features -->
+    <string name="unlock_premium">अपनी पूरी क्षमता को अनलॉक करें</string>
+    <string name="premium_subtitle">तत्काल, पेशेवर-स्तर के विश्लेषण के साथ शतरंज में महारत हासिल करें।</string>
+    <string name="upgrade_to_premium">प्रीमियम में अपग्रेड करें</string>
+    <string name="premium">प्रीमियम</string>
+    <string name="free">मुफ़्त</string>
+
+    <!-- Features -->
+    <string name="feature_fast_analysis">बिजली जैसा तेज़ विश्लेषण</string>
+    <string name="feature_fast_analysis_desc">सर्वर-संचालित इंजन खेलों का 5 गुना तेज़ी से विश्लेषण करता है</string>
+    <string name="feature_server_engine">सर्वर इंजन एक्सेस</string>
+    <string name="feature_server_engine_desc">शक्तिशाली क्लाउड-आधारित स्टॉकफिश इंजन का उपयोग करें</string>
+    <string name="feature_deep_analysis">गहरा विश्लेषण</string>
+    <string name="feature_deep_analysis_desc">अधिक गहराई के साथ अधिक सटीक मूल्यांकन प्राप्त करें</string>
+
+    <!-- Benefits -->
+    <string name="benefit_server_engine">✓ सर्वर-संचालित इंजन</string>
+    <string name="benefit_fast_analysis">✓ 5 गुना तेज़ विश्लेषण</string>
+    <string name="benefit_deep_analysis">✓ गहरा स्थिति मूल्यांकन</string>
+    <string name="premium_benefits">प्रीमियम लाभ:</string>
+
+    <!-- Banner -->
+    <!-- Banner -->
+    <string name="faster_analysis_with_server">सर्वर मोड के साथ 5 गुना तेज़ विश्लेषण प्राप्त करें</string>
+    <string name="upgrade">अपग्रेड करें</string>
+    <string name="upgrade_for_faster_analysis">⚡ लगभग तत्काल विश्लेषण (2-3 सेकंड) के लिए अपग्रेड करें</string>
+    <string name="banner_promo_title">50% की छूट - सीमित समय!</string>
+    <string name="banner_promo_desc">तत्काल विश्लेषण (2-3 सेकंड) और उच्च सटीकता।</string>
+    <string name="banner_standard_title">विश्लेषण का इंतजार करना बंद करें</string>
+    <string name="banner_standard_desc">प्रीमियम के साथ सेकंडों में परिणाम प्राप्त करें।</string>
+
+    <!-- Subscription Management -->
+    <string name="subscription_status">सदस्यता स्थिति</string>
+    <string name="manage_subscription">सदस्यता प्रबंधित करें</string>
+    <string name="manage_subscription_description">Google Play Store में अपनी सदस्यता प्रबंधित करें या खरीदारी बहाल करें</string>
+    <string name="open_play_store">Play Store खोलें</string>
+    <string name="restore_purchases">खरीदारी बहाल करें</string>
+    <string name="subscription_expires">समाप्त होता है: %s</string>
+    <string name="subscription_will_renew">स्वचालित रूप से नवीनीकृत होगा</string>
+    <string name="subscription_will_not_renew">नवीनीकृत नहीं होगा (रद्द)</string>
+
+    <!-- Purchase -->
+    <string name="subscribe_now">अभी सदस्यता लें</string>
+    <string name="premium_activated">प्रीमियम सक्रिय हो गया! 🎉</string>
+    <string name="subscription_terms">सदस्यता स्वचालित रूप से नवीनीकृत होती है। Google Play Store सेटिंग्स में कभी भी रद्द करें।</string>
+
+    <!-- Errors -->
+    <string name="load_products_error">सदस्यता विकल्प लोड करने में विफल</string>
+    <string name="no_products_available">कोई सदस्यता विकल्प उपलब्ध नहीं है</string>
+    <string name="unexpected_error">एक अप्रत्याशित त्रुटि हुई</string>
+    <string name="product_not_found">उत्पाद नहीं मिला</string>
+    <string name="purchase_failed">खरीदारी विफल रही</string>
+
+    <string name="feature_basic_analysis">बुनियादी विश्लेषण</string>
+    <string name="feature_local_engine">लोकल इंजन</string>
+    <string name="feature_limited_depth">सीमित गहराई</string>
+    <string name="feature_unlimited_analysis">असीमित विश्लेषण</string>
+    <string name="feature_cloud_engine">क्लाउड इंजन</string>
+    <string name="feature_priority_support">प्राथमिकता समर्थन</string>
+
+    <string name="continue_button">जारी रखें</string>
+    <string name="pro">PRO</string>
+
+    <string name="subscription_price">केवल %s/वर्ष के लिए सदस्यता</string>
+    <string name="subscribe_to_premium">%s के लिए प्रीमियम की सदस्यता लें</string>
+
+    <string name="premium_status">प्रीमियम स्थिति</string>
+    <string name="premium_active">प्रीमियम सक्रिय</string>
+    <string name="premium_expires">वैध है: %s तक</string>
+    <string name="premium_until">प्रीमियम तक: %s</string>
+
+    <string name="purchase_error">खरीद त्रुटि</string>
+    <string name="restore_failed">खरीदारी बहाल करने में विफल</string>
+    <string name="billing_not_ready">बिलिंग तैयार नहीं है, कृपया बाद में पुनः प्रयास करें</string>
+
+    <string name="benefit_instant_analysis">⚡ त्वरित स्थिति विश्लेषण</string>
+    <string name="benefit_deep_calculation">🧠 विविधताओं की गहरी गणना</string>
+    <string name="benefit_cloud_processing">☁️ क्लाउड प्रोसेसिंग</string>
+    <string name="benefit_unlimited">♾️ असीमित उपयोग</string>
+    <string name="benefit_no_ads">🚫 कोई विज्ञापन नहीं</string>
+    <string name="benefit_priority_support">💬 प्राथमिकता समर्थन</string>
+
+    <!-- Admin Panel -->
+    <string name="admin_panel_button">एडमिन पैनल</string>
+    <string name="admin_panel_title">एडमिन पैनल</string>
+    <string name="search_hint">उपनाम से खोजें...</string>
+    <string name="random_gift">यादृच्छिक उपहार</string>
+    <string name="user_list_loading_error">उपयोगकर्ताओं को लोड करने में त्रुटि: %s</string>
+    <string name="search_error">खोज त्रुटि: %s</string>
+    <string name="gift_sent">%s को उपहार भेजा गया!</string>
+    <string name="gift_no_user">उपहार के लिए कोई योग्य उपयोगकर्ता नहीं मिला</string>
+    <string name="gift_error">उपहार त्रुटि: %s</string>
+    <string name="granted_subscription">%2$s को %1$s दिया गया</string>
+    <string name="cancelled_subscription">%s के लिए सदस्यता रद्द कर दी गई</string>
+    <string name="subscription_error">त्रुटि: %s</string>
+    <string name="gift_notification_message">आपने एक यादृच्छिक उपहार जीता! 1 महीना प्रीमियम!</string>
+    <string name="gift_dialog_title">उपहार!</string>
+    <string name="manage_subscription_title">सदस्यता प्रबंधित करें</string>
+    <string name="user_label">उपयोगकर्ता: %s</string>
+    <string name="cancel_subscription">सदस्यता रद्द करें</string>
+    <string name="extend_change_label">या बढ़ाएं/बदलें:</string>
+    <string name="grant_month">1 महीना दें</string>
+    <string name="grant_year">1 साल दें</string>
+    <string name="grant_forever">हमेशा के लिए दें</string>
+
+    <string name="complete_registration">पंजीकरण पूरा करें</string>
+    <string name="complete_registration_desc">कृपया अपना खाता सेटअप पूरा करने के लिए अपने उपनाम और वैकल्पिक शतरंज उपयोगकर्ता नामों की पुष्टि करें।</string>
+    <string name="error_google_already_linked">यह Google खाता पहले से ही किसी अन्य उपयोगकर्ता से जुड़ा हुआ है।</string>
+    <string name="switched_to_server_mode">सर्वर मोड पर स्विच करें</string>
+    <string name="welcome_desc_no_accounts">ऐसा लगता है कि आपने अभी तक कोई खाता कनेक्ट नहीं किया है। आप PGN फ़ाइल अपलोड कर सकते हैं या Lichess/Chess.com कनेक्ट करने के लिए अपनी प्रोफ़ाइल पर जा सकते हैं।</string>
+    <string name="go_to_profile">प्रोफ़ाइल पर जाएं</string>
+    <string name="upload_pgn">PGN अपलोड करें</string>
+    <string name="games">खेल</string>
+    <string name="welcome_load_games_title">MoveSense में आपका स्वागत है!</string>
+    <string name="welcome_load_games_desc">आपने अपने खाते कनेक्ट कर लिए हैं। कृपया अपने खेल लोड करने के लिए एक तिथि सीमा चुनें।</string>
+    <string name="loading_progress_fmt">%1$d / %2$d खेल लोड किए गए</string>
+    <string name="loading_calculating_total">कुल खेलों की गणना की जा रही है...</string>
+    <string name="loading_progress_unknown">%1$d खेल लोड किए गए</string>
+    <string name="select_date_range">तिथि सीमा चुनें</string>
+
+    <!-- Rate Us Dialog -->
+    <string name="rate_us_title">MoveSense पसंद आ रहा है?</string>
+    <string name="rate_us_message">यदि आपको हमारे ऐप का उपयोग करना पसंद है, तो कृपया इसे रेट करने के लिए एक पल निकालें। इसमें एक मिनट से अधिक समय नहीं लगेगा। आपके समर्थन के लिए धन्यवाद!</string>
+    <string name="rate_now">अभी रेट करें</string>
+    <string name="maybe_later">शायद बाद में</string>
+
+    <!-- Retention Notifications -->
+    <string name="notif_title_1">आज शतरंज खेला?</string>
+    <string name="notif_msg_1">बेहतर बनने के लिए अपने हालिया खेलों का विश्लेषण करना न भूलें!</string>
+    <string name="notif_title_2">सुधार का समय!</string>
+    <string name="notif_msg_2">अपनी गलतियों का विश्लेषण करें और उनसे सीखें।</string>
+    <string name="notif_title_3">अपनी रेटिंग जांचें</string>
+    <string name="notif_msg_3">देखें कि आपका प्रदर्शन कैसे बेहतर हो रहा है।</string>
+    <string name="notif_title_4">एक पहेली हल करें?</string>
+    <string name="notif_msg_4">शतरंज विश्लेषण के साथ अपने दिमाग को तेज रखें।</string>
+    <string name="notif_title_brilliant">शानदार चाल!</string>
+    <string name="notif_msg_brilliant">आपने कल एक शानदार चाल चली! क्या हम इसे दोहरा सकते हैं?</string>
+    <string name="notif_title_brilliant_2">जीनियस काम पर!</string>
+    <string name="notif_msg_brilliant_2">आपका हालिया खेल प्रभावशाली था। इसे जारी रखें!</string>
+    <string name="notif_title_brilliant_3">ग्रैंडमास्टर चालें?</string>
+    <string name="notif_msg_brilliant_3">आपको एक शानदार विचार मिला। अधिक खेलों का विश्लेषण करें!</string>
+</resources>

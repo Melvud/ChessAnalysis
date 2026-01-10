@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
@@ -81,6 +82,9 @@ import kotlin.math.roundToLong
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.tasks.await
 
 private const val TAG = "GamesListScreen"
 
@@ -404,7 +408,9 @@ fun GamesListScreen(
                 since: Long?,
                 until: Long?,
                 useLichess: Boolean,
-                useChessCom: Boolean
+                useChessCom: Boolean,
+                lichessUser: String = profile.lichessUsername,
+                chessUser: String = profile.chessUsername
         ) {
                 try {
                         isFullSyncing = true
@@ -418,16 +424,16 @@ fun GamesListScreen(
                         var totalLichess = 0
                         var totalChessCom = 0
 
-                        if (useLichess && profile.lichessUsername.isNotEmpty()) {
+                        if (useLichess && lichessUser.isNotEmpty()) {
                                 totalLichess =
                                         com.github.movesense.GameLoaders.getLichessGameCount(
-                                                profile.lichessUsername
+                                                lichessUser
                                         )
                         }
-                        if (useChessCom && profile.chessUsername.isNotEmpty()) {
+                        if (useChessCom && chessUser.isNotEmpty()) {
                                 totalChessCom =
                                         com.github.movesense.GameLoaders.getChessComGameCount(
-                                                profile.chessUsername
+                                                chessUser
                                         )
                         }
 
@@ -441,11 +447,11 @@ fun GamesListScreen(
                         var addedCount = 0
                         var currentLoadedTotal = 0
 
-                        if (useLichess && profile.lichessUsername.isNotEmpty()) {
+                        if (useLichess && lichessUser.isNotEmpty()) {
                                 syncStatusMessage = context.getString(R.string.loading_lichess)
                                 val lichessList =
                                         com.github.movesense.GameLoaders.loadLichess(
-                                                profile.lichessUsername,
+                                                lichessUser,
                                                 since = since,
                                                 until = until,
                                                 max = null,
@@ -459,11 +465,11 @@ fun GamesListScreen(
                                 currentLoadedTotal += lichessList.size
                         }
 
-                        if (useChessCom && profile.chessUsername.isNotEmpty()) {
+                        if (useChessCom && chessUser.isNotEmpty()) {
                                 syncStatusMessage = context.getString(R.string.loading_chesscom)
                                 val chessList =
                                         com.github.movesense.GameLoaders.loadChessCom(
-                                                profile.chessUsername,
+                                                chessUser,
                                                 since = since,
                                                 until = until,
                                                 max = null,
@@ -528,6 +534,17 @@ fun GamesListScreen(
                                         // NEW BEHAVIOR: Show dialog instead of auto-loading
                                         showSettingsDialog = true
                                 } else {
+                                        // Load test games (Magnus Carlsen)
+                                        scope.launch {
+                                            try {
+                                                val testGames = com.github.movesense.GameLoaders.loadChessCom("MagnusCarlsen", max = 10)
+                                                    .map { it.copy(isTest = true) }
+                                                repo.mergeExternal(Provider.CHESSCOM, testGames)
+                                                loadFromLocal()
+                                            } catch (e: Exception) {
+                                                Log.e(TAG, "Failed to load test games", e)
+                                            }
+                                        }
                                         showNoAccountsDialog = true
                                 }
                                 // Signal complete so we show the empty screen (or dialog)
@@ -1584,8 +1601,13 @@ fun GamesListScreen(
                 }
         }
         if (showSettingsDialog) {
+                var lichessInput by remember { mutableStateOf(profile.lichessUsername) }
+                var chessComInput by remember { mutableStateOf(profile.chessUsername) }
+                var isSaving by remember { mutableStateOf(false) }
+                var saveError by remember { mutableStateOf<String?>(null) }
+
                 Dialog(
-                        onDismissRequest = { if (!isFullSyncing) showSettingsDialog = false },
+                        onDismissRequest = { if (!isFullSyncing && !isSaving) showSettingsDialog = false },
                         properties = DialogProperties(usePlatformDefaultWidth = false)
                 ) {
                         Card(
@@ -1597,49 +1619,34 @@ fun GamesListScreen(
                                         )
                         ) {
                                 Column(
-                                        modifier = Modifier.padding(24.dp).fillMaxWidth(),
+                                        modifier = Modifier.padding(24.dp).fillMaxWidth().verticalScroll(rememberScrollState()),
                                         horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
                                         // Header Icon
                                         Box(
                                                 modifier =
-                                                        Modifier.size(40.dp)
+                                                        Modifier.size(48.dp)
                                                                 .clip(CircleShape)
                                                                 .background(
                                                                         MaterialTheme.colorScheme
                                                                                 .primaryContainer
-                                                                )
-                                                                .clickable {
-                                                                        showSettingsDialog = false
-                                                                        showAddDialog = true
-                                                                },
+                                                                ),
                                                 contentAlignment = Alignment.Center
                                         ) {
                                                 Icon(
-                                                        Icons.Default.Add,
-                                                        contentDescription =
-                                                                stringResource(R.string.upload_pgn),
+                                                        Icons.Default.CloudDownload,
+                                                        contentDescription = null,
                                                         tint =
                                                                 MaterialTheme.colorScheme
                                                                         .onPrimaryContainer,
-                                                        modifier = Modifier.size(32.dp)
+                                                        modifier = Modifier.size(24.dp)
                                                 )
                                         }
 
                                         Spacer(Modifier.height(16.dp))
 
-                                        // Title & Description
                                         Text(
-                                                text =
-                                                        if (items.isEmpty())
-                                                                stringResource(
-                                                                        R.string
-                                                                                .welcome_load_games_title
-                                                                )
-                                                        else
-                                                                stringResource(
-                                                                        R.string.load_games_title
-                                                                ),
+                                                text = stringResource(R.string.load_games_title),
                                                 style = MaterialTheme.typography.headlineSmall,
                                                 fontWeight = FontWeight.Bold,
                                                 textAlign = TextAlign.Center
@@ -1648,16 +1655,7 @@ fun GamesListScreen(
                                         Spacer(Modifier.height(8.dp))
 
                                         Text(
-                                                text =
-                                                        if (items.isEmpty())
-                                                                stringResource(
-                                                                        R.string
-                                                                                .welcome_load_games_desc
-                                                                )
-                                                        else
-                                                                stringResource(
-                                                                        R.string.load_games_desc
-                                                                ),
+                                                text = stringResource(R.string.load_games_desc),
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 textAlign = TextAlign.Center,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1665,42 +1663,61 @@ fun GamesListScreen(
 
                                         Spacer(Modifier.height(24.dp))
 
-                                        // Source Selection
-                                        if (profile.lichessUsername.isNotBlank() &&
-                                                        profile.chessUsername.isNotBlank()
+                                        // Inputs
+                                        OutlinedTextField(
+                                            value = lichessInput,
+                                            onValueChange = { lichessInput = it },
+                                            label = { Text("Lichess Username") },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true,
+                                            shape = RoundedCornerShape(12.dp)
+                                        )
+                                        
+                                        Spacer(Modifier.height(12.dp))
+                                        
+                                        OutlinedTextField(
+                                            value = chessComInput,
+                                            onValueChange = { chessComInput = it },
+                                            label = { Text("Chess.com Username") },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true,
+                                            shape = RoundedCornerShape(12.dp)
+                                        )
+
+                                        Spacer(Modifier.height(24.dp))
+
+                                        // Source Selection (Checkboxes)
+                                        Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement =
+                                                        Arrangement.SpaceEvenly
                                         ) {
                                                 Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        horizontalArrangement =
-                                                                Arrangement.SpaceEvenly
+                                                        verticalAlignment =
+                                                                Alignment.CenterVertically
                                                 ) {
-                                                        Row(
-                                                                verticalAlignment =
-                                                                        Alignment.CenterVertically
-                                                        ) {
-                                                                Checkbox(
-                                                                        checked = loadLichess,
-                                                                        onCheckedChange = {
-                                                                                loadLichess = it
-                                                                        }
-                                                                )
-                                                                Text("Lichess")
-                                                        }
-                                                        Row(
-                                                                verticalAlignment =
-                                                                        Alignment.CenterVertically
-                                                        ) {
-                                                                Checkbox(
-                                                                        checked = loadChessCom,
-                                                                        onCheckedChange = {
-                                                                                loadChessCom = it
-                                                                        }
-                                                                )
-                                                                Text("Chess.com")
-                                                        }
+                                                        Checkbox(
+                                                                checked = loadLichess,
+                                                                onCheckedChange = {
+                                                                        loadLichess = it
+                                                                }
+                                                        )
+                                                        Text("Lichess")
                                                 }
-                                                Spacer(Modifier.height(16.dp))
+                                                Row(
+                                                        verticalAlignment =
+                                                                Alignment.CenterVertically
+                                                ) {
+                                                        Checkbox(
+                                                                checked = loadChessCom,
+                                                                onCheckedChange = {
+                                                                        loadChessCom = it
+                                                                }
+                                                        )
+                                                        Text("Chess.com")
+                                                }
                                         }
+                                        Spacer(Modifier.height(16.dp))
 
                                         // Date Selection Area
                                         Text(
@@ -1736,45 +1753,22 @@ fun GamesListScreen(
                                                                                         Color.Transparent
                                                                 )
                                                 ) {
-                                                        Column(
-                                                                horizontalAlignment =
-                                                                        Alignment.CenterHorizontally
-                                                        ) {
-                                                                Text(
-                                                                        text =
+                                                        Text(
+                                                                text =
+                                                                        if (dateFromMillis != null)
+                                                                                dateFormatter.format(
+                                                                                        Date(
+                                                                                                dateFromMillis!!
+                                                                                        )
+                                                                                )
+                                                                        else
                                                                                 stringResource(
                                                                                         R.string
                                                                                                 .date_from
                                                                                 ),
-                                                                        style =
-                                                                                MaterialTheme
-                                                                                        .typography
-                                                                                        .labelSmall,
-                                                                        color =
-                                                                                MaterialTheme
-                                                                                        .colorScheme
-                                                                                        .onSurfaceVariant
-                                                                )
-                                                                Text(
-                                                                        text =
-                                                                                dateFromMillis
-                                                                                        ?.let {
-                                                                                                dateFormatter
-                                                                                                        .format(
-                                                                                                                Date(
-                                                                                                                        it
-                                                                                                                )
-                                                                                                        )
-                                                                                        }
-                                                                                        ?: "—",
-                                                                        style =
-                                                                                MaterialTheme
-                                                                                        .typography
-                                                                                        .bodyMedium,
-                                                                        fontWeight =
-                                                                                FontWeight.Medium
-                                                                )
-                                                        }
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                        )
                                                 }
 
                                                 OutlinedButton(
@@ -1798,191 +1792,101 @@ fun GamesListScreen(
                                                                                         Color.Transparent
                                                                 )
                                                 ) {
-                                                        Column(
-                                                                horizontalAlignment =
-                                                                        Alignment.CenterHorizontally
-                                                        ) {
-                                                                Text(
-                                                                        text =
+                                                        Text(
+                                                                text =
+                                                                        if (dateUntilMillis != null)
+                                                                                dateFormatter.format(
+                                                                                        Date(
+                                                                                                dateUntilMillis!!
+                                                                                        )
+                                                                                )
+                                                                        else
                                                                                 stringResource(
                                                                                         R.string
                                                                                                 .date_until
                                                                                 ),
-                                                                        style =
-                                                                                MaterialTheme
-                                                                                        .typography
-                                                                                        .labelSmall,
-                                                                        color =
-                                                                                MaterialTheme
-                                                                                        .colorScheme
-                                                                                        .onSurfaceVariant
-                                                                )
-                                                                Text(
-                                                                        text =
-                                                                                dateUntilMillis
-                                                                                        ?.let {
-                                                                                                dateFormatter
-                                                                                                        .format(
-                                                                                                                Date(
-                                                                                                                        it
-                                                                                                                )
-                                                                                                        )
-                                                                                        }
-                                                                                        ?: "—",
-                                                                        style =
-                                                                                MaterialTheme
-                                                                                        .typography
-                                                                                        .bodyMedium,
-                                                                        fontWeight =
-                                                                                FontWeight.Medium
-                                                                )
-                                                        }
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                        )
                                                 }
                                         }
 
-                                        Spacer(Modifier.height(16.dp))
+                                        Spacer(Modifier.height(24.dp))
 
-                                        // Action Buttons
+                                        if (saveError != null) {
+                                            Text(
+                                                text = saveError!!,
+                                                color = MaterialTheme.colorScheme.error,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                modifier = Modifier.padding(bottom = 8.dp)
+                                            )
+                                        }
+
                                         Button(
                                                 onClick = {
                                                         scope.launch {
-                                                                fullSyncWithRemote(
-                                                                        dateFromMillis,
-                                                                        dateUntilMillis,
-                                                                        loadLichess,
-                                                                        loadChessCom
-                                                                )
-                                                                loadFromLocal()
-                                                        }
-                                                },
-                                                enabled =
-                                                        (dateFromMillis != null ||
-                                                                dateUntilMillis != null) &&
-                                                                (loadLichess || loadChessCom),
-                                                shape = RoundedCornerShape(12.dp),
-                                                modifier = Modifier.fillMaxWidth().height(50.dp)
-                                        ) {
-                                                Text(
-                                                        text =
-                                                                stringResource(
-                                                                        R.string.load_date_range
-                                                                ),
-                                                        style = MaterialTheme.typography.titleMedium
-                                                )
-                                        }
-
-                                        Spacer(Modifier.height(12.dp))
-
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                                HorizontalDivider(
-                                                        modifier = Modifier.weight(1f),
-                                                        color =
-                                                                MaterialTheme.colorScheme
-                                                                        .outlineVariant
-                                                )
-                                                Text(
-                                                        text = "OR",
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        color = MaterialTheme.colorScheme.outline,
-                                                        modifier =
-                                                                Modifier.padding(horizontal = 8.dp)
-                                                )
-                                                HorizontalDivider(
-                                                        modifier = Modifier.weight(1f),
-                                                        color =
-                                                                MaterialTheme.colorScheme
-                                                                        .outlineVariant
-                                                )
-                                        }
-
-                                        Spacer(Modifier.height(12.dp))
-
-                                        OutlinedButton(
-                                                onClick = { showLoadAllWarning = true },
-                                                enabled = loadLichess || loadChessCom,
-                                                shape = RoundedCornerShape(12.dp),
-                                                modifier = Modifier.fillMaxWidth().height(50.dp)
-                                        ) {
-                                                Text(
-                                                        text =
-                                                                stringResource(
-                                                                        R.string.load_all_games
-                                                                ),
-                                                        style = MaterialTheme.typography.titleMedium
-                                                )
-                                        }
-
-                                        if (showLoadAllWarning) {
-                                                AlertDialog(
-                                                        onDismissRequest = {
-                                                                showLoadAllWarning = false
-                                                        },
-                                                        title = {
-                                                                Text(
-                                                                        stringResource(
-                                                                                R.string
-                                                                                        .load_all_warning_title
-                                                                        )
-                                                                )
-                                                        },
-                                                        text = {
-                                                                Text(
-                                                                        stringResource(
-                                                                                R.string
-                                                                                        .load_all_warning_message
-                                                                        )
-                                                                )
-                                                        },
-                                                        confirmButton = {
-                                                                TextButton(
-                                                                        onClick = {
-                                                                                showLoadAllWarning =
-                                                                                        false
-                                                                                scope.launch {
-                                                                                        fullSyncWithRemote(
-                                                                                                null,
-                                                                                                null,
-                                                                                                loadLichess,
-                                                                                                loadChessCom
-                                                                                        )
-                                                                                        loadFromLocal()
-                                                                                }
-                                                                        }
-                                                                ) {
-                                                                        Text(
-                                                                                stringResource(
-                                                                                        R.string
-                                                                                                .load_all_confirm
-                                                                                )
-                                                                        )
-                                                                }
-                                                        },
-                                                        dismissButton = {
-                                                                TextButton(
-                                                                        onClick = {
-                                                                                showLoadAllWarning =
-                                                                                        false
-                                                                        }
-                                                                ) {
-                                                                        Text(
-                                                                                stringResource(
-                                                                                        R.string.cancel
-                                                                                )
-                                                                        )
+                                                                isSaving = true
+                                                                saveError = null
+                                                                try {
+                                                                    val userId = FirebaseAuth.getInstance().currentUser?.uid
+                                                                    if (userId != null) {
+                                                                        FirebaseFirestore.getInstance().collection("users").document(userId)
+                                                                            .update(mapOf(
+                                                                                "lichessUsername" to lichessInput, 
+                                                                                "chessUsername" to chessComInput
+                                                                            ))
+                                                                            .await()
+                                                                    }
+                                                                    
+                                                                    fullSyncWithRemote(
+                                                                            since = dateFromMillis,
+                                                                            until = dateUntilMillis,
+                                                                            useLichess = loadLichess,
+                                                                            useChessCom = loadChessCom,
+                                                                            lichessUser = lichessInput,
+                                                                            chessUser = chessComInput
+                                                                    )
+                                                                    loadFromLocal()
+                                                                } catch (e: Exception) {
+                                                                    saveError = e.message
+                                                                    isSaving = false
                                                                 }
                                                         }
-                                                )
-                                        }
-
-                                        Spacer(Modifier.height(16.dp))
-
-                                        TextButton(
-                                                onClick = {
-                                                        if (!isFullSyncing)
-                                                                showSettingsDialog = false
                                                 },
-                                                enabled = !isFullSyncing
-                                        ) { Text(stringResource(R.string.close)) }
+                                                modifier =
+                                                        Modifier.fillMaxWidth().height(50.dp),
+                                                shape = RoundedCornerShape(12.dp),
+                                                enabled = !isFullSyncing && !isSaving
+                                        ) {
+                                                if (isFullSyncing || isSaving) {
+                                                        CircularProgressIndicator(
+                                                                modifier = Modifier.size(24.dp),
+                                                                color =
+                                                                        MaterialTheme.colorScheme
+                                                                                .onPrimary,
+                                                                strokeWidth = 2.dp
+                                                        )
+                                                        Spacer(Modifier.width(8.dp))
+                                                        Text(stringResource(R.string.loading))
+                                                } else {
+                                                        Text(
+                                                                stringResource(
+                                                                        R.string.load_games_button
+                                                                ),
+                                                                fontSize = 16.sp,
+                                                                fontWeight = FontWeight.Bold
+                                                        )
+                                                }
+                                        }
+                                        
+                                        if (!isFullSyncing && !isSaving) {
+                                            TextButton(
+                                                onClick = { showSettingsDialog = false },
+                                                modifier = Modifier.padding(top = 8.dp)
+                                            ) {
+                                                Text(stringResource(R.string.cancel))
+                                            }
+                                        }
                                 }
                         }
                 }

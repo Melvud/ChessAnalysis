@@ -116,6 +116,13 @@
 <string name="lang_russian">Русский</string>
 <string name="lang_english">English</string>
 <string name="lang_spanish">Español</string>
+    <string name="lang_hindi">हिन्दी</string>
+    <string name="lang_portuguese">Português</string>
+    <string name="lang_german">Deutsch</string>
+    <string name="lang_french">Français</string>
+    <string name="lang_polish">Polski</string>
+    <string name="lang_indonesian">Bahasa Indonesia</string>
+    <string name="lang_ukrainian">Українська</string>
 
 <!-- Missing strings for English -->
 
@@ -204,6 +211,7 @@
     <string name="load_all_warning_message">Loading all games may take a significant amount of time if you have a large history. Are you sure you want to proceed?</string>
     <string name="load_all_confirm">Load All</string>
     <string name="load_game">Load Game</string>
+    <string name="load_games_button">Load Games</string>
 
     <string name="victory_vs_titled">Victory vs. Titled Player</string>
 
@@ -227,8 +235,8 @@
 
 
         <!-- Premium Features -->
-        <string name="unlock_premium">Unlock Premium</string>
-        <string name="premium_subtitle">Get faster analysis and advanced features</string>
+        <string name="unlock_premium">Unlock Your Full Potential</string>
+        <string name="premium_subtitle">Master chess with instant, professional-grade analysis.</string>
         <string name="upgrade_to_premium">Upgrade to Premium</string>
         <string name="premium">Premium</string>
         <string name="free">Free</string>
@@ -248,9 +256,14 @@
         <string name="premium_benefits">Premium Benefits:</string>
 
         <!-- Banner -->
+        <!-- Banner -->
         <string name="faster_analysis_with_server">Get 5x faster analysis with server mode</string>
         <string name="upgrade">Upgrade</string>
         <string name="upgrade_for_faster_analysis">⚡ Upgrade for almost instant analysis (2-3 sec)</string>
+        <string name="banner_promo_title">50% OFF - Limited Time!</string>
+        <string name="banner_promo_desc">Instant analysis (2-3s) &amp; higher accuracy.</string>
+        <string name="banner_standard_title">Stop Waiting for Analysis</string>
+        <string name="banner_standard_desc">Get results in seconds with Premium.</string>
 
         <!-- Subscription Management -->
         <string name="subscription_status">Subscription Status</string>
@@ -358,4 +371,10 @@
     <string name="notif_msg_3">See how your performance is improving.</string>
     <string name="notif_title_4">Solve a puzzle?</string>
     <string name="notif_msg_4">Keep your mind sharp with some chess analysis.</string>
+    <string name="notif_title_brilliant">Brilliant Move!</string>
+    <string name="notif_msg_brilliant">You made a brilliant move yesterday! Do it again?</string>
+    <string name="notif_title_brilliant_2">Genius at work!</string>
+    <string name="notif_msg_brilliant_2">Your recent play was impressive. Keep it up!</string>
+    <string name="notif_title_brilliant_3">Grandmaster moves?</string>
+    <string name="notif_msg_brilliant_3">You found a brilliant idea recently. Analyze more games!</string>
 </resources>

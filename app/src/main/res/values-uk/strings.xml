@@ -1,0 +1,375 @@
+<resources>
+    <string name="app_name">MoveSense</string>
+
+    <!-- Common -->
+    <string name="ok">OK</string>
+    <string name="cancel">Скасувати</string>
+    <string name="save">Зберегти</string>
+    <string name="back">Назад</string>
+    <string name="delete">Видалити</string>
+    <string name="close">Закрити</string>
+    <string name="loading">Завантаження…</string>
+    <string name="error">Помилка</string>
+
+    <!-- Login Screen -->
+    <string name="welcome">Ласкаво просимо</string>
+    <string name="welcome_title">Ласкаво просимо</string>
+    <string name="login_title">Увійти в MoveSense</string>
+    <string name="email">Email</string>
+    <string name="password">Пароль</string>
+    <string name="login">Увійти</string>
+    <string name="register">Зареєструватися</string>
+    <string name="no_account">Немає акаунту?</string>
+    <string name="have_account">Вже є акаунт?</string>
+    <string name="login_error">Помилка входу: %s</string>
+    <string name="register_error">Помилка реєстрації: %s</string>
+
+    <!-- Profile Screen -->
+    <string name="profile">Профіль</string>
+    <string name="lichess_username">Ім\'я користувача Lichess</string>
+    <string name="chesscom_username">Ім\'я користувача Chess.com</string>
+    <string name="language">Мова</string>
+    <string name="logout">Вийти</string>
+    <string name="save_profile">Зберегти профіль</string>
+    <string name="profile_updated">Профіль оновлено</string>
+
+    <!-- Games List Screen -->
+    <string name="games_list">Список ігор</string>
+    <string name="add_game">Додати гру</string>
+    <string name="no_games">Ігор не знайдено</string>
+    <string name="filter_all">Всі (%d)</string>
+    <string name="filter_lichess">Lichess</string>
+    <string name="filter_chesscom">Chess.com</string>
+    <string name="filter_manual">Завантажені</string>
+    <string name="syncing">Синхронізація…</string>
+    <string name="games_added">Додано нові ігри: %d</string>
+    <string name="sync_error">Помилка синхронізації: %s</string>
+    <string name="analyzed">Проаналізовано</string>
+
+    <!-- Add Game Dialog -->
+    <string name="add_game_title">Додати гру</string>
+    <string name="paste_pgn_hint">Вставте повний PGN або виберіть файл .pgn</string>
+    <string name="select_file">Вибрати файл .pgn</string>
+    <string name="game_added">Гру додано</string>
+    <string name="empty_pgn">PGN порожній</string>
+    <string name="add_error">Помилка: %s</string>
+
+    <!-- Game Report Screen -->
+    <string name="game_analysis">Аналіз гри</string>
+    <string name="flip_board">Перевернути дошку</string>
+    <string name="to_start">На початок</string>
+    <string name="previous">Попередній</string>
+    <string name="play">Відтворити</string>
+    <string name="pause">Пауза</string>
+    <string name="next">Наступний</string>
+    <string name="to_end">В кінець</string>
+
+    <!-- Analysis Settings -->
+    <string name="analysis_settings">Налаштування аналізу</string>
+    <string name="depth">Глибина: %d</string>
+    <string name="multipv">Лінії (MultiPV): %d</string>
+    <string name="settings_note">💡 Налаштування зберігаються окремо для кожної позиції</string>
+
+    <!-- Engine Lines Panel -->
+    <string name="engine_lines">Лінії рушія</string>
+    <string name="calculating">Обчислення…</string>
+    <string name="no_lines">Немає доступних ліній для цієї позиції</string>
+
+    <!-- Report Screen -->
+    <string name="game_report">Звіт про гру</string>
+    <string name="performance_evaluation">Оцінка ефективності</string>
+    <string name="view_report">Переглянути звіт</string>
+    <string name="return_back">Повернутися</string>
+
+    <!-- Move Classifications -->
+    <string name="move_splendid">Блискуче!!</string>
+    <string name="move_perfect">Ідеально!</string>
+    <string name="move_best">Найкращий</string>
+    <string name="move_excellent">Відмінно</string>
+    <string name="move_okay">Добре</string>
+    <string name="move_opening">Теорія</string>
+    <string name="move_inaccuracy">Неточність</string>
+    <string name="move_mistake">Помилка</string>
+    <string name="move_forced">Вимушено</string>
+    <string name="move_blunder">Зівок</string>
+
+    <!-- Time Control -->
+    <string name="bullet">Куля</string>
+    <string name="blitz">Бліц</string>
+    <string name="rapid">Рапід</string>
+    <string name="classical">Класика</string>
+
+    <!-- Player Info -->
+    <string name="white">Білі</string>
+    <string name="black">Чорні</string>
+    <string name="rating">(%d)</string>
+
+    <!-- Navigation -->
+    <string name="nav_games">Ігри</string>
+    <string name="nav_profile">Профіль</string>
+
+    <!-- Re-analyze -->
+    <string name="reanalyze">Проаналізувати знову</string>
+    <string name="reanalyze_title">Проаналізувати знову</string>
+
+    <!-- Language Names -->
+    <string name="lang_russian">Русский</string>
+    <string name="lang_english">English</string>
+    <string name="lang_spanish">Español</string>
+    <string name="lang_hindi">हिन्दी</string>
+    <string name="lang_portuguese">Português</string>
+    <string name="lang_german">Deutsch</string>
+    <string name="lang_french">Français</string>
+    <string name="lang_polish">Polski</string>
+    <string name="lang_indonesian">Bahasa Indonesia</string>
+    <string name="lang_ukrainian">Українська</string>
+
+    <!-- GameReportScreen -->
+    <string name="depth_label">Глибина</string>
+    <string name="multipv_label">Лінії (MultiPV)</string>
+
+    <!-- GamesListScreen -->
+    <string name="analysis_error">Помилка аналізу: %s</string>
+    <string name="pgn_not_found">PGN не знайдено</string>
+    <string name="no_nicknames_error">Будь ласка, спочатку встановіть ім\'я користувача Lichess або Chess.com у профілі.</string>
+
+    <!-- LoginScreen -->
+    <string name="show_password">Показати пароль</string>
+    <string name="hide_password">Приховати пароль</string>
+    <string name="profile_load_error">Помилка завантаження профілю</string>
+    <string name="profile_save_error">Помилка збереження профілю</string>
+    <string name="reset_email_sent">Лист для скидання надіслано</string>
+    <string name="error_sending_reset">Помилка надсилання листа: %s</string>
+    <string name="sign_in_with_google">Увійти через Google</string>
+    <string name="link_google">Прив\'язати акаунт Google</string>
+    <string name="unlink_google">Відв\'язати акаунт Google</string>
+    <string name="google_linked">Акаунт Google прив\'язано</string>
+    <string name="google_unlinked">Акаунт Google відв\'язано</string>
+    <string name="link_error">Помилка прив\'язки: %s</string>
+    <string name="forgot_password">Забули пароль?</string>
+    <string name="reset_password">Скинути пароль</string>
+    <string name="enter_email">Введіть ваш email</string>
+    <string name="send_reset_link">Надіслати посилання</string>
+    <string name="reset_link_sent">Посилання надіслано на %s</string>
+    <string name="reset_error">Помилка надсилання: %s</string>
+    <string name="verification_sent">Підтвердження надіслано на %s</string>
+    <string name="verify_email">Підтвердіть ваш email</string>
+
+    <string name="sign_in_google">Увійти через Google</string>
+
+    <!-- ProfileScreen -->
+    <string name="engine_mode">Режим рушія</string>
+    <string name="engine_server">Сервер</string>
+    <string name="engine_server_desc">Швидкий аналіз на сервері</string>
+    <string name="engine_local">Локальний</string>
+    <string name="engine_local_desc">Аналіз на пристрої</string>
+    <string name="switch_error">Помилка перемикання: %s</string>
+    <string name="empty_fields_error">Email та ім\'я не можуть бути порожніми</string>
+    <string name="user_not_found_error">Користувача не знайдено</string>
+    <string name="save_error">Помилка збереження: %s</string>
+    <string name="saving">Збереження…</string>
+    <string name="unknown">Невідомо</string>
+    <!-- ReportScreen -->
+    <string name="move_classification">Класифікація ходу</string>
+
+    <string name="analyzing">Аналіз</string>
+    <string name="show_eval_bar_mini">Показувати шкалу оцінки на міні-дошці</string>
+    <string name="settings">Налаштування</string>
+
+    <string name="variation_mode">Режим варіантів</string>
+    <string name="variation_hint">Ви у варіанті. Натисніть "Вийти", щоб повернутися</string>
+    <string name="exit_variation">Вийти</string>
+
+    <!-- Game termination types -->
+    <string name="checkmate">♔ Мат</string>
+    <string name="checkmate_by">♔ Мат від %1$s</string>
+    <string name="timeout">⏱ Час вийшов</string>
+    <string name="timeout_lost">⏱ Час вийшов: %1$s</string>
+    <string name="resigned">🏳 %1$s здався</string>
+    <string name="resignation">🏳 Здача</string>
+    <string name="stalemate">= Пат</string>
+    <string name="draw">= Нічия</string>
+    <string name="insufficient_material">= Недостатньо матеріалу</string>
+    <string name="threefold_repetition">= Триразове повторення</string>
+    <string name="fifty_move_rule">= Правило 50 ходів</string>
+
+    <!-- GamesListScreen -->
+    <string name="remaining_time">Залишилось часу: %1$s</string>
+    <string name="select_language">Вибрати мову</string>
+
+    <string name="loading_lichess">Завантаження ігор Lichess…</string>
+    <string name="loading_chesscom">Завантаження ігор Chess.com…</string>
+    <string name="load_games_title">Завантажити ігри</string>
+    <string name="load_games_desc">Виберіть діапазон дат або завантажте всі ігри з ваших акаунтів.</string>
+    <string name="date_from">З</string>
+    <string name="date_until">По</string>
+    <string name="load_date_range">Завантажити діапазон</string>
+    <string name="load_all_games">Завантажити все</string>
+    <string name="load_all_warning_title">Завантажити все?</string>
+    <string name="load_all_warning_message">Завантаження всіх ігор може зайняти багато часу, якщо у вас велика історія. Ви впевнені, що хочете продовжити?</string>
+    <string name="load_all_confirm">Завантажити</string>
+    <string name="load_game">Завантажити гру</string>
+
+    <string name="victory_vs_titled">Перемога над титулованим гравцем</string>
+
+    <!-- Settings Dialog -->
+    <string name="show_eval_bar">Показувати шкалу оцінки</string>
+    <string name="eval_bar_position">Позиція шкали</string>
+    <string name="left">Зліва</string>
+    <string name="top">Зверху</string>
+    <string name="show_best_move_arrows">Показувати стрілки найкращого ходу</string>
+    <string name="show_threats">Показувати загрози</string>
+    <string name="coming_soon">Скоро...</string>
+    <string name="show_engine_lines">Показувати лінії рушія</string>
+    <string name="number_of_lines">Кількість ліній</string>
+
+    <!-- Depth Dialog -->
+    <string name="select_depth">Вибрати глибину</string>
+    <string name="depth_description">Глибина аналізу збільшується автоматично від вибраного значення до 18. Більша глибина означає точнішу оцінку, але повільніший розрахунок.</string>
+    <string name="display_settings">Налаштування відображення</string>
+    <string name="show_best_move_arrow">Показувати стрілку найкращого ходу</string>
+    <string name="loading_error">Помилка завантаження</string>
+
+
+    <!-- Premium Features -->
+    <string name="unlock_premium">Розкрийте свій потенціал</string>
+    <string name="premium_subtitle">Опануйте шахи з миттєвим професійним аналізом.</string>
+    <string name="upgrade_to_premium">Оновити до Premium</string>
+    <string name="premium">Premium</string>
+    <string name="free">Безкоштовно</string>
+
+    <!-- Features -->
+    <string name="feature_fast_analysis">Блискавичний аналіз</string>
+    <string name="feature_fast_analysis_desc">Серверний рушій аналізує ігри в 5 разів швидше</string>
+    <string name="feature_server_engine">Доступ до серверного рушія</string>
+    <string name="feature_server_engine_desc">Використовуйте потужний хмарний рушій Stockfish</string>
+    <string name="feature_deep_analysis">Глибокий аналіз</string>
+    <string name="feature_deep_analysis_desc">Отримайте точніші оцінки з більшою глибиною</string>
+
+    <!-- Benefits -->
+    <string name="benefit_server_engine">✓ Серверний рушій</string>
+    <string name="benefit_fast_analysis">✓ Аналіз у 5 разів швидше</string>
+    <string name="benefit_deep_analysis">✓ Глибша оцінка позиції</string>
+    <string name="premium_benefits">Переваги Premium:</string>
+
+    <!-- Banner -->
+    <!-- Banner -->
+    <string name="faster_analysis_with_server">Аналіз у 5 разів швидше з серверним режимом</string>
+    <string name="upgrade">Оновити</string>
+    <string name="upgrade_for_faster_analysis">⚡ Оновіться для миттєвого аналізу (2-3 сек)</string>
+    <string name="banner_promo_title">Знижка 50% - Обмежений час!</string>
+    <string name="banner_promo_desc">Миттєвий аналіз (2-3с) та вища точність.</string>
+    <string name="banner_standard_title">Досить чекати на аналіз</string>
+    <string name="banner_standard_desc">Отримуйте результати за секунди з Premium.</string>
+
+    <!-- Subscription Management -->
+    <string name="subscription_status">Статус підписки</string>
+    <string name="manage_subscription">Керувати підпискою</string>
+    <string name="manage_subscription_description">Керуйте підпискою в Google Play Store або відновіть покупки</string>
+    <string name="open_play_store">Відкрити Play Store</string>
+    <string name="restore_purchases">Відновити покупки</string>
+    <string name="subscription_expires">Закінчується: %s</string>
+    <string name="subscription_will_renew">Буде продовжено автоматично</string>
+    <string name="subscription_will_not_renew">Не буде продовжено (Скасовано)</string>
+
+    <!-- Purchase -->
+    <string name="subscribe_now">Підписатися зараз</string>
+    <string name="premium_activated">Premium активовано! 🎉</string>
+    <string name="subscription_terms">Підписка продовжується автоматично. Можна скасувати в будь-який час у налаштуваннях Google Play Store.</string>
+
+    <!-- Errors -->
+    <string name="load_products_error">Не вдалося завантажити варіанти підписки</string>
+    <string name="no_products_available">Немає доступних варіантів підписки</string>
+    <string name="unexpected_error">Сталася неочікувана помилка</string>
+    <string name="product_not_found">Продукт не знайдено</string>
+    <string name="purchase_failed">Покупка не вдалася</string>
+
+    <string name="feature_basic_analysis">Базовий аналіз</string>
+    <string name="feature_local_engine">Локальний рушій</string>
+    <string name="feature_limited_depth">Обмежена глибина</string>
+    <string name="feature_unlimited_analysis">Безлімітний аналіз</string>
+    <string name="feature_cloud_engine">Хмарний рушій</string>
+    <string name="feature_priority_support">Пріоритетна підтримка</string>
+
+    <string name="continue_button">Продовжити</string>
+    <string name="pro">PRO</string>
+
+    <string name="subscription_price">Підписка всього за %s/рік</string>
+    <string name="subscribe_to_premium">Підписатися на Premium за %s</string>
+
+    <string name="premium_status">Статус Premium</string>
+    <string name="premium_active">Premium Активний</string>
+    <string name="premium_expires">Дійсний до: %s</string>
+    <string name="premium_until">Premium до: %s</string>
+
+    <string name="purchase_error">Помилка покупки</string>
+    <string name="restore_failed">Відновлення не вдалося</string>
+    <string name="billing_not_ready">Білінг не готовий, спробуйте пізніше</string>
+
+    <string name="benefit_instant_analysis">⚡ Миттєвий аналіз позиції</string>
+    <string name="benefit_deep_calculation">🧠 Глибокий розрахунок варіантів</string>
+    <string name="benefit_cloud_processing">☁️ Хмарна обробка</string>
+    <string name="benefit_unlimited">♾️ Безлімітне використання</string>
+    <string name="benefit_no_ads">🚫 Без реклами</string>
+    <string name="benefit_priority_support">💬 Пріоритетна підтримка</string>
+
+    <!-- Admin Panel -->
+    <string name="admin_panel_button">Адмін-панель</string>
+    <string name="admin_panel_title">Адмін-панель</string>
+    <string name="search_hint">Пошук за ніком...</string>
+    <string name="random_gift">Випадковий подарунок</string>
+    <string name="user_list_loading_error">Помилка завантаження користувачів: %s</string>
+    <string name="search_error">Помилка пошуку: %s</string>
+    <string name="gift_sent">Подарунок надіслано %s!</string>
+    <string name="gift_no_user">Не знайдено відповідного користувача для подарунка</string>
+    <string name="gift_error">Помилка подарунка: %s</string>
+    <string name="granted_subscription">Надано %1$s для %2$s</string>
+    <string name="cancelled_subscription">Підписку скасовано для %s</string>
+    <string name="subscription_error">Помилка: %s</string>
+    <string name="gift_notification_message">Ви виграли випадковий подарунок! 1 місяць Premium!</string>
+    <string name="gift_dialog_title">Подарунок!</string>
+    <string name="manage_subscription_title">Керувати підпискою</string>
+    <string name="user_label">Користувач: %s</string>
+    <string name="cancel_subscription">Скасувати підписку</string>
+    <string name="extend_change_label">Або продовжити/змінити:</string>
+    <string name="grant_month">Надати 1 місяць</string>
+    <string name="grant_year">Надати 1 рік</string>
+    <string name="grant_forever">Надати назавжди</string>
+
+    <string name="complete_registration">Завершити реєстрацію</string>
+    <string name="complete_registration_desc">Будь ласка, підтвердіть ваш нік та необов\'язкові імена користувачів шахових сайтів, щоб завершити налаштування акаунту.</string>
+    <string name="error_google_already_linked">Цей акаунт Google вже прив\'язаний до іншого користувача.</string>
+    <string name="switched_to_server_mode">Переключено в серверний режим</string>
+    <string name="welcome_desc_no_accounts">Схоже, ви ще не підключили жодного акаунту. Ви можете завантажити файл PGN або перейти в профіль, щоб підключити Lichess/Chess.com.</string>
+    <string name="go_to_profile">У профіль</string>
+    <string name="upload_pgn">Завантажити PGN</string>
+    <string name="games">Ігри</string>
+    <string name="welcome_load_games_title">Ласкаво просимо в MoveSense!</string>
+    <string name="welcome_load_games_desc">Ви підключили свої акаунти. Будь ласка, виберіть діапазон дат для завантаження ігор.</string>
+    <string name="loading_progress_fmt">Завантажено %1$d / %2$d ігор</string>
+    <string name="loading_calculating_total">Розрахунок загальної кількості ігор...</string>
+    <string name="loading_progress_unknown">Завантажено %1$d ігор</string>
+    <string name="select_date_range">Вибрати діапазон дат</string>
+
+    <!-- Rate Us Dialog -->
+    <string name="rate_us_title">Подобається MoveSense?</string>
+    <string name="rate_us_message">Якщо вам подобається наш додаток, будь ласка, знайдіть хвилинку, щоб оцінити його. Це займе не більше хвилини. Дякуємо за підтримку!</string>
+    <string name="rate_now">Оцінити зараз</string>
+    <string name="maybe_later">Можливо пізніше</string>
+
+    <!-- Retention Notifications -->
+    <string name="notif_title_1">Грали в шахи сьогодні?</string>
+    <string name="notif_msg_1">Не забудьте проаналізувати свої останні ігри, щоб стати краще!</string>
+    <string name="notif_title_2">Час для покращення!</string>
+    <string name="notif_msg_2">Проаналізуйте свої помилки та вчіться на них.</string>
+    <string name="notif_title_3">Перевірте свій рейтинг</string>
+    <string name="notif_msg_3">Подивіться, як покращується ваша ефективність.</string>
+    <string name="notif_title_4">Вирішити задачу?</string>
+    <string name="notif_msg_4">Тримайте розум у тонусі за допомогою шахового аналізу.</string>
+    <string name="notif_title_brilliant">Блискучий хід!</string>
+    <string name="notif_msg_brilliant">Ви зробили блискучий хід вчора! Повторимо?</string>
+    <string name="notif_title_brilliant_2">Геній у дії!</string>
+    <string name="notif_msg_brilliant_2">Ваша остання гра була вражаючою. Так тримати!</string>
+    <string name="notif_title_brilliant_3">Ходи гросмейстера?</string>
+    <string name="notif_msg_brilliant_3">У вас була фантастична ідея. Аналізуйте більше ігор!</string>
+</resources>

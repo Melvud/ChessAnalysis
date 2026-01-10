@@ -37,74 +37,69 @@ fun PremiumBanner(
         exit = shrinkVertically()
     ) {
         Card(
+            onClick = onUpgradeClick,
             modifier = modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            shape = RoundedCornerShape(16.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(
                 containerColor = Color.Transparent
             ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(
-                        if (isPromo) {
-                            Brush.horizontalGradient(
-                                colors = listOf(
-                                    Color(0xFFFFD700), // Gold
-                                    Color(0xFFFFC107), // Amber
-                                    Color(0xFFFF9800)  // Orange
+                        Brush.horizontalGradient(
+                            colors = if (isPromo) {
+                                // Fire Gradient (Red/Orange/Gold)
+                                listOf(
+                                    Color(0xFFFF512F),
+                                    Color(0xFFDD2476),
+                                    Color(0xFFFFD700)
                                 )
-                            )
-                        } else {
-                            Brush.horizontalGradient(
-                                colors = listOf(
-                                    Color(0xFFFFD700),
-                                    Color(0xFFFFE55C)
+                            } else {
+                                // Deep Space Gradient (Dark Blue/Purple)
+                                listOf(
+                                    Color(0xFF0F2027),
+                                    Color(0xFF203A43),
+                                    Color(0xFF2C5364)
                                 )
-                            )
-                        }
+                            }
+                        )
                     )
             ) {
-                IconButton(
-                    onClick = {
-                        isVisible = false
-                        onDismiss()
-                    },
+                // Decorative background circle
+                Box(
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(4.dp)
-                        .size(32.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Close,
-                        contentDescription = stringResource(R.string.close),
-                        tint = Color.Black.copy(alpha = 0.6f),
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+                        .offset(x = (-20).dp, y = (-20).dp)
+                        .size(100.dp)
+                        .background(
+                            color = if (isPromo) Color.White.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f),
+                            shape = androidx.compose.foundation.shape.CircleShape
+                        )
+                )
 
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .padding(20.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // Star Icon
+                    // Icon
                     Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color.White.copy(alpha = 0.3f),
-                        modifier = Modifier.size(48.dp)
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (isPromo) Color.White.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
+                        modifier = Modifier.size(56.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 Icons.Default.Star,
                                 contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(28.dp)
+                                tint = if (isPromo) Color.White else Color(0xFFFFD700),
+                                modifier = Modifier.size(32.dp)
                             )
                         }
                     }
@@ -114,38 +109,53 @@ fun PremiumBanner(
                         modifier = Modifier.weight(1f)
                     ) {
                         Text(
-                            text = if (isPromo) "50% OFF First Month!" else stringResource(R.string.upgrade_to_premium),
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = if (isPromo) FontWeight.ExtraBold else FontWeight.Bold,
-                                color = Color.Black
+                            text = if (isPromo) stringResource(R.string.banner_promo_title) else stringResource(R.string.banner_standard_title),
+                            style = MaterialTheme.typography.titleLarge.copy(
+                                fontWeight = FontWeight.ExtraBold,
+                                letterSpacing = (-0.5).sp
                             ),
-                            fontSize = if (isPromo) 18.sp else 16.sp
+                            color = Color.White
                         )
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = stringResource(R.string.faster_analysis_with_server),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.Black.copy(alpha = 0.8f),
+                            text = if (isPromo) stringResource(R.string.banner_promo_desc) else stringResource(R.string.banner_standard_desc),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White.copy(alpha = 0.9f),
                             fontWeight = FontWeight.Medium,
-                            fontSize = 13.sp
+                            lineHeight = 18.sp
                         )
                     }
 
-                    // Button
-                    Button(
-                        onClick = onUpgradeClick,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.Black,
-                            contentColor = Color(0xFFFFD700)
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        Text(
-                            text = if (isPromo) "CLAIM OFFER" else stringResource(R.string.upgrade),
-                            fontWeight = if (isPromo) FontWeight.Black else FontWeight.Bold,
-                            fontSize = 14.sp
+                    // Arrow Icon to indicate clickability
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                // Close Button (Positioned absolutely to avoid layout shifts, but with padding to prevent overlap)
+                IconButton(
+                    onClick = {
+                        isVisible = false
+                        onDismiss()
+                    },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp) // Reduced padding to push it further to the corner
+                        .size(32.dp)
+                        .background(
+                            color = Color.Black.copy(alpha = 0.2f),
+                            shape = androidx.compose.foundation.shape.CircleShape
                         )
-                    }
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = stringResource(R.string.close),
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
                 }
             }
         }

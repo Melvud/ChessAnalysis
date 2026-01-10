@@ -30,6 +30,13 @@ class App : Application() {
             val defaultLanguage = when (systemLocale) {
                 "ru" -> LocaleManager.Language.RUSSIAN.code
                 "es" -> LocaleManager.Language.SPANISH.code
+                "hi" -> LocaleManager.Language.HINDI.code
+                "pt" -> LocaleManager.Language.PORTUGUESE.code
+                "de" -> LocaleManager.Language.GERMAN.code
+                "fr" -> LocaleManager.Language.FRENCH.code
+                "pl" -> LocaleManager.Language.POLISH.code
+                "in", "id" -> LocaleManager.Language.INDONESIAN.code
+                "uk" -> LocaleManager.Language.UKRAINIAN.code
                 else -> LocaleManager.Language.ENGLISH.code
             }
 

@@ -20,6 +20,11 @@ class RetentionWorker(
 ) : Worker(context, workerParams) {
 
     override fun doWork(): Result {
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        if (hour < 8 || hour >= 22) {
+            // It's night, skip.
+            return Result.success()
+        }
         sendNotification()
         return Result.success()
     }
@@ -42,12 +47,15 @@ class RetentionWorker(
         }
 
         // Select random message
-        // Select random message
         val messages = listOf(
             context.getString(R.string.notif_title_1) to context.getString(R.string.notif_msg_1),
             context.getString(R.string.notif_title_2) to context.getString(R.string.notif_msg_2),
             context.getString(R.string.notif_title_3) to context.getString(R.string.notif_msg_3),
-            context.getString(R.string.notif_title_4) to context.getString(R.string.notif_msg_4)
+            context.getString(R.string.notif_title_4) to context.getString(R.string.notif_msg_4),
+            // Brilliant move messages (mixed in to encourage users)
+            context.getString(R.string.notif_title_brilliant) to context.getString(R.string.notif_msg_brilliant),
+            context.getString(R.string.notif_title_brilliant_2) to context.getString(R.string.notif_msg_brilliant_2),
+            context.getString(R.string.notif_title_brilliant_3) to context.getString(R.string.notif_msg_brilliant_3)
         )
         val (title, message) = messages.random()
 

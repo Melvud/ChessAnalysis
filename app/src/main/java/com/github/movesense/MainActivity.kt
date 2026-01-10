@@ -50,7 +50,6 @@ class MainActivity : ComponentActivity() {
         // Запускаем UI
         setContent {
             AppRoot()
-            AppRoot()
         }
 
         // Schedule Retention Worker
@@ -63,13 +62,26 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun scheduleRetentionWorker() {
+        val now = java.util.Calendar.getInstance()
+        val target = java.util.Calendar.getInstance().apply {
+            if (get(java.util.Calendar.HOUR_OF_DAY) >= 12) {
+                add(java.util.Calendar.DAY_OF_YEAR, 1)
+            }
+            set(java.util.Calendar.HOUR_OF_DAY, 12)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+
+        val initialDelay = target.timeInMillis - now.timeInMillis
+
         val workRequest = PeriodicWorkRequestBuilder<RetentionWorker>(24, TimeUnit.HOURS)
-            .setInitialDelay(24, TimeUnit.HOURS) // Start first check after 24h
+            .setInitialDelay(initialDelay, TimeUnit.MILLISECONDS)
             .build()
 
         WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
             RetentionWorker.WORK_NAME,
-            ExistingPeriodicWorkPolicy.UPDATE, // UPDATE resets the timer if already scheduled!
+            ExistingPeriodicWorkPolicy.UPDATE,
             workRequest
         )
     }

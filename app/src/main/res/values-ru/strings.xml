@@ -120,6 +120,13 @@
     <string name="lang_russian">Русский</string>
     <string name="lang_english">English</string>
     <string name="lang_spanish">Español</string>
+    <string name="lang_hindi">हिन्दी</string>
+    <string name="lang_portuguese">Português</string>
+    <string name="lang_german">Deutsch</string>
+    <string name="lang_french">Français</string>
+    <string name="lang_polish">Polski</string>
+    <string name="lang_indonesian">Bahasa Indonesia</string>
+    <string name="lang_ukrainian">Українська</string>
     <!-- Недостающие строки для всех трёх языков -->
 
     <!-- GameReportScreen -->
@@ -231,8 +238,8 @@
 
 
         <!-- Premium Features -->
-        <string name="unlock_premium">Разблокировать Premium</string>
-        <string name="premium_subtitle">Получите быстрый анализ и расширенные функции</string>
+        <string name="unlock_premium">Раскройте свой потенциал</string>
+        <string name="premium_subtitle">Мастерство в шахматах с мгновенным профессиональным анализом.</string>
         <string name="upgrade_to_premium">Перейти на Premium</string>
         <string name="premium">Premium</string>
         <string name="free">Бесплатно</string>
@@ -252,9 +259,14 @@
         <string name="premium_benefits">Преимущества Premium:</string>
 
         <!-- Banner -->
-        <string name="faster_analysis_with_server">Получите анализ в 5 раз быстрее с серверным режимом</string>
-        <string name="upgrade">Улучшить</string>
-        <string name="upgrade_for_faster_analysis">⚡ Улучшите для почти мгновенного анализа (2-3 сек)</string>
+        <!-- Banner -->
+        <string name="faster_analysis_with_server">Анализ в 5 раз быстрее с серверным режимом</string>
+        <string name="upgrade">Обновить</string>
+        <string name="upgrade_for_faster_analysis">⚡ Обновитесь для мгновенного анализа (2-3 сек)</string>
+        <string name="banner_promo_title">Скидка 50% - Ограниченное время!</string>
+        <string name="banner_promo_desc">Мгновенный анализ (2-3с) и высокая точность.</string>
+        <string name="banner_standard_title">Хватит ждать анализа</string>
+        <string name="banner_standard_desc">Получайте результаты за секунды с Premium.</string>
 
         <!-- Subscription Management -->
         <string name="subscription_status">Статус подписки</string>
@@ -368,4 +380,10 @@
     <string name="notif_msg_3">Посмотрите, как улучшается ваша игра.</string>
     <string name="notif_title_4">Решите задачу?</string>
     <string name="notif_msg_4">Держите ум в тонусе с анализом позиций.</string>
+    <string name="notif_title_brilliant">Блестящий ход!</string>
+    <string name="notif_msg_brilliant">Вчера вы сделали блестящий ход! Повторим?</string>
+    <string name="notif_title_brilliant_2">Гений в деле!</string>
+    <string name="notif_msg_brilliant_2">Ваша недавняя игра впечатляет. Так держать!</string>
+    <string name="notif_title_brilliant_3">Гроссмейстерские ходы?</string>
+    <string name="notif_msg_brilliant_3">Вы нашли блестящую идею. Анализируйте больше партий!</string>
 </resources>

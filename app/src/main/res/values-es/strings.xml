@@ -116,6 +116,13 @@
     <string name="lang_russian">Русский</string>
     <string name="lang_english">English</string>
     <string name="lang_spanish">Español</string>
+    <string name="lang_hindi">हिन्दी</string>
+    <string name="lang_portuguese">Português</string>
+    <string name="lang_german">Deutsch</string>
+    <string name="lang_french">Français</string>
+    <string name="lang_polish">Polski</string>
+    <string name="lang_indonesian">Bahasa Indonesia</string>
+    <string name="lang_ukrainian">Українська</string>
 
     <!-- Missing strings for Spanish -->
 
@@ -227,8 +234,8 @@
 
 
         <!-- Premium Features -->
-        <string name="unlock_premium">Unlock Premium</string>
-        <string name="premium_subtitle">Get faster analysis and advanced features</string>
+        <string name="unlock_premium">Desbloquea tu potencial</string>
+        <string name="premium_subtitle">Domina el ajedrez con análisis profesional instantáneo.</string>
         <string name="upgrade_to_premium">Upgrade to Premium</string>
         <string name="premium">Premium</string>
         <string name="free">Free</string>
@@ -248,9 +255,14 @@
         <string name="premium_benefits">Premium Benefits:</string>
 
         <!-- Banner -->
-        <string name="faster_analysis_with_server">Get 5x faster analysis with server mode</string>
-        <string name="upgrade">Upgrade</string>
+        <!-- Banner -->
+        <string name="faster_analysis_with_server">Análisis 5x más rápido con modo servidor</string>
+        <string name="upgrade">Mejorar</string>
         <string name="upgrade_for_faster_analysis">⚡ Mejora para análisis casi instantáneo (2-3 seg)</string>
+        <string name="banner_promo_title">¡50% DTO - Tiempo Limitado!</string>
+        <string name="banner_promo_desc">Análisis instantáneo (2-3s) y mayor precisión.</string>
+        <string name="banner_standard_title">Deja de esperar el análisis</string>
+        <string name="banner_standard_desc">Obtén resultados en segundos con Premium.</string>
 
         <!-- Subscription Management -->
         <string name="subscription_status">Subscription Status</string>
@@ -356,4 +368,10 @@
     <string name="notif_msg_3">Mira cómo mejora tu rendimiento.</string>
     <string name="notif_title_4">¿Resolver un problema?</string>
     <string name="notif_msg_4">Mantén tu mente ágil con análisis de ajedrez.</string>
+    <string name="notif_title_brilliant">¡Jugada brillante!</string>
+    <string name="notif_msg_brilliant">¡Hiciste una jugada brillante ayer! ¿Repetimos?</string>
+    <string name="notif_title_brilliant_2">¡Genio trabajando!</string>
+    <string name="notif_msg_brilliant_2">Tu juego reciente fue impresionante. ¡Sigue así!</string>
+    <string name="notif_title_brilliant_3">¿Jugadas de Gran Maestro?</string>
+    <string name="notif_msg_brilliant_3">Encontraste una idea brillante. ¡Analiza más partidas!</string>
 </resources>

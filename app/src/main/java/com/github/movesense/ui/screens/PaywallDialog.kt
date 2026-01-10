@@ -19,10 +19,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -68,24 +73,44 @@ fun PaywallDialog(onDismiss: () -> Unit, onPurchaseSuccess: () -> Unit) {
             if (offers != null) {
                 // Парсим предложения
                 offers.forEach { offer ->
-                    val phase = offer.pricingPhases.pricingPhaseList.firstOrNull()
-                    if (phase != null) {
+                    // Logic to find the correct pricing phase
+                    // Usually for intro offers:
+                    // Phase 1: Free trial or Discount (e.g. $4.99 for 1 month)
+                    // Phase 2: Regular price (e.g. $9.99/month)
+                    
+                    val phases = offer.pricingPhases.pricingPhaseList
+                    val firstPhase = phases.firstOrNull()
+                    
+                    if (firstPhase != null) {
+                        var originalPrice: String? = null
+                        var originalPriceMicros: Long? = null
+                        
+                        // If we have more than 1 phase, assume the second one is the regular price
+                        // This handles cases like "50% off for the first month"
+                        if (phases.size > 1) {
+                            val regularPhase = phases[1]
+                            originalPrice = regularPhase.formattedPrice
+                            originalPriceMicros = regularPhase.priceAmountMicros
+                        }
+
                         val model =
                                 SubscriptionOfferUiModel(
                                         offerToken = offer.offerToken,
-                                        price = phase.formattedPrice,
-                                        periodCode = phase.billingPeriod,
-                                        priceMicros = phase.priceAmountMicros,
-                                        currencyCode = phase.priceCurrencyCode
+                                        price = firstPhase.formattedPrice,
+                                        periodCode = firstPhase.billingPeriod,
+                                        priceMicros = firstPhase.priceAmountMicros,
+                                        currencyCode = firstPhase.priceCurrencyCode,
+                                        originalPrice = originalPrice,
+                                        originalPriceMicros = originalPriceMicros
                                 )
 
                         // P1Y = Год, P1M = Месяц (ISO 8601)
-                        if (phase.billingPeriod.contains("Y")) {
+                        if (firstPhase.billingPeriod.contains("Y")) {
                             // Keep the lowest price offer (best value)
                             if (yearlyOffer == null || model.priceMicros < yearlyOffer!!.priceMicros) {
                                 yearlyOffer = model
                             }
-                        } else if (phase.billingPeriod.contains("M")) {
+                        } else if (firstPhase.billingPeriod.contains("M")) {
                             // Keep the lowest price offer (e.g. promo)
                             if (monthlyOffer == null || model.priceMicros < monthlyOffer!!.priceMicros) {
                                 monthlyOffer = model
@@ -112,7 +137,10 @@ fun PaywallDialog(onDismiss: () -> Unit, onPurchaseSuccess: () -> Unit) {
                             decorFitsSystemWindows = false
                     )
     ) {
-        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+        Surface(
+            modifier = Modifier.fillMaxSize(), 
+            color = Color(0xFF121212) // Deep dark background
+        ) {
             Box(modifier = Modifier.fillMaxSize()) {
 
                 // --- ОСНОВНОЙ КОНТЕНТ (Скроллируемый) ---
@@ -120,81 +148,129 @@ fun PaywallDialog(onDismiss: () -> Unit, onPurchaseSuccess: () -> Unit) {
                         modifier =
                                 Modifier.fillMaxSize()
                                         .verticalScroll(rememberScrollState())
-                                        .padding(bottom = 24.dp), // Отступ снизу
+                                        .padding(bottom = 24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    // 1. Header Area
+                    // 1. Modern Header Area
                     Box(
                             modifier =
                                     Modifier.fillMaxWidth()
-                                            .height(240.dp)
-                                            .background(
-                                                    Brush.verticalGradient(
-                                                            colors =
-                                                                    listOf(
-                                                                            Color(0xFFFFD700)
-                                                                                    .copy(
-                                                                                            alpha =
-                                                                                                    0.2f
-                                                                                    ),
-                                                                            MaterialTheme
-                                                                                    .colorScheme
-                                                                                    .surface
-                                                                    )
-                                                    )
-                                            ),
-                            contentAlignment = Alignment.Center
+                                            .height(320.dp)
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
+                        // Background Image/Gradient
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.verticalGradient(
+                                        colors = listOf(
+                                            Color(0xFF2C2C2C),
+                                            Color(0xFF121212)
+                                        )
+                                    )
+                                )
+                        )
+                        
+                        // Decorative Circles
+                        Box(
+                            modifier = Modifier
+                                .offset(x = (-50).dp, y = (-50).dp)
+                                .size(200.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFFFD700).copy(alpha = 0.05f))
+                        )
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .offset(x = 50.dp, y = 20.dp)
+                                .size(150.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFFFD700).copy(alpha = 0.03f))
+                        )
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(top = 48.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            // Premium Icon with Glow
+                            Box(contentAlignment = Alignment.Center) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(100.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFFFD700).copy(alpha = 0.1f))
+                                )
+                                Icon(
                                     imageVector = Icons.Default.WorkspacePremium,
                                     contentDescription = null,
-                                    tint = Color(0xFFFFD700), // Золотой
-                                    modifier = Modifier.size(80.dp)
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
+                                    tint = Color(0xFFFFD700),
+                                    modifier = Modifier.size(64.dp)
+                                )
+                            }
+                            
+                            Spacer(modifier = Modifier.height(24.dp))
+                            
                             Text(
-                                    text = stringResource(R.string.unlock_premium),
-                                    style =
-                                            MaterialTheme.typography.headlineMedium.copy(
-                                                    fontWeight = FontWeight.Bold
-                                            ),
-                                    color = MaterialTheme.colorScheme.onSurface
+                                text = stringResource(R.string.unlock_premium),
+                                style = MaterialTheme.typography.headlineMedium.copy(
+                                    fontWeight = FontWeight.ExtraBold,
+                                    letterSpacing = 0.5.sp
+                                ),
+                                color = Color.White,
+                                textAlign = TextAlign.Center
                             )
+                            
+                            Spacer(modifier = Modifier.height(8.dp))
+                            
                             Text(
-                                    text = stringResource(R.string.upgrade_for_faster_analysis),
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                                text = stringResource(R.string.premium_subtitle),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = Color.White.copy(alpha = 0.7f),
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(horizontal = 32.dp)
                             )
                         }
                     }
 
-                    Column(modifier = Modifier.padding(horizontal = 24.dp)) {
-                        // 2. Features List
-                        PremiumFeatureRow(
-                                icon = Icons.Default.Bolt,
-                                title = stringResource(R.string.feature_server_engine),
-                                subtitle = "Fast Stockfish 17.1 on cloud servers"
-                        )
-                        PremiumFeatureRow(
-                                icon = Icons.Default.Psychology,
-                                title = stringResource(R.string.feature_deep_analysis),
-                                subtitle = "Higher depth calculation"
-                        )
-                        PremiumFeatureRow(
-                                icon = Icons.Default.BatterySaver,
-                                title = "Save Battery",
-                                subtitle = "Phone doesn't overheat"
-                        )
+                    Column(modifier = Modifier.padding(horizontal = 24.dp).offset(y = (-30).dp)) {
+                        // 2. Features List in a Card
+                        Surface(
+                            shape = RoundedCornerShape(24.dp),
+                            color = Color(0xFF1E1E1E),
+                            tonalElevation = 4.dp,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(24.dp)) {
+                                PremiumFeatureRow(
+                                    icon = Icons.Default.Bolt,
+                                    title = stringResource(R.string.feature_server_engine),
+                                    subtitle = "Fast Stockfish 17.1 on cloud servers"
+                                )
+                                HorizontalDivider(color = Color.White.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 12.dp))
+                                PremiumFeatureRow(
+                                    icon = Icons.Default.Psychology,
+                                    title = stringResource(R.string.feature_deep_analysis),
+                                    subtitle = "Higher depth calculation"
+                                )
+                                HorizontalDivider(color = Color.White.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 12.dp))
+                                PremiumFeatureRow(
+                                    icon = Icons.Default.BatterySaver,
+                                    title = "Save Battery",
+                                    subtitle = "Phone doesn't overheat"
+                                )
+                            }
+                        }
 
-                        Spacer(modifier = Modifier.height(32.dp))
+                        Spacer(modifier = Modifier.height(24.dp))
 
                         // 3. Loading / Error State
                         if (isLoading) {
                             Box(
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier.fillMaxWidth().height(100.dp),
                                     contentAlignment = Alignment.Center
-                            ) { CircularProgressIndicator() }
+                            ) { CircularProgressIndicator(color = Color(0xFFFFD700)) }
                         } else if (errorMessage != null) {
                             Text(
                                     text = errorMessage ?: "",
@@ -208,32 +284,23 @@ fun PaywallDialog(onDismiss: () -> Unit, onPurchaseSuccess: () -> Unit) {
                                     text = "Choose your plan",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(bottom = 12.dp)
+                                    color = Color.White,
+                                    modifier = Modifier.padding(bottom = 16.dp)
                             )
 
                             // YEARLY PLAN (Highlighted)
                             yearlyOffer?.let { offer ->
                                 val isSelected = selectedOfferToken == offer.offerToken
-                                val monthlyPriceCalc = offer.priceMicros / 12 / 1000000.0
-                                val currencySymbol =
-                                        try {
-                                            java.util.Currency.getInstance(offer.currencyCode)
-                                                    .symbol
-                                        } catch (e: Exception) {
-                                            offer.currencyCode
-                                        }
-
-                                // Грубый подсчет скидки для UI
-                                val savings =
-                                        if (monthlyOffer != null) {
-                                            val mPrice = monthlyOffer!!.priceMicros
-                                            val yPricePerMonth = offer.priceMicros / 12
-                                            val percent =
-                                                    ((mPrice - yPricePerMonth).toDouble() / mPrice *
-                                                                    100)
-                                                            .toInt()
-                                            "$percent%"
-                                        } else "50%"
+                                
+                                // Calculate savings
+                                val savings = if (monthlyOffer != null) {
+                                    val mPrice = monthlyOffer!!.priceMicros
+                                    val yPricePerMonth = offer.priceMicros / 12
+                                    if (mPrice > 0) {
+                                        val percent = ((mPrice - yPricePerMonth).toDouble() / mPrice * 100).toInt()
+                                        "$percent%"
+                                    } else "50%"
+                                } else "50%"
 
                                 PlanCard(
                                         title = "Yearly",
@@ -256,15 +323,15 @@ fun PaywallDialog(onDismiss: () -> Unit, onPurchaseSuccess: () -> Unit) {
                                         title = "Monthly",
                                         price = offer.price,
                                         originalPrice = offer.originalPrice,
-                                        subtitle = "Billed every month",
-                                        badge = "50% OFF 1st Mo", // Added discount badge
+                                        subtitle = "Flexible plan",
+                                        badge = if (offer.originalPrice != null) "50% OFF" else null,
                                         isSelected = isSelected,
                                         isBestValue = false,
                                         onClick = { selectedOfferToken = offer.offerToken }
                                 )
                             }
 
-                            Spacer(modifier = Modifier.height(24.dp))
+                            Spacer(modifier = Modifier.height(32.dp))
 
                             // 5. ACTION BUTTON
                             Button(
@@ -272,18 +339,13 @@ fun PaywallDialog(onDismiss: () -> Unit, onPurchaseSuccess: () -> Unit) {
                                         if (activity != null && selectedOfferToken != null) {
                                             isPurchasing = true
                                             errorMessage = null
-
-                                            // ВАЖНО: Используем метод с offerToken (добавьте его в
-                                            // Manager!)
                                             GooglePlayBillingManager.launchPurchaseFlow(
                                                     activity,
                                                     selectedOfferToken!!
                                             ) { success, error ->
                                                 if (success || error == null) {
                                                     scope.launch {
-                                                        val isPremium =
-                                                                GooglePlayBillingManager
-                                                                        .isPremiumUser()
+                                                        val isPremium = GooglePlayBillingManager.isPremiumUser()
                                                         isPurchasing = false
                                                         if (isPremium) onPurchaseSuccess()
                                                     }
@@ -297,25 +359,21 @@ fun PaywallDialog(onDismiss: () -> Unit, onPurchaseSuccess: () -> Unit) {
                                     enabled = !isPurchasing && selectedOfferToken != null,
                                     modifier = Modifier.fillMaxWidth().height(56.dp),
                                     shape = RoundedCornerShape(16.dp),
-                                    colors =
-                                            ButtonDefaults.buttonColors(
-                                                    containerColor =
-                                                            Color(0xFF1A1A1A), // Black button
-                                                    contentColor = Color(0xFFFFD700) // Gold text
-                                            ),
-                                    elevation =
-                                            ButtonDefaults.buttonElevation(defaultElevation = 6.dp)
+                                    colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFFFFD700),
+                                            contentColor = Color.Black,
+                                            disabledContainerColor = Color(0xFFFFD700).copy(alpha = 0.5f)
+                                    ),
+                                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 8.dp)
                             ) {
                                 if (isPurchasing) {
                                     CircularProgressIndicator(
                                             modifier = Modifier.size(24.dp),
-                                            color = Color(0xFFFFD700)
+                                            color = Color.Black
                                     )
                                 } else {
                                     Text(
-                                            text =
-                                                    stringResource(R.string.continue_button)
-                                                            .uppercase(),
+                                            text = stringResource(R.string.continue_button).uppercase(),
                                             fontSize = 16.sp,
                                             fontWeight = FontWeight.Bold
                                     )
@@ -335,10 +393,7 @@ fun PaywallDialog(onDismiss: () -> Unit, onPurchaseSuccess: () -> Unit) {
                                                     if (GooglePlayBillingManager.isPremiumUser())
                                                             onPurchaseSuccess()
                                                 } else {
-                                                    errorMessage =
-                                                            context.getString(
-                                                                    R.string.restore_failed
-                                                            )
+                                                    errorMessage = context.getString(R.string.restore_failed)
                                                 }
                                                 isPurchasing = false
                                             }
@@ -346,10 +401,7 @@ fun PaywallDialog(onDismiss: () -> Unit, onPurchaseSuccess: () -> Unit) {
                                 ) {
                                     Text(
                                             stringResource(R.string.restore_purchases),
-                                            color =
-                                                    MaterialTheme.colorScheme.onSurface.copy(
-                                                            alpha = 0.6f
-                                                    ),
+                                            color = Color.White.copy(alpha = 0.6f),
                                             fontSize = 13.sp
                                     )
                                 }
@@ -358,16 +410,16 @@ fun PaywallDialog(onDismiss: () -> Unit, onPurchaseSuccess: () -> Unit) {
                             Text(
                                     text = stringResource(R.string.subscription_terms),
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                                    color = Color.White.copy(alpha = 0.4f),
                                     textAlign = TextAlign.Center,
-                                    lineHeight = 14.sp
+                                    lineHeight = 14.sp,
+                                    modifier = Modifier.padding(top = 8.dp)
                             )
                         }
                     }
                 }
 
                 // --- КРЕСТИК (CLOSE BUTTON) ---
-                // Он объявлен ПОСЛЕ Column, поэтому будет всегда сверху
                 IconButton(
                         onClick = { if (!isPurchasing) onDismiss() },
                         modifier =
@@ -375,15 +427,13 @@ fun PaywallDialog(onDismiss: () -> Unit, onPurchaseSuccess: () -> Unit) {
                                         .statusBarsPadding()
                                         .padding(top = 16.dp, end = 16.dp)
                                         .clip(CircleShape)
-                                        .background(
-                                                MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
-                                        ) // Полупрозрачный фон
+                                        .background(Color.Black.copy(alpha = 0.3f))
                                         .size(36.dp)
                 ) {
                     Icon(
                             Icons.Default.Close,
                             contentDescription = stringResource(R.string.close),
-                            tint = MaterialTheme.colorScheme.onSurface,
+                            tint = Color.White,
                             modifier = Modifier.size(20.dp)
                     )
                 }
@@ -403,12 +453,9 @@ fun PlanCard(
         isBestValue: Boolean,
         onClick: () -> Unit
 ) {
-    val borderColor =
-            if (isSelected) Color(0xFFFFD700)
-            else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
-    val borderWidth = if (isSelected) 2.dp else 1.dp
-    val backgroundColor =
-            if (isSelected) Color(0xFFFFD700).copy(alpha = 0.05f) else Color.Transparent
+    val borderColor = if (isSelected) Color(0xFFFFD700) else Color.Transparent
+    val borderWidth = if (isSelected) 2.dp else 0.dp
+    val backgroundColor = if (isSelected) Color(0xFFFFD700).copy(alpha = 0.1f) else Color(0xFF1E1E1E)
 
     Box(
             modifier =
@@ -428,7 +475,7 @@ fun PlanCard(
                     contentDescription = null,
                     tint =
                             if (isSelected) Color(0xFFFFD700)
-                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                            else Color.White.copy(alpha = 0.4f),
                     modifier = Modifier.size(24.dp)
             )
 
@@ -438,12 +485,13 @@ fun PlanCard(
                 Text(
                         text = title,
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
                 )
                 Text(
                         text = subtitle,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        color = Color.White.copy(alpha = 0.7f)
                 )
             }
 
@@ -452,17 +500,18 @@ fun PlanCard(
                     Text(
                         text = originalPrice,
                         style = MaterialTheme.typography.bodyMedium.copy(
-                            textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough
+                            textDecoration = TextDecoration.LineThrough
                         ),
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                        color = Color.White.copy(alpha = 0.5f)
                     )
                 }
                 Text(
                         text = price,
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
                 )
-                if (isBestValue && badge != null) {
+                if (badge != null) {
                     Surface(
                             color = Color(0xFFFFD700),
                             shape = RoundedCornerShape(4.dp),
@@ -484,24 +533,24 @@ fun PlanCard(
 
 @Composable
 fun PremiumFeatureRow(
-        icon: androidx.compose.ui.graphics.vector.ImageVector,
+        icon: ImageVector,
         title: String,
         subtitle: String
 ) {
     Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
     ) {
         Surface(
                 shape = CircleShape,
-                color = Color(0xFFFFD700).copy(alpha = 0.2f),
-                modifier = Modifier.size(40.dp)
+                color = Color(0xFFFFD700).copy(alpha = 0.1f),
+                modifier = Modifier.size(48.dp)
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                         imageVector = icon,
                         contentDescription = null,
-                        tint = Color(0xFFB8860B), // Dark Gold
+                        tint = Color(0xFFFFD700),
                         modifier = Modifier.size(24.dp)
                 )
             }
@@ -511,12 +560,13 @@ fun PremiumFeatureRow(
             Text(
                     text = title,
                     style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
             )
             Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    color = Color.White.copy(alpha = 0.6f)
             )
         }
     }

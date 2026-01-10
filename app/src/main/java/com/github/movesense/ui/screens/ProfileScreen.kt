@@ -15,6 +15,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -441,19 +446,32 @@ fun ProfileScreen(
         }
     }
 
-    // Language Dialog
+    // Language Bottom Sheet
     if (showLanguageDialog) {
-        AlertDialog(
+        ModalBottomSheet(
             onDismissRequest = { showLanguageDialog = false },
-            title = {
-                Text(
-                    stringResource(R.string.select_language),
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            text = {
-                Column {
-                    LocaleManager.Language.values().forEach { language ->
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+        ) {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(bottom = 48.dp)
+            ) {
+                item {
+                    Text(
+                        text = stringResource(R.string.select_language),
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            fontWeight = FontWeight.Bold
+                        ),
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
+                    )
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                }
+                    items(LocaleManager.Language.values()) { language ->
+                        val isSelected = selectedLanguage == language
+                        
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -461,31 +479,43 @@ fun ProfileScreen(
                                     selectedLanguage = language
                                     showLanguageDialog = false
                                 }
-                                .padding(vertical = 12.dp),
+                                .background(
+                                    if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                                    else Color.Transparent
+                                )
+                                .padding(horizontal = 24.dp, vertical = 16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            RadioButton(
-                                selected = selectedLanguage == language,
-                                onClick = {
-                                    selectedLanguage = language
-                                    showLanguageDialog = false
-                                }
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
+                            // Flag
                             Text(
-                                text = getLanguageDisplayName(language),
-                                style = MaterialTheme.typography.bodyLarge
+                                text = language.flag,
+                                style = MaterialTheme.typography.headlineMedium,
+                                modifier = Modifier.padding(end = 16.dp)
                             )
+
+                            // Language Name
+                            Text(
+                                text = language.displayName,
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                ),
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f)
+                            )
+
+                            // Checkmark
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
                         }
                     }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = { showLanguageDialog = false }) {
-                    Text(stringResource(R.string.close))
-                }
-            }
-        )
+        }
     }
 
     // Paywall Dialog
@@ -992,10 +1022,16 @@ private fun ProfileInfoSection(
             )
 
             OutlinedTextField(
-                value = getLanguageDisplayName(selectedLanguage),
+                value = selectedLanguage.displayName,
                 onValueChange = {},
                 label = { Text(stringResource(R.string.language)) },
-                leadingIcon = { Icon(Icons.Default.Language, contentDescription = null) },
+                leadingIcon = {
+                    Text(
+                        text = selectedLanguage.flag,
+                        fontSize = 24.sp,
+                        modifier = Modifier.padding(start = 8.dp, end = 4.dp)
+                    )
+                },
                 trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1051,14 +1087,5 @@ private fun PremiumBenefit(text: String) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface
         )
-    }
-}
-
-@Composable
-private fun getLanguageDisplayName(language: LocaleManager.Language): String {
-    return when (language) {
-        LocaleManager.Language.RUSSIAN -> stringResource(R.string.lang_russian)
-        LocaleManager.Language.ENGLISH -> stringResource(R.string.lang_english)
-        LocaleManager.Language.SPANISH -> stringResource(R.string.lang_spanish)
     }
 }

@@ -39,7 +39,8 @@ data class GameHeader(
     val pgn: String? = null,
     val whiteElo: Int? = null,
     val blackElo: Int? = null,
-    val sideToView: Boolean? = null
+    val sideToView: Boolean? = null,
+    val isTest: Boolean = false
 )
 
 @SuppressLint("UnsafeOptInUsageError")
@@ -117,7 +118,7 @@ data class FullReport(
     val acpl: Acpl,
     val estimatedElo: EstimatedElo,
     val analysisLog: List<String> = emptyList(),
-    val clockData: ClockData? = null  // ← ДОБАВИЛИ
+    val clockData: ClockData? = null
 )
 
 @Serializable

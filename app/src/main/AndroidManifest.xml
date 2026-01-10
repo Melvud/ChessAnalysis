@@ -27,7 +27,6 @@
         <activity
             android:name="com.github.movesense.MainActivity"
             android:exported="true"
-            android:screenOrientation="fullSensor"
             android:configChanges="orientation|screenSize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

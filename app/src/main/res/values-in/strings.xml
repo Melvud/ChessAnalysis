@@ -1,0 +1,375 @@
+<resources>
+    <string name="app_name">MoveSense</string>
+
+    <!-- Common -->
+    <string name="ok">OK</string>
+    <string name="cancel">Batal</string>
+    <string name="save">Simpan</string>
+    <string name="back">Kembali</string>
+    <string name="delete">Hapus</string>
+    <string name="close">Tutup</string>
+    <string name="loading">Memuat…</string>
+    <string name="error">Kesalahan</string>
+
+    <!-- Login Screen -->
+    <string name="welcome">Selamat Datang</string>
+    <string name="welcome_title">Selamat Datang</string>
+    <string name="login_title">Masuk ke MoveSense</string>
+    <string name="email">Email</string>
+    <string name="password">Kata Sandi</string>
+    <string name="login">Masuk</string>
+    <string name="register">Daftar</string>
+    <string name="no_account">Belum punya akun?</string>
+    <string name="have_account">Sudah punya akun?</string>
+    <string name="login_error">Kesalahan masuk: %s</string>
+    <string name="register_error">Kesalahan pendaftaran: %s</string>
+
+    <!-- Profile Screen -->
+    <string name="profile">Profil</string>
+    <string name="lichess_username">Nama Pengguna Lichess</string>
+    <string name="chesscom_username">Nama Pengguna Chess.com</string>
+    <string name="language">Bahasa</string>
+    <string name="logout">Keluar</string>
+    <string name="save_profile">Simpan Profil</string>
+    <string name="profile_updated">Profil diperbarui</string>
+
+    <!-- Games List Screen -->
+    <string name="games_list">Daftar Permainan</string>
+    <string name="add_game">Tambah Permainan</string>
+    <string name="no_games">Tidak ada permainan ditemukan</string>
+    <string name="filter_all">Semua (%d)</string>
+    <string name="filter_lichess">Lichess</string>
+    <string name="filter_chesscom">Chess.com</string>
+    <string name="filter_manual">Diunggah</string>
+    <string name="syncing">Menyinkronkan…</string>
+    <string name="games_added">Permainan baru ditambahkan: %d</string>
+    <string name="sync_error">Kesalahan sinkronisasi: %s</string>
+    <string name="analyzed">Dianalisis</string>
+
+    <!-- Add Game Dialog -->
+    <string name="add_game_title">Tambah Permainan</string>
+    <string name="paste_pgn_hint">Tempel PGN lengkap atau pilih file .pgn</string>
+    <string name="select_file">Pilih file .pgn</string>
+    <string name="game_added">Permainan ditambahkan</string>
+    <string name="empty_pgn">PGN kosong</string>
+    <string name="add_error">Kesalahan: %s</string>
+
+    <!-- Game Report Screen -->
+    <string name="game_analysis">Analisis Permainan</string>
+    <string name="flip_board">Balik Papan</string>
+    <string name="to_start">Ke Awal</string>
+    <string name="previous">Sebelumnya</string>
+    <string name="play">Mainkan</string>
+    <string name="pause">Jeda</string>
+    <string name="next">Selanjutnya</string>
+    <string name="to_end">Ke Akhir</string>
+
+    <!-- Analysis Settings -->
+    <string name="analysis_settings">Pengaturan Analisis</string>
+    <string name="depth">Kedalaman: %d</string>
+    <string name="multipv">Baris (MultiPV): %d</string>
+    <string name="settings_note">💡 Pengaturan disimpan secara terpisah untuk setiap posisi</string>
+
+    <!-- Engine Lines Panel -->
+    <string name="engine_lines">Baris Mesin</string>
+    <string name="calculating">Menghitung…</string>
+    <string name="no_lines">Tidak ada baris tersedia untuk posisi ini</string>
+
+    <!-- Report Screen -->
+    <string name="game_report">Laporan Permainan</string>
+    <string name="performance_evaluation">Evaluasi Kinerja</string>
+    <string name="view_report">Lihat Laporan</string>
+    <string name="return_back">Kembali</string>
+
+    <!-- Move Classifications -->
+    <string name="move_splendid">Brilian!!</string>
+    <string name="move_perfect">Sempurna!</string>
+    <string name="move_best">Terbaik</string>
+    <string name="move_excellent">Luar Biasa</string>
+    <string name="move_okay">Bagus</string>
+    <string name="move_opening">Teori</string>
+    <string name="move_inaccuracy">Ketidaktepatan</string>
+    <string name="move_mistake">Kesalahan</string>
+    <string name="move_forced">Terpaksa</string>
+    <string name="move_blunder">Blunder</string>
+
+    <!-- Time Control -->
+    <string name="bullet">Bullet</string>
+    <string name="blitz">Blitz</string>
+    <string name="rapid">Rapid</string>
+    <string name="classical">Klasik</string>
+
+    <!-- Player Info -->
+    <string name="white">Putih</string>
+    <string name="black">Hitam</string>
+    <string name="rating">(%d)</string>
+
+    <!-- Navigation -->
+    <string name="nav_games">Permainan</string>
+    <string name="nav_profile">Profil</string>
+
+    <!-- Re-analyze -->
+    <string name="reanalyze">Analisis Ulang</string>
+    <string name="reanalyze_title">Analisis Ulang</string>
+
+    <!-- Language Names -->
+    <string name="lang_russian">Русский</string>
+    <string name="lang_english">English</string>
+    <string name="lang_spanish">Español</string>
+    <string name="lang_hindi">हिन्दी</string>
+    <string name="lang_portuguese">Português</string>
+    <string name="lang_german">Deutsch</string>
+    <string name="lang_french">Français</string>
+    <string name="lang_polish">Polski</string>
+    <string name="lang_indonesian">Bahasa Indonesia</string>
+    <string name="lang_ukrainian">Українська</string>
+
+    <!-- GameReportScreen -->
+    <string name="depth_label">Kedalaman</string>
+    <string name="multipv_label">Baris (MultiPV)</string>
+
+    <!-- GamesListScreen -->
+    <string name="analysis_error">Kesalahan analisis: %s</string>
+    <string name="pgn_not_found">PGN tidak ditemukan</string>
+    <string name="no_nicknames_error">Harap atur nama pengguna Lichess atau Chess.com Anda di profil terlebih dahulu.</string>
+
+    <!-- LoginScreen -->
+    <string name="show_password">Tampilkan kata sandi</string>
+    <string name="hide_password">Sembunyikan kata sandi</string>
+    <string name="profile_load_error">Kesalahan memuat profil</string>
+    <string name="profile_save_error">Kesalahan menyimpan profil</string>
+    <string name="reset_email_sent">Email reset terkirim</string>
+    <string name="error_sending_reset">Kesalahan mengirim email: %s</string>
+    <string name="sign_in_with_google">Masuk dengan Google</string>
+    <string name="link_google">Hubungkan Akun Google</string>
+    <string name="unlink_google">Putuskan Akun Google</string>
+    <string name="google_linked">Akun Google Terhubung</string>
+    <string name="google_unlinked">Akun Google Terputus</string>
+    <string name="link_error">Kesalahan menghubungkan: %s</string>
+    <string name="forgot_password">Lupa kata sandi?</string>
+    <string name="reset_password">Reset Kata Sandi</string>
+    <string name="enter_email">Masukkan email Anda</string>
+    <string name="send_reset_link">Kirim Tautan</string>
+    <string name="reset_link_sent">Tautan dikirim ke %s</string>
+    <string name="reset_error">Kesalahan mengirim: %s</string>
+    <string name="verification_sent">Verifikasi dikirim ke %s</string>
+    <string name="verify_email">Verifikasi email Anda</string>
+
+    <string name="sign_in_google">Masuk dengan Google</string>
+
+    <!-- ProfileScreen -->
+    <string name="engine_mode">Mode Mesin</string>
+    <string name="engine_server">Server</string>
+    <string name="engine_server_desc">Analisis cepat di server</string>
+    <string name="engine_local">Lokal</string>
+    <string name="engine_local_desc">Analisis di perangkat</string>
+    <string name="switch_error">Kesalahan beralih: %s</string>
+    <string name="empty_fields_error">Email dan nama tidak boleh kosong</string>
+    <string name="user_not_found_error">Pengguna tidak ditemukan</string>
+    <string name="save_error">Kesalahan menyimpan: %s</string>
+    <string name="saving">Menyimpan…</string>
+    <string name="unknown">Tidak Diketahui</string>
+    <!-- ReportScreen -->
+    <string name="move_classification">Klasifikasi Langkah</string>
+
+    <string name="analyzing">Menganalisis</string>
+    <string name="show_eval_bar_mini">Tampilkan bilah evaluasi di papan mini</string>
+    <string name="settings">Pengaturan</string>
+
+    <string name="variation_mode">Mode Variasi</string>
+    <string name="variation_hint">Anda berada dalam variasi. Ketuk "Keluar" untuk kembali</string>
+    <string name="exit_variation">Keluar</string>
+
+    <!-- Game termination types -->
+    <string name="checkmate">♔ Skakmat</string>
+    <string name="checkmate_by">♔ Skakmat oleh %1$s</string>
+    <string name="timeout">⏱ Waktu Habis</string>
+    <string name="timeout_lost">⏱ Waktu Habis: %1$s</string>
+    <string name="resigned">🏳 %1$s menyerah</string>
+    <string name="resignation">🏳 Menyerah</string>
+    <string name="stalemate">= Pat</string>
+    <string name="draw">= Remis</string>
+    <string name="insufficient_material">= Materi Tidak Cukup</string>
+    <string name="threefold_repetition">= Pengulangan Tiga Kali</string>
+    <string name="fifty_move_rule">= Aturan 50 Langkah</string>
+
+    <!-- GamesListScreen -->
+    <string name="remaining_time">Sisa Waktu: %1$s</string>
+    <string name="select_language">Pilih Bahasa</string>
+
+    <string name="loading_lichess">Memuat permainan Lichess…</string>
+    <string name="loading_chesscom">Memuat permainan Chess.com…</string>
+    <string name="load_games_title">Muat Permainan</string>
+    <string name="load_games_desc">Pilih rentang tanggal atau muat semua permainan dari akun Anda.</string>
+    <string name="date_from">Dari</string>
+    <string name="date_until">Sampai</string>
+    <string name="load_date_range">Muat Rentang</string>
+    <string name="load_all_games">Muat Semua</string>
+    <string name="load_all_warning_title">Muat Semua?</string>
+    <string name="load_all_warning_message">Memuat semua permainan mungkin memakan waktu lama jika Anda memiliki riwayat yang besar. Apakah Anda yakin ingin melanjutkan?</string>
+    <string name="load_all_confirm">Muat</string>
+    <string name="load_game">Muat Permainan</string>
+
+    <string name="victory_vs_titled">Kemenangan vs Bergelar</string>
+
+    <!-- Settings Dialog -->
+    <string name="show_eval_bar">Tampilkan Bilah Evaluasi</string>
+    <string name="eval_bar_position">Posisi Bilah</string>
+    <string name="left">Kiri</string>
+    <string name="top">Atas</string>
+    <string name="show_best_move_arrows">Tampilkan Panah Langkah Terbaik</string>
+    <string name="show_threats">Tampilkan Ancaman</string>
+    <string name="coming_soon">Segera Hadir...</string>
+    <string name="show_engine_lines">Tampilkan Baris Mesin</string>
+    <string name="number_of_lines">Jumlah Baris</string>
+
+    <!-- Depth Dialog -->
+    <string name="select_depth">Pilih Kedalaman</string>
+    <string name="depth_description">Kedalaman analisis meningkat secara otomatis dari nilai yang dipilih hingga 18. Kedalaman yang lebih besar berarti evaluasi yang lebih akurat, tetapi perhitungan yang lebih lambat.</string>
+    <string name="display_settings">Pengaturan Tampilan</string>
+    <string name="show_best_move_arrow">Tampilkan Panah Langkah Terbaik</string>
+    <string name="loading_error">Kesalahan Memuat</string>
+
+
+    <!-- Premium Features -->
+    <string name="unlock_premium">Buka Potensi Penuh Anda</string>
+    <string name="premium_subtitle">Kuasai catur dengan analisis tingkat profesional instan.</string>
+    <string name="upgrade_to_premium">Tingkatkan ke Premium</string>
+    <string name="premium">Premium</string>
+    <string name="free">Gratis</string>
+
+    <!-- Features -->
+    <string name="feature_fast_analysis">Analisis Secepat Kilat</string>
+    <string name="feature_fast_analysis_desc">Mesin bertenaga server menganalisis permainan 5x lebih cepat</string>
+    <string name="feature_server_engine">Akses Mesin Server</string>
+    <string name="feature_server_engine_desc">Gunakan mesin Stockfish berbasis cloud yang kuat</string>
+    <string name="feature_deep_analysis">Analisis Mendalam</string>
+    <string name="feature_deep_analysis_desc">Dapatkan evaluasi yang lebih akurat dengan kedalaman yang lebih besar</string>
+
+    <!-- Benefits -->
+    <string name="benefit_server_engine">✓ Mesin Bertenaga Server</string>
+    <string name="benefit_fast_analysis">✓ Analisis 5x Lebih Cepat</string>
+    <string name="benefit_deep_analysis">✓ Evaluasi Posisi Lebih Dalam</string>
+    <string name="premium_benefits">Manfaat Premium:</string>
+
+    <!-- Banner -->
+    <!-- Banner -->
+    <string name="faster_analysis_with_server">Dapatkan analisis 5x lebih cepat dengan mode server</string>
+    <string name="upgrade">Tingkatkan</string>
+    <string name="upgrade_for_faster_analysis">⚡ Tingkatkan untuk analisis hampir instan (2-3 detik)</string>
+    <string name="banner_promo_title">DISKON 50% - Waktu Terbatas!</string>
+    <string name="banner_promo_desc">Analisis instan (2-3 detik) &amp; akurasi lebih tinggi.</string>
+    <string name="banner_standard_title">Berhenti Menunggu Analisis</string>
+    <string name="banner_standard_desc">Dapatkan hasil dalam hitungan detik dengan Premium.</string>
+
+    <!-- Subscription Management -->
+    <string name="subscription_status">Status Langganan</string>
+    <string name="manage_subscription">Kelola Langganan</string>
+    <string name="manage_subscription_description">Kelola langganan Anda di Google Play Store atau pulihkan pembelian</string>
+    <string name="open_play_store">Buka Play Store</string>
+    <string name="restore_purchases">Pulihkan Pembelian</string>
+    <string name="subscription_expires">Berakhir: %s</string>
+    <string name="subscription_will_renew">Akan diperbarui secara otomatis</string>
+    <string name="subscription_will_not_renew">Tidak akan diperbarui (Dibatalkan)</string>
+
+    <!-- Purchase -->
+    <string name="subscribe_now">Berlangganan Sekarang</string>
+    <string name="premium_activated">Premium Diaktifkan! 🎉</string>
+    <string name="subscription_terms">Langganan diperbarui secara otomatis. Dapat dibatalkan kapan saja di pengaturan Google Play Store.</string>
+
+    <!-- Errors -->
+    <string name="load_products_error">Gagal memuat opsi langganan</string>
+    <string name="no_products_available">Tidak ada opsi langganan yang tersedia</string>
+    <string name="unexpected_error">Terjadi kesalahan yang tidak terduga</string>
+    <string name="product_not_found">Produk tidak ditemukan</string>
+    <string name="purchase_failed">Pembelian gagal</string>
+
+    <string name="feature_basic_analysis">Analisis Dasar</string>
+    <string name="feature_local_engine">Mesin Lokal</string>
+    <string name="feature_limited_depth">Kedalaman Terbatas</string>
+    <string name="feature_unlimited_analysis">Analisis Tanpa Batas</string>
+    <string name="feature_cloud_engine">Mesin Cloud</string>
+    <string name="feature_priority_support">Dukungan Prioritas</string>
+
+    <string name="continue_button">Lanjutkan</string>
+    <string name="pro">PRO</string>
+
+    <string name="subscription_price">Langganan hanya %s/tahun</string>
+    <string name="subscribe_to_premium">Berlangganan Premium seharga %s</string>
+
+    <string name="premium_status">Status Premium</string>
+    <string name="premium_active">Premium Aktif</string>
+    <string name="premium_expires">Berlaku hingga: %s</string>
+    <string name="premium_until">Premium hingga: %s</string>
+
+    <string name="purchase_error">Kesalahan Pembelian</string>
+    <string name="restore_failed">Pemulihan Gagal</string>
+    <string name="billing_not_ready">Penagihan belum siap, silakan coba lagi nanti</string>
+
+    <string name="benefit_instant_analysis">⚡ Analisis Posisi Instan</string>
+    <string name="benefit_deep_calculation">🧠 Perhitungan Variasi Mendalam</string>
+    <string name="benefit_cloud_processing">☁️ Pemrosesan Cloud</string>
+    <string name="benefit_unlimited">♾️ Penggunaan Tanpa Batas</string>
+    <string name="benefit_no_ads">🚫 Tanpa Iklan</string>
+    <string name="benefit_priority_support">💬 Dukungan Prioritas</string>
+
+    <!-- Admin Panel -->
+    <string name="admin_panel_button">Panel Admin</string>
+    <string name="admin_panel_title">Panel Admin</string>
+    <string name="search_hint">Cari berdasarkan nama panggilan...</string>
+    <string name="random_gift">Hadiah Acak</string>
+    <string name="user_list_loading_error">Kesalahan memuat pengguna: %s</string>
+    <string name="search_error">Kesalahan pencarian: %s</string>
+    <string name="gift_sent">Hadiah dikirim ke %s!</string>
+    <string name="gift_no_user">Tidak ditemukan pengguna yang memenuhi syarat untuk hadiah</string>
+    <string name="gift_error">Kesalahan hadiah: %s</string>
+    <string name="granted_subscription">Diberikan %1$s kepada %2$s</string>
+    <string name="cancelled_subscription">Langganan dibatalkan untuk %s</string>
+    <string name="subscription_error">Kesalahan: %s</string>
+    <string name="gift_notification_message">Anda memenangkan hadiah acak! 1 bulan Premium!</string>
+    <string name="gift_dialog_title">Hadiah!</string>
+    <string name="manage_subscription_title">Kelola Langganan</string>
+    <string name="user_label">Pengguna: %s</string>
+    <string name="cancel_subscription">Batalkan Langganan</string>
+    <string name="extend_change_label">Atau perpanjang/ubah:</string>
+    <string name="grant_month">Berikan 1 Bulan</string>
+    <string name="grant_year">Berikan 1 Tahun</string>
+    <string name="grant_forever">Berikan Selamanya</string>
+
+    <string name="complete_registration">Selesaikan Pendaftaran</string>
+    <string name="complete_registration_desc">Harap konfirmasikan nama panggilan dan nama pengguna catur opsional Anda untuk menyelesaikan pengaturan akun Anda.</string>
+    <string name="error_google_already_linked">Akun Google ini sudah terhubung dengan pengguna lain.</string>
+    <string name="switched_to_server_mode">Beralih ke mode server</string>
+    <string name="welcome_desc_no_accounts">Sepertinya Anda belum menghubungkan akun apa pun. Anda dapat mengunggah file PGN atau pergi ke profil Anda untuk menghubungkan Lichess/Chess.com.</string>
+    <string name="go_to_profile">Ke Profil</string>
+    <string name="upload_pgn">Unggah PGN</string>
+    <string name="games">Permainan</string>
+    <string name="welcome_load_games_title">Selamat Datang di MoveSense!</string>
+    <string name="welcome_load_games_desc">Anda telah menghubungkan akun Anda. Silakan pilih rentang tanggal untuk memuat permainan Anda.</string>
+    <string name="loading_progress_fmt">%1$d / %2$d permainan dimuat</string>
+    <string name="loading_calculating_total">Menghitung total permainan...</string>
+    <string name="loading_progress_unknown">%1$d permainan dimuat</string>
+    <string name="select_date_range">Pilih Rentang Tanggal</string>
+
+    <!-- Rate Us Dialog -->
+    <string name="rate_us_title">Suka MoveSense?</string>
+    <string name="rate_us_message">Jika Anda menikmati menggunakan aplikasi kami, harap luangkan waktu sejenak untuk menilainya. Tidak akan lebih dari satu menit. Terima kasih atas dukungan Anda!</string>
+    <string name="rate_now">Nilai Sekarang</string>
+    <string name="maybe_later">Mungkin Nanti</string>
+
+    <!-- Retention Notifications -->
+    <string name="notif_title_1">Main catur hari ini?</string>
+    <string name="notif_msg_1">Jangan lupa analisis permainan terbaru Anda untuk menjadi lebih baik!</string>
+    <string name="notif_title_2">Waktunya berkembang!</string>
+    <string name="notif_msg_2">Analisis kesalahan Anda dan pelajari darinya.</string>
+    <string name="notif_title_3">Periksa peringkat Anda</string>
+    <string name="notif_msg_3">Lihat bagaimana kinerja Anda meningkat.</string>
+    <string name="notif_title_4">Pecahkan teka-teki?</string>
+    <string name="notif_msg_4">Jaga pikiran Anda tetap tajam dengan analisis catur.</string>
+    <string name="notif_title_brilliant">Langkah Brilian!</string>
+    <string name="notif_msg_brilliant">Anda membuat langkah brilian kemarin! Mau ulangi lagi?</string>
+    <string name="notif_title_brilliant_2">Jenius beraksi!</string>
+    <string name="notif_msg_brilliant_2">Permainan terakhir Anda mengesankan. Teruskan!</string>
+    <string name="notif_title_brilliant_3">Langkah Grandmaster?</string>
+    <string name="notif_msg_brilliant_3">Anda punya ide fantastis. Analisis lebih banyak permainan!</string>
+</resources>

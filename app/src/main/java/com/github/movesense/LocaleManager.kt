@@ -14,10 +14,17 @@ object LocaleManager {
     private const val PREF_NAME = "app_settings"
     private const val KEY_LANGUAGE = "selected_language"
 
-    enum class Language(val code: String, val displayName: String) {
-        RUSSIAN("ru", "Русский"),
-        ENGLISH("en", "English"),
-        SPANISH("es", "Español");
+    enum class Language(val code: String, val displayName: String, val flag: String) {
+        RUSSIAN("ru", "Русский", "🇷🇺"),
+        ENGLISH("en", "English", "🇺🇸"),
+        SPANISH("es", "Español", "🇪🇸"),
+        HINDI("hi", "हिन्दी", "🇮🇳"),
+        PORTUGUESE("pt", "Português", "🇧🇷"),
+        GERMAN("de", "Deutsch", "🇩🇪"),
+        FRENCH("fr", "Français", "🇫🇷"),
+        POLISH("pl", "Polski", "🇵🇱"),
+        INDONESIAN("in", "Indonesia", "🇮🇩"),
+        UKRAINIAN("uk", "Українська", "🇺🇦");
 
         companion object {
             fun fromCode(code: String): Language {
@@ -36,11 +43,25 @@ object LocaleManager {
         saveLanguage(context, language)
 
         // Если язык изменился, перезапускаем Activity
-        if (currentLanguage != language && context is Activity) {
-            val intent = context.intent
-            context.finish()
-            context.startActivity(intent)
+        if (currentLanguage != language) {
+            val activity = findActivity(context)
+            activity?.let {
+                val intent = it.intent
+                it.finish()
+                it.startActivity(intent)
+            }
         }
+    }
+
+    private fun findActivity(context: Context): Activity? {
+        var ctx = context
+        while (ctx is android.content.ContextWrapper) {
+            if (ctx is Activity) {
+                return ctx
+            }
+            ctx = ctx.baseContext
+        }
+        return null
     }
 
     /**
@@ -89,6 +110,7 @@ object LocaleManager {
 
         val config = Configuration(context.resources.configuration)
         config.setLocale(locale)
+        config.setLayoutDirection(locale)
 
         return context.createConfigurationContext(config)
     }

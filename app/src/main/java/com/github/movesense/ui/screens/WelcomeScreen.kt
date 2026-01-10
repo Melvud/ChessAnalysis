@@ -6,7 +6,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -121,53 +125,57 @@ fun WelcomeScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(bgColor)
-            .padding(24.dp)
+            .background(bgColor),
+        contentAlignment = Alignment.Center
     ) {
         Column(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(24.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Language Selection
             val currentLanguage = LocaleManager.getLocale(context)
-            Row(
+            val languages = LocaleManager.Language.values().map { 
+                Triple(it, it.flag, it.displayName)
+            }
+
+            LazyRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 32.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
+                horizontalArrangement = Arrangement.Center,
+                contentPadding = PaddingValues(horizontal = 8.dp)
             ) {
-                val languages = listOf(
-                    Triple(LocaleManager.Language.ENGLISH, "🇺🇸", "English"),
-                    Triple(LocaleManager.Language.RUSSIAN, "🇷🇺", "Русский"),
-                    Triple(LocaleManager.Language.SPANISH, "🇪🇸", "Español")
-                )
-
-                languages.forEach { (lang, flag, name) ->
+                items(languages) { (lang, flag, name) ->
                     val isSelected = currentLanguage == lang
                     Surface(
                         onClick = { LocaleManager.setLocale(context, lang) },
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(12.dp),
                         color = if (isSelected) primaryColor else MaterialTheme.colorScheme.surfaceVariant,
                         border = if (isSelected) null else BorderStroke(1.dp, Color.Gray.copy(alpha = 0.3f)),
-                        modifier = Modifier.height(70.dp).width(90.dp)
+                        modifier = Modifier
+                            .padding(horizontal = 4.dp)
+                            .height(60.dp)
+                            .width(80.dp)
                     ) {
                         Column(
                             verticalArrangement = Arrangement.Center,
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.padding(8.dp)
+                            modifier = Modifier.padding(4.dp)
                         ) {
                             Text(
                                 text = flag,
-                                fontSize = 24.sp
+                                fontSize = 20.sp
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = name,
-                                fontSize = 12.sp,
+                                fontSize = 10.sp,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isSelected) Color.White else textColor
+                                color = if (isSelected) Color.White else textColor,
+                                maxLines = 1
                             )
                         }
                     }
