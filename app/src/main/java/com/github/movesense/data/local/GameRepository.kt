@@ -179,36 +179,68 @@ class GameRepository(private val db: AppDatabase, private val json: Json) {
         // В UI они просто "игры".
         // Так что можно оставить isTest = false при чтении.
 
-        val rows = db.gameDao().getAllForListByGameTime()
-        Log.d(TAG, "getAllHeaders: loaded ${rows.size} games from DB")
+        // Fetch lists separately to access isTest flag
+        val externalGames = db.gameDao().getAllExternal()
+        val botGames = db.gameDao().getAllBotGames()
 
-        if (rows.isEmpty()) {
-            Log.w(TAG, "No games found in database!")
-            val externalCount = db.gameDao().getAllExternal().size
-            val botCount = db.gameDao().getAllBotGames().size
-            Log.d(TAG, "Direct query shows: external=$externalCount, bot=$botCount")
-        }
+        Log.d(TAG, "getAllHeaders: loaded ${externalGames.size} external, ${botGames.size} bot")
 
-        return rows.map { r ->
+        val allHeaders = mutableListOf<GameHeader>()
+
+        // Map External Games
+        allHeaders.addAll(externalGames.map { e ->
             GameHeader(
-                    site =
-                            when (r.provider) {
-                                Provider.LICHESS.name -> Provider.LICHESS
-                                Provider.CHESSCOM.name -> Provider.CHESSCOM
-                                Provider.BOT.name -> Provider.BOT
-                                else -> Provider.LICHESS
-                            },
-                    pgn = r.pgn,
-                    white = r.white,
-                    black = r.black,
-                    result = r.result,
-                    date = r.dateIso,
-                    sideToView = null,
-                    opening = r.opening,
-                    eco = r.eco,
-                    isTest = false // Мы не тянем это из БД через общий запрос, и это ОК для текущей задачи
+                site = when (e.provider) {
+                    Provider.LICHESS.name -> Provider.LICHESS
+                    Provider.CHESSCOM.name -> Provider.CHESSCOM
+                    else -> Provider.LICHESS
+                },
+                pgn = e.pgn,
+                white = e.white,
+                black = e.black,
+                result = e.result,
+                date = e.dateIso,
+                sideToView = null,
+                opening = e.opening,
+                eco = e.eco,
+                isTest = e.isTest // Preserve isTest flag
             )
-        }
+        })
+
+        // Map Bot Games
+        allHeaders.addAll(botGames.map { e ->
+            GameHeader(
+                site = Provider.BOT,
+                pgn = e.pgn,
+                white = e.white,
+                black = e.black,
+                result = e.result,
+                date = e.dateIso,
+                sideToView = null,
+                opening = null,
+                eco = null,
+                isTest = false // Bot games are never test games
+            )
+        })
+
+        // Sort: 
+        // 1. isTest (false first, true last) -> Test games at bottom
+        // 2. gameTimestamp (descending) -> Newest first
+        // 3. addedTimestamp (descending) -> Recently added first (fallback)
+        return allHeaders.sortedWith(
+            compareBy<GameHeader> { it.isTest } // false < true, so false comes first
+                .thenByDescending { 
+                    // We need timestamp for sorting. 
+                    // Since GameHeader doesn't have timestamp field exposed, we might need to parse it again 
+                    // OR better: use the entity's timestamp.
+                    // But we lost the entity.
+                    // Let's parse it again or use dateIso.
+                    // Actually, GameHeader doesn't have the timestamp.
+                    // To avoid re-parsing, let's keep the timestamp in a temporary structure or just re-parse.
+                    // Re-parsing is cheap enough for list size < 1000.
+                    parseGameTimestamp(it.pgn ?: "", it.date)
+                }
+        )
     }
 
     // --------------- Кэш отчётов ----------------

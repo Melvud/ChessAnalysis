@@ -71,6 +71,7 @@ import com.github.movesense.PositionEval
 import com.github.movesense.Provider
 import com.github.movesense.R
 import com.github.movesense.data.local.gameRepository
+import com.github.movesense.data.local.GuestPreferences
 import com.github.movesense.subscription.GooglePlayBillingManager
 import com.github.movesense.ui.UserProfile
 import com.github.movesense.ui.components.BoardCanvas
@@ -564,17 +565,19 @@ fun GamesListScreen(
         }
 
         LaunchedEffect(profile, isFirstLoad, shouldShowDateSelection) {
-                if (shouldShowDateSelection) {
-                        showSettingsDialog = true
-                        onDateSelectionShown()
-                }
-
                 if (isFirstLoad) {
                         loadFromLocal()
 
                         // If we have items, signal load complete immediately
                         if (items.isNotEmpty()) {
                                 onFirstLoadComplete()
+                                
+                                // Only show date selection if requested AND we have games (normal flow)
+                                if (shouldShowDateSelection) {
+                                        showSettingsDialog = true
+                                        onDateSelectionShown()
+                                }
+
                                 // Auto-sync delta if we have games
                                 isDeltaSyncing = true
                                 scope.launch {
@@ -594,6 +597,9 @@ fun GamesListScreen(
                                             repo.deleteTestGames()
                                         }
                                         showSettingsDialog = true
+                                        if (shouldShowDateSelection) {
+                                            onDateSelectionShown()
+                                        }
                                 } else {
                                         // Load test games (Magnus Carlsen)
                                         scope.launch {
@@ -607,12 +613,25 @@ fun GamesListScreen(
                                             }
                                         }
                                         showNoAccountsDialog = true
+                                        // 🌟 Fix: Ensure Load Games dialog doesn't overlap with Welcome dialog
+                                        showSettingsDialog = false
+                                        // 🌟 Fix: Consume the flag so it doesn't trigger dialog on recomposition
+                                        if (shouldShowDateSelection) {
+                                            onDateSelectionShown()
+                                        }
                                 }
                                 // Signal complete so we show the empty screen (or dialog)
                                 onFirstLoadComplete()
                         }
                 } else {
                         loadFromLocal()
+                        if (shouldShowDateSelection) {
+                                val hasCredentials = profile.lichessUsername.isNotBlank() || profile.chessUsername.isNotBlank()
+                                if (hasCredentials) {
+                                    showSettingsDialog = true
+                                }
+                                onDateSelectionShown()
+                        }
                 }
         }
 
@@ -1011,13 +1030,7 @@ fun GamesListScreen(
                                                                         )
                                                 )
                                         }
-                                        IconButton(onClick = onStartOnboarding) {
-                                            Icon(
-                                                Icons.Default.School,
-                                                contentDescription = stringResource(R.string.onboarding_title),
-                                                tint = MaterialTheme.colorScheme.primary
-                                            )
-                                        }
+
                                 },
                                 colors =
                                         TopAppBarDefaults.topAppBarColors(
@@ -1909,7 +1922,12 @@ fun GamesListScreen(
                                                                 saveError = null
                                                                 try {
                                                                     val userId = FirebaseAuth.getInstance().currentUser?.uid
-                                                                    if (userId != null) {
+                                                                    if (profile.isGuest) {
+                                                                        // 🌟 Fix: Save to local preferences for Guest
+                                                                        GuestPreferences.setLichessUsername(context, lichessInput)
+                                                                        GuestPreferences.setChessUsername(context, chessComInput)
+                                                                    } else if (userId != null) {
+                                                                        // Save to Firestore for registered users
                                                                         FirebaseFirestore.getInstance().collection("users").document(userId)
                                                                             .update(mapOf(
                                                                                 "lichessUsername" to lichessInput, 
@@ -2210,19 +2228,29 @@ fun GamesListScreen(
 
         if (showNoAccountsDialog) {
                 AlertDialog(
-                        onDismissRequest = { showNoAccountsDialog = false },
+                        onDismissRequest = { /* No dismiss on outside click for welcome */ },
                         title = { Text(stringResource(R.string.welcome_title)) },
                         text = {
                                 Column {
-                                        Text(stringResource(R.string.welcome_desc_no_accounts))
+                                        Text(stringResource(R.string.welcome_desc_new))
                                 }
                         },
                         confirmButton = {
-                                TextButton(onClick = { showNoAccountsDialog = false }) {
-                                        Text(stringResource(R.string.close))
+                                Button(
+                                    onClick = {
+                                        showNoAccountsDialog = false
+                                        onStartOnboarding()
+                                    }
+                                ) {
+                                        Text(stringResource(R.string.start_tutorial))
                                 }
                         },
-                        dismissButton = {}
+                        dismissButton = {
+                                TextButton(onClick = { showNoAccountsDialog = false }) {
+                                        Text(stringResource(R.string.skip_tutorial))
+                                }
+                        },
+                        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)
                 )
         }
 }

@@ -281,9 +281,7 @@ fun AppRoot() {
 
     NavHost(
             navController = rootNav,
-            startDestination = if (currentUserProfile == null) "welcome" else {
-                if (!GuestPreferences.isOnboardingShown(context)) "onboarding" else "home"
-            }
+            startDestination = if (currentUserProfile == null) "welcome" else "home"
     ) {
         // --- ONBOARDING ---
         composable("onboarding") {
@@ -303,11 +301,7 @@ fun AppRoot() {
                         currentUserProfile = profile
                         isFirstLoad = true
                         shouldShowDateSelection = true
-                        if (!GuestPreferences.isOnboardingShown(context)) {
-                            rootNav.navigate("onboarding") { popUpTo("welcome") { inclusive = true } }
-                        } else {
-                            rootNav.navigate("home") { popUpTo("welcome") { inclusive = true } }
-                        }
+                        rootNav.navigate("home") { popUpTo("welcome") { inclusive = true } }
                     }
             )
         }
@@ -329,21 +323,13 @@ fun AppRoot() {
                         currentUserProfile = profile
                         isFirstLoad = true
                         shouldShowDateSelection = true
-                        if (!GuestPreferences.isOnboardingShown(context)) {
-                            rootNav.navigate("onboarding") { popUpTo("welcome") { inclusive = true } }
-                        } else {
                             rootNav.navigate("home") { popUpTo("welcome") { inclusive = true } }
-                        }
                     },
                     onRegisterSuccess = { profile ->
                         currentUserProfile = profile
                         isFirstLoad = true
                         shouldShowDateSelection = true
-                        if (!GuestPreferences.isOnboardingShown(context)) {
-                            rootNav.navigate("onboarding") { popUpTo("welcome") { inclusive = true } }
-                        } else {
                             rootNav.navigate("home") { popUpTo("welcome") { inclusive = true } }
-                        }
                     }
             )
         }

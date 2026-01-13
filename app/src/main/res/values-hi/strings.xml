@@ -58,6 +58,12 @@
     <string name="game_analysis">खेल विश्लेषण</string>
     <string name="flip_board">बोर्ड पलटें</string>
     <string name="to_start">शुरुआत में</string>
+    <string name="onboarding_title">ट्यूटोरियल</string>
+    <string name="onboarding_skip">छोड़ें</string>
+    <string name="onboarding_finish">शुरू करें</string>
+    <string name="start_tutorial">ट्यूटोरियल शुरू करें</string>
+    <string name="skip_tutorial">छोड़ें</string>
+    <string name="welcome_desc_new">स्वागत है! हमने आपके लिए मैग्नस कार्लसन के टेस्ट गेम्स लोड किए हैं। आप अपने खुद के गेम्स भी लोड कर सकते हैं या ऐप का उपयोग करना सीखने के लिए एक त्वरित ट्यूटोरियल ले सकते हैं।</string>
     <string name="previous">पिछला</string>
     <string name="play">खेलें</string>
     <string name="pause">रोकें</string>

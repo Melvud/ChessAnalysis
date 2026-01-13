@@ -112,6 +112,14 @@
     <string name="reanalyze">Reanalizar</string>
     <string name="reanalyze_title">Reanalizar</string>
 
+    <!-- Onboarding -->
+    <string name="onboarding_title">Tutorial</string>
+    <string name="onboarding_skip">Omitir</string>
+    <string name="onboarding_finish">Empezar</string>
+    <string name="start_tutorial">Iniciar tutorial</string>
+    <string name="skip_tutorial">Omitir</string>
+    <string name="welcome_desc_new">¡Bienvenido! Hemos cargado partidas de prueba de Magnus Carlsen para ti. También puedes cargar tus propias partidas o realizar un tutorial rápido para aprender a usar la aplicación.</string>
+
     <!-- Language Names -->
     <string name="lang_russian">Русский</string>
     <string name="lang_english">English</string>

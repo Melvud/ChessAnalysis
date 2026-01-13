@@ -399,4 +399,7 @@
     <string name="onboarding_title">Обучение</string>
     <string name="onboarding_skip">Пропустить</string>
     <string name="onboarding_finish">Начать</string>
+    <string name="start_tutorial">Начать обучение</string>
+    <string name="skip_tutorial">Пропустить</string>
+    <string name="welcome_desc_new">Добро пожаловать! Мы загрузили для вас тестовые партии с аккаунта Магнуса Карлсена. Вы также можете загрузить свои партии или пройти быстрое обучение, чтобы узнать, как пользоваться приложением.</string>
 </resources>

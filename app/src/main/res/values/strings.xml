@@ -390,4 +390,7 @@
     <string name="onboarding_title">Tutorial</string>
     <string name="onboarding_skip">Skip</string>
     <string name="onboarding_finish">Start</string>
+    <string name="start_tutorial">Start Tutorial</string>
+    <string name="skip_tutorial">Skip</string>
+    <string name="welcome_desc_new">Welcome! We have loaded Magnus Carlsen\'s latest games for you. You can also load your own games or take a quick tutorial to learn how to use the app.</string>
 </resources>

@@ -10,6 +10,7 @@ import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -176,7 +177,22 @@ object GameLoaders {
                                 .header("User-Agent", UA)
                                 .build()
 
-                val archives = execWithIpv6SafeClient(archReq) ?: return@withContext emptyList()
+                var archives: String? = null
+                var attempts = 0
+                while (archives == null && attempts < 3) {
+                    if (attempts > 0) {
+                        Log.w(TAG, "Retry fetching archives for $username (attempt ${attempts + 1})")
+                        delay(1000)
+                    }
+                    archives = execWithIpv6SafeClient(archReq)
+                    attempts++
+                }
+
+                if (archives == null) {
+                     Log.e(TAG, "Failed to fetch archives for $username after 3 attempts")
+                     return@withContext emptyList()
+                }
+
                 val archiveUrls =
                         Regex(""""(https:[^"]+/[0-9]{4}/[0-9]{2})"""")
                                 .findAll(archives)

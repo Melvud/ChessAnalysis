@@ -6,6 +6,12 @@
     <string name="cancel">Anuluj</string>
     <string name="save">Zapisz</string>
     <string name="back">Wstecz</string>
+    <string name="onboarding_title">Samouczek</string>
+    <string name="onboarding_skip">Pomiń</string>
+    <string name="onboarding_finish">Rozpocznij</string>
+    <string name="start_tutorial">Rozpocznij samouczek</string>
+    <string name="skip_tutorial">Pomiń</string>
+    <string name="welcome_desc_new">Witamy! Załadowaliśmy dla Ciebie partie testowe Magnusa Carlsena. Możesz także załadować własne partie lub przejść szybki samouczek, aby nauczyć się korzystać z aplikacji.</string>
     <string name="delete">Usuń</string>
     <string name="close">Zamknij</string>
     <string name="loading">Ładowanie…</string>

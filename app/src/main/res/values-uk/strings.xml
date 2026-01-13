@@ -5,6 +5,12 @@
     <string name="ok">OK</string>
     <string name="cancel">Скасувати</string>
     <string name="save">Зберегти</string>
+    <string name="onboarding_title">Навчання</string>
+    <string name="onboarding_skip">Пропустити</string>
+    <string name="onboarding_finish">Почати</string>
+    <string name="start_tutorial">Почати навчання</string>
+    <string name="skip_tutorial">Пропустити</string>
+    <string name="welcome_desc_new">Ласкаво просимо! Ми завантажили для вас тестові партії Магнуса Карлсена. Ви також можете завантажити свої партії або пройти швидке навчання, щоб дізнатися, як користуватися додатком.</string>
     <string name="back">Назад</string>
     <string name="delete">Видалити</string>
     <string name="close">Закрити</string>

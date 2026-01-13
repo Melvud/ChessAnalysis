@@ -7,6 +7,12 @@
     <string name="save">Simpan</string>
     <string name="back">Kembali</string>
     <string name="delete">Hapus</string>
+    <string name="onboarding_title">Tutorial</string>
+    <string name="onboarding_skip">Lewati</string>
+    <string name="onboarding_finish">Mulai</string>
+    <string name="start_tutorial">Mulai Tutorial</string>
+    <string name="skip_tutorial">Lewati</string>
+    <string name="welcome_desc_new">Selamat datang! Kami telah memuat game uji coba Magnus Carlsen untuk Anda. Anda juga dapat memuat game Anda sendiri atau mengikuti tutorial singkat untuk mempelajari cara menggunakan aplikasi.</string>
     <string name="close">Tutup</string>
     <string name="loading">Memuat…</string>
     <string name="error">Kesalahan</string>
