@@ -44,14 +44,19 @@ object PgnChess {
         val whiteTitle = tags["WhiteTitle"]
         val blackTitle = tags["BlackTitle"]
 
+        val eco = tags["ECO"]
+        // Try to get refined opening name from library, fallback to PGN tag
+        val openingName = com.github.movesense.data.OpeningLibrary.getOpeningName(eco, pgn) 
+            ?: tags["Opening"]
+
         return GameHeader(
             site = provider,
             white = if (whiteTitle != null) "$whiteTitle ${tags["White"]}" else tags["White"],
             black = if (blackTitle != null) "$blackTitle ${tags["Black"]}" else tags["Black"],
             result = tags["Result"],
             date = tags["UTCDate"] ?: tags["Date"],
-            eco = tags["ECO"],
-            opening = tags["Opening"],
+            eco = eco,
+            opening = openingName,
             pgn = pgn,
             whiteElo = tags["WhiteElo"]?.toIntOrNull(),
             blackElo = tags["BlackElo"]?.toIntOrNull()
@@ -107,14 +112,18 @@ object PgnChess {
         val whiteTitle = tags["WhiteTitle"]
         val blackTitle = tags["BlackTitle"]
 
+        val eco = tags["ECO"]
+        val openingName = com.github.movesense.data.OpeningLibrary.getOpeningName(eco, p)
+            ?: tags["Opening"]
+
         val header = GameHeader(
             site = if ((tags["Site"] ?: "").contains("lichess", true)) Provider.LICHESS else null,
             white = if (whiteTitle != null) "$whiteTitle ${tags["White"]}" else tags["White"],
             black = if (blackTitle != null) "$blackTitle ${tags["Black"]}" else tags["Black"],
             result = tags["Result"],
             date = tags["UTCDate"] ?: tags["Date"],
-            eco = tags["ECO"],
-            opening = tags["Opening"],
+            eco = eco,
+            opening = openingName,
             pgn = p,
             whiteElo = tags["WhiteElo"]?.toIntOrNull(),
             blackElo = tags["BlackElo"]?.toIntOrNull()

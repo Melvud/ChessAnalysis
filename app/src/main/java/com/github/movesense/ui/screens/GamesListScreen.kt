@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.UploadFile
@@ -70,6 +71,7 @@ import com.github.movesense.PgnChess
 import com.github.movesense.PositionEval
 import com.github.movesense.Provider
 import com.github.movesense.R
+import com.github.movesense.pgnHash
 import com.github.movesense.data.local.gameRepository
 import com.github.movesense.data.local.GuestPreferences
 import com.github.movesense.subscription.GooglePlayBillingManager
@@ -93,6 +95,10 @@ import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
 import com.google.android.gms.common.api.ApiException
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.FirebaseAuthUserCollisionException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.withContext
 
 private const val TAG = "GamesListScreen"
 
@@ -128,11 +134,15 @@ fun GamesListScreen(
         openingFens: Set<String>,
         isFirstLoad: Boolean,
         onFirstLoadComplete: () -> Unit,
+        onGamesUpdated: (List<GameHeader>) -> Unit,
         onOpenReport: (FullReport) -> Unit,
         shouldShowDateSelection: Boolean,
         onDateSelectionShown: () -> Unit,
         onNavigateToProfile: () -> Unit,
-        onStartOnboarding: () -> Unit
+        onStartOnboarding: () -> Unit,
+        gameToOpen: GameHeader? = null,
+        onGameOpened: () -> Unit = {},
+        analyzedGames: MutableMap<String, FullReport>
 ) {
         val scope = rememberCoroutineScope()
         val context = LocalContext.current
@@ -229,8 +239,8 @@ fun GamesListScreen(
                 onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
         }
 
-        var items by remember { mutableStateOf<List<GameHeader>>(emptyList()) }
-        var analyzedGames by remember { mutableStateOf<Map<String, FullReport>>(emptyMap()) }
+        var items by remember(games) { mutableStateOf(games) }
+        // analyzedGames passed as parameter
 
         var currentFilter by remember { mutableStateOf(GameFilter.ALL) }
         var searchQuery by remember { mutableStateOf("") }
@@ -347,6 +357,8 @@ fun GamesListScreen(
         suspend fun loadFromLocal() {
                 Log.d(TAG, "loadFromLocal: starting...")
                 items = repo.getAllHeaders()
+                onGamesUpdated(items)
+
 
                 // Check if we need to prompt for download for any linked account
                 val hasLichess = profile.lichessUsername.isNotBlank()
@@ -381,7 +393,8 @@ fun GamesListScreen(
                         val cachedMap = repo.getCachedReports(pgnsToLoad)
                         analyzed.putAll(cachedMap)
                 }
-                analyzedGames = analyzed
+                analyzedGames.clear()
+                analyzedGames.putAll(analyzed)
         }
 
         suspend fun deltaSyncWithRemote() {
@@ -602,14 +615,27 @@ fun GamesListScreen(
                                         }
                                 } else {
                                         // Load test games (Magnus Carlsen)
-                                        scope.launch {
+                                        // Load test games (Magnus Carlsen)
+                                        // 🌟 Use GlobalScope to ensure loading continues even if user navigates to Tutorial
+                                        @OptIn(DelicateCoroutinesApi::class)
+                                        GlobalScope.launch(Dispatchers.IO) {
                                             try {
                                                 val testGames = com.github.movesense.GameLoaders.loadChessCom("MagnusCarlsen", max = 10)
                                                     .map { it.copy(isTest = true) }
                                                 repo.mergeExternal(Provider.CHESSCOM, testGames)
-                                                loadFromLocal()
+                                                
+                                                val headers = repo.getAllHeaders()
+                                                withContext(Dispatchers.Main) {
+                                                    // Update AppRoot state so it persists
+                                                    onGamesUpdated(headers)
+                                                    // Update local state if we are still active
+                                                    items = headers
+                                                }
                                             } catch (e: Exception) {
                                                 Log.e(TAG, "Failed to load test games", e)
+                                                withContext(Dispatchers.Main) {
+                                                    Toast.makeText(context, "Failed to load test games: ${e.message}", Toast.LENGTH_LONG).show()
+                                                }
                                             }
                                         }
                                         showNoAccountsDialog = true
@@ -682,8 +708,8 @@ fun GamesListScreen(
                         }
                 }
 
-        fun startAnalysis(fullPgn: String, depth: Int, multiPv: Int) {
-                if (showAnalysis) return
+        fun startAnalysis(fullPgn: String, depth: Int, multiPv: Int, force: Boolean = false) {
+                if (showAnalysis && !force) return
 
                 val currentMode = EngineClient.engineMode.value
 
@@ -941,6 +967,29 @@ fun GamesListScreen(
                                                 .show()
                                 }
                         }
+        }
+
+
+        LaunchedEffect(gameToOpen) {
+            gameToOpen?.let { header ->
+                val pgn = header.pgn
+                Log.d(TAG, "Opening game from stats: $pgn")
+                if (!pgn.isNullOrBlank()) {
+                     // Check if already analyzed
+                     val existingReport = analyzedGames[pgnHash(header.pgn)]
+                     if (existingReport != null) {
+                         Log.d(TAG, "Opening existing report")
+                         onOpenReport(existingReport)
+                     } else {
+                         Log.d(TAG, "Starting new analysis from stats")
+                         // Force start analysis even if one is running
+                         startAnalysis(pgn, 20, 1, force = true)
+                     }
+                     onGameOpened()
+                } else {
+                     Log.e(TAG, "PGN is empty/null for gameToOpen")
+                }
+            }
         }
 
         LaunchedEffect(analysisCompleted) {
@@ -2151,6 +2200,75 @@ fun GamesListScreen(
 
                                         TextButton(onClick = { showAddDialog = false }) {
                                                 Text(stringResource(R.string.cancel))
+                                        }
+                                }
+                        }
+                }
+        }
+
+        if (showNoAccountsDialog) {
+                Dialog(onDismissRequest = { showNoAccountsDialog = false }) {
+                        Card(
+                                shape = RoundedCornerShape(24.dp),
+                                colors =
+                                        CardDefaults.cardColors(
+                                                containerColor = MaterialTheme.colorScheme.surface
+                                        ),
+                                modifier = Modifier.fillMaxWidth().padding(16.dp)
+                        ) {
+                                Column(
+                                        modifier = Modifier.padding(24.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                        Box(
+                                                modifier =
+                                                        Modifier.size(48.dp)
+                                                                .clip(CircleShape)
+                                                                .background(
+                                                                        MaterialTheme.colorScheme
+                                                                                .primaryContainer
+                                                                ),
+                                                contentAlignment = Alignment.Center
+                                        ) {
+                                                Icon(
+                                                        Icons.Default.Info,
+                                                        contentDescription = null,
+                                                        tint =
+                                                                MaterialTheme.colorScheme
+                                                                        .onPrimaryContainer
+                                                )
+                                        }
+
+                                        Spacer(Modifier.height(16.dp))
+
+                                        Text(
+                                                text = stringResource(R.string.welcome_title),
+                                                style = MaterialTheme.typography.headlineSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                textAlign = TextAlign.Center
+                                        )
+
+                                        Spacer(Modifier.height(8.dp))
+
+                                        Text(
+                                                text = stringResource(R.string.welcome_desc_no_accounts),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                textAlign = TextAlign.Center,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+
+                                        Spacer(Modifier.height(24.dp))
+
+                                        Button(
+                                                onClick = { showNoAccountsDialog = false },
+                                                modifier = Modifier.fillMaxWidth().height(50.dp),
+                                                shape = RoundedCornerShape(12.dp)
+                                        ) {
+                                                Text(
+                                                        stringResource(R.string.ok),
+                                                        fontSize = 16.sp,
+                                                        fontWeight = FontWeight.Bold
+                                                )
                                         }
                                 }
                         }

@@ -346,6 +346,7 @@ fun AppRoot() {
                         openingFens = openingFens,
                         isFirstLoad = isFirstLoad,
                         onFirstLoadComplete = { isFirstLoad = false },
+                        onGamesUpdated = { updatedGames -> games = updatedGames },
                         onOpenReport = { report ->
                             val packed = json.encodeToString(report)
                             rootNav.currentBackStackEntry?.savedStateHandle?.set(

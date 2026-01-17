@@ -402,4 +402,24 @@
     <string name="start_tutorial">Начать обучение</string>
     <string name="skip_tutorial">Пропустить</string>
     <string name="welcome_desc_new">Добро пожаловать! Мы загрузили для вас тестовые партии с аккаунта Магнуса Карлсена. Вы также можете загрузить свои партии или пройти быстрое обучение, чтобы узнать, как пользоваться приложением.</string>
+
+    <!-- Statistics Screen -->
+    <string name="statistics">Статистика</string>
+    <string name="total_games">Всего партий</string>
+    <string name="wins">Победы</string>
+    <string name="losses">Поражения</string>
+    <string name="draws">Ничьи</string>
+    <string name="as_white">За белых</string>
+    <string name="as_black">За чёрных</string>
+    <string name="win_rate">Процент побед</string>
+    <string name="no_games_for_stats">Нет партий для статистики</string>
+    <string name="all_time_controls">Все</string>
+    <string name="stats_by_color">Статистика по цвету</string>
+    <string name="overall_stats">Общая</string>
+    <string name="need_more_games_title">Нужно больше партий</string>
+    <string name="need_more_games_desc">Загрузите минимум 10 партий, чтобы увидеть статистику. Сейчас у вас %d партий.</string>
+    <string name="load_games_button">Загрузить партии</string>
+
+    <string name="profile_setup_required">Настройка профиля</string>
+    <string name="profile_setup_desc">Чтобы увидеть статистику, укажите имя пользователя Lichess или Chess.com в профиле.</string>
 </resources>

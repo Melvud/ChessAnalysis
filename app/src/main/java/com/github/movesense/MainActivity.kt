@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit
 import android.os.Build
 import androidx.activity.result.contract.ActivityResultContracts
 import android.Manifest
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -58,6 +59,11 @@ class MainActivity : ComponentActivity() {
         // Request Notification Permission (Android 13+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        // Initialize Opening Library
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            com.github.movesense.data.OpeningLibrary.initialize(applicationContext)
         }
     }
 

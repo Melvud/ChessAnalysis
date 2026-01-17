@@ -1,8 +1,15 @@
 package com.github.movesense
 
 import android.annotation.SuppressLint
+import java.security.MessageDigest
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
+
+fun pgnHash(pgn: String): String {
+    val md = MessageDigest.getInstance("SHA-256")
+    val bytes = md.digest(pgn.toByteArray(Charsets.UTF_8))
+    return bytes.joinToString("") { "%02x".format(it) }
+}
 
 @Serializable
 enum class Provider {

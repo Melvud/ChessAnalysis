@@ -1,4 +1,11 @@
 <resources>
+    <string name="opening_stats">Opening Stats</string>
+    <string name="no_games_found">No games found</string>
+    <string name="analysis_stats">Analysis Stats</string>
+    <string name="need_more_analyzed_games">Analyze at least 5 games to unlock stats</string>
+    <string name="average_accuracy">Average Accuracy</string>
+    <string name="move_quality">Move Quality</string>
+    <string name="elo">ELO</string>
 <string name="app_name">MoveSense</string>
 
 <!-- Common -->
@@ -393,4 +400,22 @@
     <string name="start_tutorial">Start Tutorial</string>
     <string name="skip_tutorial">Skip</string>
     <string name="welcome_desc_new">Welcome! We have loaded Magnus Carlsen\'s latest games for you. You can also load your own games or take a quick tutorial to learn how to use the app.</string>
+
+    <!-- Statistics Screen -->
+    <string name="statistics">Statistics</string>
+    <string name="total_games">Total Games</string>
+    <string name="wins">Wins</string>
+    <string name="losses">Losses</string>
+    <string name="draws">Draws</string>
+    <string name="as_white">As White</string>
+    <string name="as_black">As Black</string>
+    <string name="win_rate">Win Rate</string>
+    <string name="no_games_for_stats">No games available for statistics</string>
+    <string name="all_time_controls">All</string>
+    <string name="stats_by_color">Stats by Color</string>
+    <string name="overall_stats">Overall</string>
+    <string name="need_more_games_title">Need More Games</string>
+    <string name="need_more_games_desc">Load at least 10 games to see your statistics. You currently have %d games.</string>
+    <string name="profile_setup_required">Profile Setup Required</string>
+    <string name="profile_setup_desc">To see your statistics, please set up your Lichess or Chess.com username in your profile.</string>
 </resources>
